@@ -23,7 +23,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: flex-start;
-      padding-top: 70px; /* space for navbar */
+      padding-top: 70px;
     }
 
     .login-box {
@@ -36,7 +36,7 @@
       margin: 30px 15px 60px;
     }
 
-    .form-control {
+    .form-control, .form-select {
       border-radius: 8px;
     }
 
@@ -84,7 +84,7 @@
     </button>
     <div class="collapse navbar-collapse" id="navbarLogin">
       <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="index.php">Home</a></li>
+        <li class="nav-item"><a class="nav-link" href="index.html">Home</a></li>
         <li class="nav-item"><a class="nav-link" href="#features">Features</a></li>
         <li class="nav-item"><a class="nav-link" href="#about">About Us</a></li>
         <li class="nav-item"><a class="nav-link" href="#contact">Contact Us</a></li>
@@ -101,7 +101,20 @@
     <p class="text-muted small">Rwanda Polytechnic Attendance System</p>
   </div>
 
-  <form>
+  <!-- Login Form -->
+  <form onsubmit="handleLogin(event)">
+    <div class="mb-3 text-center">
+      <label for="role" class="form-label fw-semibold">Select Role</label>
+      <select id="role" class="form-select" required>
+        <option value="" disabled selected>-- Choose your role --</option>
+        <option value="admin">Admin</option>
+        <option value="lecturer">Lecturer</option>
+        <option value="student">Student</option>
+        <option value="hod">Head of Department (HoD)</option>
+        <option value="tech">Technical Staff</option>
+      </select>
+    </div>
+
     <div class="mb-3">
       <label for="email" class="form-label">Email or Username</label>
       <input type="text" class="form-control" id="email" placeholder="Enter your email or username" required>
@@ -125,7 +138,6 @@
 
     <div class="text-center">
       <a href="forgot-password.php" class="small text-decoration-none text-primary">Forgot Password?</a>
-
     </div>
   </form>
 </div>
@@ -135,11 +147,44 @@
   &copy; 2025 Rwanda Polytechnic | All rights reserved
 </div>
 
-<!-- Bootstrap + AOS -->
+<!-- Bootstrap + AOS + Login Logic -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
 <script>
   AOS.init();
+
+  function handleLogin(e) {
+    e.preventDefault();
+    const role = document.getElementById('role').value;
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value.trim();
+
+    if (!role) {
+      alert("Please select your role.");
+      return;
+    }
+
+    // For now, redirect by role (replace with real backend auth later)
+    switch (role) {
+      case 'admin':
+        window.location.href = 'admin-dashboard.php';
+        break;
+      case 'lecturer':
+        window.location.href = 'lecturer-dashboard.php';
+        break;
+      case 'student':
+        window.location.href = 'students-dashboard.php';
+        break;
+      case 'hod':
+        window.location.href = 'hod-dashboard.php';
+        break;
+      case 'tech':
+        window.location.href = 'tech-dashboard.php';
+        break;
+      default:
+        alert("Invalid role selected.");
+    }
+  }
 </script>
 
 </body>
