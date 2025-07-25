@@ -104,7 +104,7 @@
         <a href="register-student.php"><i class="fas fa-user-plus me-2"></i> Register Student</a>
         <a href="manage-departments.php"><i class="fas fa-building me-2"></i> Manage Departments</a>
         <a href="admin-reports.php"><i class="fas fa-chart-bar me-2"></i> Reports</a>
-        <a href="index.html"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+        <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
     </div>
 
     <!-- Topbar -->
