@@ -6,9 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Request Leave | Student | RP Attendance System</title>
 
-  <!-- Bootstrap CSS -->
+  <!-- Bootstrap CSS & Font Awesome -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
 
   <style>
@@ -27,6 +26,11 @@
       background-color: #003366;
       color: white;
       padding-top: 20px;
+      overflow-y: auto;
+    }
+
+    .sidebar h4 {
+      font-size: 1.3rem;
     }
 
     .sidebar a {
@@ -34,6 +38,7 @@
       padding: 12px 20px;
       color: #fff;
       text-decoration: none;
+      transition: background 0.2s ease;
     }
 
     .sidebar a:hover,
@@ -50,8 +55,8 @@
 
     .main-content {
       margin-left: 250px;
-      padding: 30px;
-      max-width: 600px;
+      padding: 40px 30px;
+      max-width: 700px;
     }
 
     .footer {
@@ -68,6 +73,23 @@
       color: #003366;
     }
 
+    .form-container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    }
+
+    .btn-primary {
+      background-color: #003366;
+      border-color: #003366;
+    }
+
+    .btn-primary:hover {
+      background-color: #0059b3;
+      border-color: #0059b3;
+    }
+
     @media (max-width: 768px) {
       .sidebar,
       .topbar,
@@ -80,6 +102,10 @@
       .sidebar {
         display: none;
       }
+
+      .main-content {
+        padding: 20px;
+      }
     }
   </style>
 </head>
@@ -88,14 +114,14 @@
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="text-center mb-4">
-      <h4>👨🎓 Student</h4>
+      <h4>🎓 Student</h4>
       <hr style="border-color: #ffffff66;">
     </div>
-    <a href="students-dashboard.php">Dashboard</a>
-    <a href="attendance-records.php"><i class="fas fa-calendar-check me-2"></i> Attendance Records</a>
-    <a href="request-leave.php" class="active"><i class="fas fa-file-signature me-2"></i> Request Leave</a>
-    <a href="leave-status.php"><i class="fas fa-info-circle me-2"></i> Leave Status</a>
-    <a href="index.php">Logout</a>
+    <a href="students-dashboard.php"><i class="fas fa-home me-2"></i>Dashboard</a>
+    <a href="attendance-records.php"><i class="fas fa-calendar-check me-2"></i>Attendance Records</a>
+    <a href="request-leave.php" class="active"><i class="fas fa-file-signature me-2"></i>Request Leave</a>
+    <a href="leave-status.php"><i class="fas fa-info-circle me-2"></i>Leave Status</a>
+    <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
   </div>
 
   <!-- Topbar -->
@@ -106,26 +132,30 @@
 
   <!-- Main Content -->
   <div class="main-content">
-    <form id="leaveRequestForm" enctype="multipart/form-data">
-      <div class="mb-3">
-        <label for="fromDate" class="form-label">From Date</label>
-        <input type="date" id="fromDate" name="fromDate" class="form-control" required />
-      </div>
-      <div class="mb-3">
-        <label for="toDate" class="form-label">To Date</label>
-        <input type="date" id="toDate" name="toDate" class="form-control" required />
-      </div>
-      <div class="mb-3">
-        <label for="reason" class="form-label">Reason</label>
-        <textarea id="reason" name="reason" class="form-control" rows="4" placeholder="Enter your reason for leave" required></textarea>
-      </div>
-      <div class="mb-3">
-        <label for="supportingFile" class="form-label">Attach Supporting Document (optional)</label>
-        <input type="file" id="supportingFile" name="supportingFile" class="form-control" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" />
-        <small class="text-muted">Allowed file types: PDF, DOC, DOCX, JPG, PNG</small>
-      </div>
-      <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane me-2"></i>Submit Request</button>
-    </form>
+    <div class="form-container">
+      <form id="leaveRequestForm" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label for="fromDate" class="form-label">From Date</label>
+          <input type="date" id="fromDate" name="fromDate" class="form-control" required />
+        </div>
+        <div class="mb-3">
+          <label for="toDate" class="form-label">To Date</label>
+          <input type="date" id="toDate" name="toDate" class="form-control" required />
+        </div>
+        <div class="mb-3">
+          <label for="reason" class="form-label">Reason</label>
+          <textarea id="reason" name="reason" class="form-control" rows="4" placeholder="Enter your reason for leave" required></textarea>
+        </div>
+        <div class="mb-3">
+          <label for="supportingFile" class="form-label">Attach Supporting Document (optional)</label>
+          <input type="file" id="supportingFile" name="supportingFile" class="form-control" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" />
+          <small class="text-muted">Allowed file types: PDF, DOC, DOCX, JPG, PNG</small>
+        </div>
+        <div class="text-end">
+          <button type="submit" class="btn btn-primary px-4"><i class="fas fa-paper-plane me-2"></i>Submit Request</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <!-- Footer -->
@@ -133,9 +163,8 @@
     &copy; 2025 Rwanda Polytechnic | Student Panel
   </div>
 
-  <!-- Bootstrap JS -->
+  <!-- JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
   <script>
     document.getElementById('leaveRequestForm').addEventListener('submit', function (e) {
       e.preventDefault();
@@ -154,9 +183,7 @@
         return;
       }
 
-      // Optional: Validate file size/type here if desired
-
-      // Simulate submission
+      // Simulated submission
       alert('Leave request submitted successfully!');
       this.reset();
     });

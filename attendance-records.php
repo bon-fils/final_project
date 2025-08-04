@@ -8,7 +8,6 @@
 
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
 
   <style>
@@ -62,19 +61,6 @@
       background-color: #f0f0f0;
     }
 
-    .attendance-table {
-      background-color: #fff;
-      border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-      overflow-x: auto;
-      margin-bottom: 40px;
-    }
-
-    table {
-      margin-bottom: 0;
-    }
-
-    /* Circular Progress Styles */
     .progress-circle {
       width: 120px;
       height: 120px;
@@ -103,7 +89,7 @@
     .progress-circle .progress {
       stroke: #0066cc;
       stroke-linecap: round;
-      stroke-dasharray: 339.292; /* 2 * PI * 54 */
+      stroke-dasharray: 339.292;
       stroke-dashoffset: 339.292;
       transition: stroke-dashoffset 1.5s ease-out;
     }
@@ -125,7 +111,14 @@
       color: #003366;
     }
 
-    /* Responsive adjustments */
+    .attendance-table {
+      background-color: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      overflow-x: auto;
+      margin-bottom: 40px;
+    }
+
     @media (max-width: 768px) {
       .sidebar,
       .topbar,
@@ -165,55 +158,31 @@
   <!-- Main Content -->
   <div class="main-content">
 
-    <div class="row justify-content-center">
-      <!-- Overall Attendance -->
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="progress-circle" id="overallAttendanceCircle">
-          <svg>
-            <circle class="bg" cx="60" cy="60" r="54"></circle>
-            <circle class="progress"></circle>
-          </svg>
-          <div class="percentage" id="overallAttendancePct">0%</div>
-          <div class="course-title">Overall Attendance</div>
-        </div>
-      </div>
+    <!-- Course Filter -->
+<div class="mb-4">
+  <label for="courseFilter" class="form-label fw-semibold">Select Course:</label>
+  <select id="courseFilter" class="form-select w-auto d-inline-block">
+    <option value="All">All Courses</option>
+    <option value="Software Engineering">Software Engineering</option>
+    <option value="Networking">Networking</option>
+    <option value="Electrical Engineering">Electrical Engineering</option>
+  </select>
+</div>
 
-      <!-- Software Engineering -->
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="progress-circle" id="seAttendanceCircle">
-          <svg>
-            <circle class="bg" cx="60" cy="60" r="54"></circle>
-            <circle class="progress"></circle>
-          </svg>
-          <div class="percentage" id="seAttendancePct">0%</div>
-          <div class="course-title">Software Engineering</div>
-        </div>
-      </div>
-
-      <!-- Networking -->
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="progress-circle" id="netAttendanceCircle">
-          <svg>
-            <circle class="bg" cx="60" cy="60" r="54"></circle>
-            <circle class="progress"></circle>
-          </svg>
-          <div class="percentage" id="netAttendancePct">0%</div>
-          <div class="course-title">Networking</div>
-        </div>
-      </div>
-
-      <!-- Electrical Engineering -->
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="progress-circle" id="eeAttendanceCircle">
-          <svg>
-            <circle class="bg" cx="60" cy="60" r="54"></circle>
-            <circle class="progress"></circle>
-          </svg>
-          <div class="percentage" id="eeAttendancePct">0%</div>
-          <div class="course-title">Electrical Engineering</div>
-        </div>
-      </div>
+<!-- Attendance Circle -->
+<div class="row justify-content-center mb-4">
+  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+    <div class="progress-circle text-center" id="overallAttendanceCircle">
+      <svg>
+        <circle class="bg" cx="60" cy="60" r="54"></circle>
+        <circle class="progress"></circle>
+      </svg>
+      <div class="percentage" id="overallAttendancePct">0%</div>
+      <div class="course-title" id="circleTitle">Overall Attendance</div>
     </div>
+  </div>
+</div>
+
 
     <!-- Attendance Table -->
     <div class="attendance-table mt-4 p-3">
@@ -226,11 +195,10 @@
           </tr>
         </thead>
         <tbody id="attendance-table-body">
-          <!-- Sample data will be populated here -->
+          <!-- JS inserts data here -->
         </tbody>
       </table>
     </div>
-
   </div>
 
   <!-- Footer -->
@@ -242,7 +210,6 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
   <script>
-    // Sample attendance data (replace with real data fetching)
     const attendanceData = [
       { course: 'Software Engineering', date: '2025-06-15', status: 'Present' },
       { course: 'Networking', date: '2025-06-15', status: 'Absent' },
@@ -250,10 +217,8 @@
       { course: 'Software Engineering', date: '2025-06-14', status: 'Present' },
       { course: 'Networking', date: '2025-06-13', status: 'Present' },
       { course: 'Electrical Engineering', date: '2025-06-13', status: 'Absent' },
-      // More records...
     ];
 
-    // Animate progress circle stroke from 0 to target
     function animateProgress(circleElement, targetPercent) {
       const circumference = 2 * Math.PI * 54;
       let start = null;
@@ -267,57 +232,25 @@
         const progress = Math.min(elapsed / duration, 1);
         const currentOffset = initialOffset - progress * (initialOffset - targetOffset);
         circleElement.style.strokeDashoffset = currentOffset;
-
-        if (progress < 1) {
-          requestAnimationFrame(step);
-        }
+        if (progress < 1) requestAnimationFrame(step);
       }
 
       requestAnimationFrame(step);
     }
 
-    // Update attendance circles with animated progress
-    function updateAttendanceCircles(data) {
-      const rates = {
-        overall: { present: 0, total: 0 },
-        'Software Engineering': { present: 0, total: 0 },
-        'Networking': { present: 0, total: 0 },
-        'Electrical Engineering': { present: 0, total: 0 },
-      };
+    function updateAttendanceCircle(data, courseLabel) {
+  const overall = { present: 0, total: 0 };
+  data.forEach(r => {
+    overall.total++;
+    if (r.status === 'Present') overall.present++;
+  });
+  const percent = overall.total ? (overall.present / overall.total) * 100 : 0;
+  const circle = document.querySelector('#overallAttendanceCircle .progress');
+  animateProgress(circle, percent);
+  document.getElementById('overallAttendancePct').textContent = percent.toFixed(1) + '%';
+  document.getElementById('circleTitle').textContent = `${courseLabel} Attendance`;
+}
 
-      data.forEach(record => {
-        rates.overall.total++;
-        if (record.status === 'Present') rates.overall.present++;
-
-        if (rates[record.course]) {
-          rates[record.course].total++;
-          if (record.status === 'Present') rates[record.course].present++;
-        }
-      });
-
-      // Animate and update text
-      const overallCircle = document.querySelector('#overallAttendanceCircle .progress');
-      const overallPercent = rates.overall.total ? (rates.overall.present / rates.overall.total) * 100 : 0;
-      animateProgress(overallCircle, overallPercent);
-      document.getElementById('overallAttendancePct').textContent = overallPercent.toFixed(1) + '%';
-
-      const seCircle = document.querySelector('#seAttendanceCircle .progress');
-      const sePercent = rates['Software Engineering'].total ? (rates['Software Engineering'].present / rates['Software Engineering'].total) * 100 : 0;
-      animateProgress(seCircle, sePercent);
-      document.getElementById('seAttendancePct').textContent = sePercent.toFixed(1) + '%';
-
-      const netCircle = document.querySelector('#netAttendanceCircle .progress');
-      const netPercent = rates['Networking'].total ? (rates['Networking'].present / rates['Networking'].total) * 100 : 0;
-      animateProgress(netCircle, netPercent);
-      document.getElementById('netAttendancePct').textContent = netPercent.toFixed(1) + '%';
-
-      const eeCircle = document.querySelector('#eeAttendanceCircle .progress');
-      const eePercent = rates['Electrical Engineering'].total ? (rates['Electrical Engineering'].present / rates['Electrical Engineering'].total) * 100 : 0;
-      animateProgress(eeCircle, eePercent);
-      document.getElementById('eeAttendancePct').textContent = eePercent.toFixed(1) + '%';
-    }
-
-    // Populate attendance table rows
     function populateAttendanceTable(data) {
       const tbody = document.getElementById('attendance-table-body');
       tbody.innerHTML = '';
@@ -326,16 +259,28 @@
         tr.innerHTML = `
           <td>${record.course}</td>
           <td>${record.date}</td>
-          <td>${record.status === 'Present' ? '<span class="badge bg-success">Present</span>' : '<span class="badge bg-danger">Absent</span>'}</td>
+          <td>
+            ${record.status === 'Present'
+              ? '<span class="badge bg-success">Present</span>'
+              : '<span class="badge bg-danger">Absent</span>'
+            }
+          </td>
         `;
         tbody.appendChild(tr);
       });
     }
 
-    // Init
+   function filterAndDisplay(course) {
+  const filtered = course === 'All' ? attendanceData : attendanceData.filter(r => r.course === course);
+  populateAttendanceTable(filtered);
+  updateAttendanceCircle(filtered, course === 'All' ? 'Overall' : course);
+}
+
     document.addEventListener('DOMContentLoaded', () => {
-      populateAttendanceTable(attendanceData);
-      updateAttendanceCircles(attendanceData);
+      filterAndDisplay('All');
+      document.getElementById('courseFilter').addEventListener('change', function () {
+        filterAndDisplay(this.value);
+      });
     });
   </script>
 </body>

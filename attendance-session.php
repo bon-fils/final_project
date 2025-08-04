@@ -27,6 +27,7 @@
       background-color: #003366;
       color: white;
       padding-top: 20px;
+      overflow-y: auto;
     }
 
     .sidebar a {
@@ -34,6 +35,7 @@
       padding: 12px 20px;
       color: #fff;
       text-decoration: none;
+      font-weight: 500;
     }
 
     .sidebar a:hover,
@@ -46,11 +48,16 @@
       background-color: #fff;
       padding: 10px 30px;
       border-bottom: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
     }
 
     .main-content {
       margin-left: 250px;
       padding: 30px;
+      min-height: calc(100vh - 112px);
     }
 
     .footer {
@@ -60,10 +67,7 @@
       font-size: 0.9rem;
       color: #666;
       background-color: #f0f0f0;
-    }
-
-    .session-controls {
-      margin-bottom: 20px;
+      border-top: 1px solid #ddd;
     }
 
     #webcam-preview {
@@ -72,19 +76,9 @@
       border: 2px solid #0066cc;
       border-radius: 8px;
       background-color: #000;
-      display: block;
       margin-bottom: 20px;
-    }
-
-    .attendance-table {
-      background-color: #fff;
-      border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-      overflow-x: auto;
-    }
-
-    .manual-mark-btn {
-      margin-top: 10px;
+      aspect-ratio: 4/3;
+      object-fit: cover;
     }
 
     @media (max-width: 768px) {
@@ -93,12 +87,20 @@
       .main-content,
       .footer {
         margin-left: 0 !important;
-        width: 100%;
+        width: 100% !important;
       }
 
       .sidebar {
         display: none;
       }
+    }
+
+    .progress {
+      background-color: #e9ecef;
+    }
+
+    .progress-bar {
+      font-weight: bold;
     }
   </style>
 </head>
@@ -106,10 +108,10 @@
 <body>
 
   <!-- Sidebar -->
-  <div class="sidebar">
+  <nav class="sidebar" aria-label="Sidebar Navigation">
     <div class="text-center mb-4">
       <h4>👨‍🏫 Lecturer</h4>
-      <hr style="border-color: #ffffff66;">
+      <hr style="border-color: #ffffff66;" />
     </div>
     <a href="lecturer-dashboard.php">Dashboard</a>
     <a href="lecturer-my-courses.php">My Courses</a>
@@ -117,39 +119,81 @@
     <a href="attendance-reports.php">Attendance Reports</a>
     <a href="leave-requests.php">Leave Requests</a>
     <a href="index.php">Logout</a>
-  </div>
+  </nav>
 
   <!-- Topbar -->
-  <div class="topbar d-flex justify-content-between align-items-center">
+  <header class="topbar" role="banner">
     <h5 class="m-0 fw-bold">Attendance Session</h5>
     <span>RP Attendance System</span>
-  </div>
+  </header>
 
   <!-- Main Content -->
-  <div class="main-content">
-    <div class="session-controls d-flex flex-wrap align-items-center gap-3">
-      <button id="start-session" class="btn btn-primary"><i class="fas fa-play me-2"></i>Start Session</button>
-      <button id="end-session" class="btn btn-danger" disabled><i class="fas fa-stop me-2"></i>End Session</button>
-      <button id="manual-mark" class="btn btn-secondary manual-mark-btn"><i class="fas fa-pen me-2"></i>Manual Mark</button>
-      <button id="use-fingerprint" class="btn btn-info manual-mark-btn"><i class="fas fa-fingerprint me-2"></i>Use Fingerprint</button>
-    </div>
+  <main class="main-content" role="main" tabindex="-1">
 
-    <!-- Webcam preview -->
+    <!-- Session Filters -->
+    <form id="sessionForm" class="row g-3 mb-4">
+      <div class="col-md-3">
+        <label for="department" class="form-label fw-semibold">Department</label>
+        <select id="department" class="form-select" required>
+          <option value="" disabled selected>Select Department</option>
+          <option value="ICT">ICT</option>
+          <option value="Mechanical">Mechanical</option>
+          <option value="Civil">Civil</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="option" class="form-label fw-semibold">Option</label>
+        <select id="option" class="form-select" required disabled>
+          <option value="" disabled selected>Select Option</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="classLevel" class="form-label fw-semibold">Class (Year)</label>
+        <select id="classLevel" class="form-select" required disabled>
+          <option value="" disabled selected>Select Class</option>
+          <option value="Year 1">Year 1</option>
+          <option value="Year 2">Year 2</option>
+          <option value="Year 3">Year 3</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="course" class="form-label fw-semibold">Course</label>
+        <select id="course" class="form-select" required disabled>
+          <option value="" disabled selected>Select Course</option>
+        </select>
+      </div>
+
+      <div class="col-12 d-flex flex-wrap gap-2">
+        <button type="submit" id="start-session" class="btn btn-primary" disabled>
+          <i class="fas fa-play me-2"></i> Start Session
+        </button>
+        <button type="button" id="end-session" class="btn btn-danger" disabled>
+          <i class="fas fa-stop me-2"></i> End Session
+        </button>
+        <button type="button" class="btn btn-secondary">
+          <i class="fas fa-pen me-2"></i> Manual Mark
+        </button>
+        <button type="button" class="btn btn-info">
+          <i class="fas fa-fingerprint me-2"></i> Use Fingerprint
+        </button>
+      </div>
+    </form>
+
+    <!-- Webcam -->
     <video id="webcam-preview" autoplay muted playsinline></video>
 
     <!-- Attendance Table -->
-    <div class="attendance-table">
-      <table class="table table-bordered table-hover align-middle mb-0">
+    <section class="attendance-table" aria-live="polite">
+      <table class="table table-bordered table-hover align-middle">
         <thead class="table-light">
           <tr>
-            <th scope="col">Name</th>
-            <th scope="col">Date</th>
-            <th scope="col">Status</th>
-            <th scope="col">Method</th>
+            <th>Name</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Method</th>
           </tr>
         </thead>
-        <tbody id="attendance-list" aria-live="polite" aria-relevant="all">
-          <!-- Example rows -->
+        <tbody id="attendance-list">
           <tr>
             <td>John Doe</td>
             <td>2025-06-24</td>
@@ -164,42 +208,142 @@
           </tr>
         </tbody>
       </table>
-    </div>
-  </div>
+    </section>
+
+    <!-- Attendance Analytics -->
+    <section class="mt-5">
+      <h5 class="fw-bold mb-3">Attendance Statistics</h5>
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>Student</th>
+              <th>Times Present</th>
+              <th>Times Absent</th>
+              <th>Presence Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>John Doe</td>
+              <td>18</td>
+              <td>2</td>
+              <td>
+                <div class="progress" style="height: 20px;">
+                  <div class="progress-bar bg-success" style="width: 90%;">90%</div>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td>Jane Smith</td>
+              <td>14</td>
+              <td>6</td>
+              <td>
+                <div class="progress" style="height: 20px;">
+                  <div class="progress-bar bg-warning" style="width: 70%;">70%</div>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
 
   <!-- Footer -->
-  <div class="footer">
+  <footer class="footer">
     &copy; 2025 Rwanda Polytechnic | Lecturer Panel
-  </div>
+  </footer>
 
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-  <!-- Placeholder JS for webcam and buttons -->
   <script>
+    const departmentSelect = document.getElementById('department');
+    const optionSelect = document.getElementById('option');
+    const classSelect = document.getElementById('classLevel');
+    const courseSelect = document.getElementById('course');
     const startBtn = document.getElementById('start-session');
     const endBtn = document.getElementById('end-session');
     const webcamPreview = document.getElementById('webcam-preview');
+    const sessionForm = document.getElementById('sessionForm');
 
-    startBtn.addEventListener('click', () => {
+    const optionsByDepartment = {
+      ICT: ['Software Engineering', 'Networking'],
+      Mechanical: ['Thermodynamics', 'Mechatronics'],
+      Civil: ['Construction', 'Surveying']
+    };
+
+    const coursesByOption = {
+      'Software Engineering': ['Web Dev', 'Mobile Dev'],
+      'Networking': ['CCNA', 'Wireless Tech'],
+      'Thermodynamics': ['Heat Transfer', 'Energy Systems'],
+      'Mechatronics': ['Sensors', 'Automation'],
+      'Construction': ['Masonry', 'Road Building'],
+      'Surveying': ['Land Survey', 'CAD Mapping']
+    };
+
+    departmentSelect.addEventListener('change', () => {
+      const dept = departmentSelect.value;
+      optionSelect.innerHTML = '<option value="" disabled selected>Select Option</option>';
+      classSelect.disabled = true;
+      courseSelect.disabled = true;
+      startBtn.disabled = true;
+
+      if (optionsByDepartment[dept]) {
+        optionsByDepartment[dept].forEach(opt => {
+          const el = document.createElement('option');
+          el.value = opt;
+          el.textContent = opt;
+          optionSelect.appendChild(el);
+        });
+        optionSelect.disabled = false;
+      }
+    });
+
+    optionSelect.addEventListener('change', () => {
+      const opt = optionSelect.value;
+      courseSelect.innerHTML = '<option value="" disabled selected>Select Course</option>';
+      classSelect.disabled = false;
+
+      if (coursesByOption[opt]) {
+        coursesByOption[opt].forEach(c => {
+          const el = document.createElement('option');
+          el.value = c;
+          el.textContent = c;
+          courseSelect.appendChild(el);
+        });
+        courseSelect.disabled = false;
+      } else {
+        courseSelect.disabled = true;
+      }
+
+      validateForm();
+    });
+
+    classSelect.addEventListener('change', validateForm);
+    courseSelect.addEventListener('change', validateForm);
+
+    function validateForm() {
+      startBtn.disabled = !(departmentSelect.value && optionSelect.value && classSelect.value && courseSelect.value);
+    }
+
+    sessionForm.addEventListener('submit', (e) => {
+      e.preventDefault();
       startBtn.disabled = true;
       endBtn.disabled = false;
-      // Start webcam and face recognition logic here
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+
+      if (navigator.mediaDevices?.getUserMedia) {
         navigator.mediaDevices.getUserMedia({ video: true })
-          .then(stream => {
-            webcamPreview.srcObject = stream;
-          })
-          .catch(err => {
-            alert('Could not start webcam: ' + err);
-          });
+          .then(stream => webcamPreview.srcObject = stream)
+          .catch(err => alert("Webcam error: " + err));
       }
     });
 
     endBtn.addEventListener('click', () => {
-      startBtn.disabled = false;
       endBtn.disabled = true;
-      // Stop webcam
+      startBtn.disabled = false;
       if (webcamPreview.srcObject) {
         webcamPreview.srcObject.getTracks().forEach(track => track.stop());
         webcamPreview.srcObject = null;

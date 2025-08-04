@@ -139,43 +139,58 @@
               <th>From</th>
               <th>To</th>
               <th>Reason</th>
+              <th>Attachment</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody id="leaveRequestsTable">
-            <!-- Sample leave request -->
+            <!-- Sample with attachment -->
             <tr>
               <td>John Doe</td>
               <td>Software Engineering</td>
               <td>2025-06-22</td>
               <td>2025-06-25</td>
               <td>Medical Appointment</td>
+              <td>
+                <a href="uploads/john_medical.pdf" target="_blank" class="btn btn-sm btn-outline-primary">
+                  <i class="fas fa-file-alt me-1"></i>View
+                </a>
+              </td>
               <td><span class="status-badge bg-warning text-dark">Pending</span></td>
               <td>
                 <button class="btn btn-sm btn-approve me-1"><i class="fas fa-check"></i> Approve</button>
                 <button class="btn btn-sm btn-reject"><i class="fas fa-times"></i> Reject</button>
               </td>
             </tr>
+
+            <!-- Without attachment -->
             <tr>
               <td>Jane Smith</td>
               <td>Networking</td>
               <td>2025-06-20</td>
               <td>2025-06-21</td>
               <td>Family Emergency</td>
+              <td>—</td>
               <td><span class="status-badge bg-success">Approved</span></td>
               <td>—</td>
             </tr>
+
             <tr>
               <td>Mark Johnson</td>
               <td>Computer Architecture</td>
               <td>2025-06-18</td>
               <td>2025-06-20</td>
               <td>Conference</td>
+              <td>
+                <a href="uploads/conference_invite.pdf" target="_blank" class="btn btn-sm btn-outline-primary">
+                  <i class="fas fa-file-alt me-1"></i>View
+                </a>
+              </td>
               <td><span class="status-badge bg-danger">Rejected</span></td>
               <td>—</td>
             </tr>
-            <!-- More rows here -->
+
           </tbody>
         </table>
       </div>
@@ -190,7 +205,7 @@
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-  <!-- Optional: Add JS to handle Approve/Reject actions -->
+  <!-- JS to handle Approve/Reject -->
   <script>
     const table = document.getElementById('leaveRequestsTable');
 
@@ -199,16 +214,14 @@
       if (!target) return;
 
       const row = target.closest('tr');
-      const statusCell = row.querySelector('td:nth-child(6) span');
-      const actionsCell = row.querySelector('td:nth-child(7)');
+      const statusCell = row.querySelector('td:nth-child(7) span');
+      const actionsCell = row.querySelector('td:nth-child(8)');
 
       if (target.classList.contains('btn-approve')) {
-        // Simulate approve action
         statusCell.textContent = 'Approved';
         statusCell.className = 'status-badge bg-success';
         actionsCell.innerHTML = '—';
       } else if (target.classList.contains('btn-reject')) {
-        // Simulate reject action
         statusCell.textContent = 'Rejected';
         statusCell.className = 'status-badge bg-danger';
         actionsCell.innerHTML = '—';

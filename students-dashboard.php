@@ -29,6 +29,12 @@
       padding-top: 20px;
     }
 
+    .sidebar .logo {
+      width: 80px;
+      margin: 0 auto 15px;
+      display: block;
+    }
+
     .sidebar a {
       display: block;
       padding: 12px 20px;
@@ -46,6 +52,9 @@
       background-color: #fff;
       padding: 10px 30px;
       border-bottom: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
     .main-content {
@@ -66,7 +75,7 @@
       background: white;
       border-radius: 12px;
       padding: 25px 20px;
-      box-shadow: 0 0 15px rgb(0 0 0 / 0.05);
+      box-shadow: 0 0 15px rgba(0, 0, 0, 0.05);
       text-align: center;
     }
 
@@ -97,13 +106,12 @@
       background: white;
       border-radius: 12px;
       padding: 20px;
-      box-shadow: 0 0 15px rgb(0 0 0 / 0.05);
+      box-shadow: 0 0 15px rgba(0, 0, 0, 0.05);
       cursor: pointer;
       transition: background-color 0.3s ease;
       text-align: center;
       color: #003366;
       text-decoration: none;
-      user-select: none;
     }
 
     .nav-card:hover {
@@ -117,6 +125,7 @@
     }
 
     @media (max-width: 768px) {
+
       .sidebar,
       .topbar,
       .main-content,
@@ -136,8 +145,9 @@
 
   <!-- Sidebar -->
   <div class="sidebar">
-    <div class="text-center mb-4">
-      <h4>👨‍🎓 Student</h4>
+    <div class="text-center mb-3">
+      <img src="assets/images/RP_Logo.jpg" alt="RP Logo" class="logo rounded-circle" />
+      <h5>👨‍🎓 Student</h5>
       <hr style="border-color: #ffffff66;" />
     </div>
     <a href="students-dashboard.php" class="active"><i class="fas fa-home me-2"></i> Dashboard</a>
@@ -148,7 +158,7 @@
   </div>
 
   <!-- Topbar -->
-  <div class="topbar d-flex justify-content-between align-items-center">
+  <div class="topbar">
     <h5 class="m-0 fw-bold">Student Dashboard</h5>
     <span>RP Attendance System</span>
   </div>
@@ -157,7 +167,6 @@
   <div class="main-content">
 
     <div class="row g-4 justify-content-center">
-      <!-- Attendance Percentage Widget -->
       <div class="col-sm-6 col-md-4 col-lg-3">
         <div class="widget">
           <h3>87%</h3>
@@ -165,7 +174,6 @@
         </div>
       </div>
 
-      <!-- Leave Request Status Widget -->
       <div class="col-sm-6 col-md-4 col-lg-3">
         <div class="widget">
           <h3>2 Pending</h3>
@@ -187,7 +195,7 @@
 
       <a href="leave-status.php" class="nav-card">
         <i class="fas fa-envelope-open-text"></i>
-        <h6>View Leave Status</h6>
+        <h6>Leave Status</h6>
       </a>
     </div>
 

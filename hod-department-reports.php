@@ -39,7 +39,8 @@
       text-decoration: none;
     }
 
-    .sidebar a:hover {
+    .sidebar a:hover,
+    .sidebar a.active {
       background-color: #0059b3;
     }
 
@@ -121,24 +122,30 @@
     <div class="card p-4">
       <form id="filterForm" class="row g-3 align-items-center">
         <div class="col-md-4">
-          <label for="courseSelect" class="form-label">Select Course</label>
-          <select id="courseSelect" class="form-select" required>
-            <option value="" selected disabled>Choose a course...</option>
-            <option value="1">Software Engineering</option>
-            <option value="2">Networking</option>
-            <option value="3">Data Science</option>
+          <label for="optionSelect" class="form-label">Select Option</label>
+          <select id="optionSelect" class="form-select" required>
+            <option value="" selected disabled>Choose an option...</option>
+            <option value="IT">IT</option>
+            <option value="HWE">HWE</option>
+            <option value="CS">CS</option>
           </select>
         </div>
-        <div class="col-md-3">
+        <div class="col-md-4">
+          <label for="courseSelect" class="form-label">Select Course</label>
+          <select id="courseSelect" class="form-select" required disabled>
+            <option value="" selected disabled>Choose a course...</option>
+          </select>
+        </div>
+        <div class="col-md-2">
           <label for="startDate" class="form-label">Start Date</label>
           <input type="date" id="startDate" class="form-control" />
         </div>
-        <div class="col-md-3">
+        <div class="col-md-2">
           <label for="endDate" class="form-label">End Date</label>
           <input type="date" id="endDate" class="form-control" />
         </div>
-        <div class="col-md-2 d-flex align-items-end">
-          <button type="submit" class="btn btn-primary w-100">Filter</button>
+        <div class="col-md-12 d-flex justify-content-end">
+          <button type="submit" class="btn btn-primary px-4">Filter</button>
         </div>
       </form>
     </div>
@@ -154,6 +161,7 @@
         <thead class="table-light">
           <tr>
             <th>Date</th>
+            <th>Option</th>
             <th>Course</th>
             <th>Present</th>
             <th>Absent</th>
@@ -178,32 +186,91 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
-    // Dummy data for demonstration
-    const attendanceData = {
-      1: [ // Software Engineering
-        { date: '2025-06-01', present: 25, absent: 5 },
-        { date: '2025-06-02', present: 22, absent: 8 },
-        { date: '2025-06-03', present: 27, absent: 3 }
+    // Mapping of options to courses
+    const optionCourses = {
+      IT: [
+        { id: 'SE', name: 'Software Engineering' },
+        { id: 'NW', name: 'Networking' }
       ],
-      2: [ // Networking
-        { date: '2025-06-01', present: 20, absent: 10 },
-        { date: '2025-06-02', present: 21, absent: 9 },
-        { date: '2025-06-03', present: 19, absent: 11 }
+      HWE: [
+        { id: 'DS', name: 'Data Science' },
+        { id: 'SE', name: 'Software Engineering' }
       ],
-      3: [ // Data Science
-        { date: '2025-06-01', present: 18, absent: 12 },
-        { date: '2025-06-02', present: 20, absent: 10 },
-        { date: '2025-06-03', present: 22, absent: 8 }
+      CS: [
+        { id: 'NW', name: 'Networking' },
+        { id: 'DS', name: 'Data Science' }
       ]
     };
 
+    // Dummy attendance data for demo purposes
+    const attendanceData = {
+      IT: {
+        SE: [
+          { date: '2025-06-01', present: 25, absent: 5 },
+          { date: '2025-06-02', present: 22, absent: 8 },
+          { date: '2025-06-03', present: 27, absent: 3 }
+        ],
+        NW: [
+          { date: '2025-06-01', present: 20, absent: 10 },
+          { date: '2025-06-02', present: 21, absent: 9 },
+          { date: '2025-06-03', present: 19, absent: 11 }
+        ]
+      },
+      HWE: {
+        DS: [
+          { date: '2025-06-01', present: 18, absent: 12 },
+          { date: '2025-06-02', present: 20, absent: 10 },
+          { date: '2025-06-03', present: 22, absent: 8 }
+        ],
+        SE: [
+          { date: '2025-06-01', present: 24, absent: 6 },
+          { date: '2025-06-02', present: 26, absent: 4 },
+          { date: '2025-06-03', present: 23, absent: 7 }
+        ]
+      },
+      CS: {
+        NW: [
+          { date: '2025-06-01', present: 19, absent: 11 },
+          { date: '2025-06-02', present: 17, absent: 13 },
+          { date: '2025-06-03', present: 20, absent: 10 }
+        ],
+        DS: [
+          { date: '2025-06-01', present: 21, absent: 9 },
+          { date: '2025-06-02', present: 23, absent: 7 },
+          { date: '2025-06-03', present: 22, absent: 8 }
+        ]
+      }
+    };
+
+    const optionSelect = document.getElementById('optionSelect');
+    const courseSelect = document.getElementById('courseSelect');
     const ctx = document.getElementById('attendanceChart').getContext('2d');
     let attendanceChart;
 
-    function renderChart(courseId, startDate, endDate) {
-      const data = attendanceData[courseId] || [];
+    // Populate course dropdown when option changes
+    optionSelect.addEventListener('change', () => {
+      const selectedOption = optionSelect.value;
 
-      // Filter by date if provided
+      courseSelect.innerHTML = '<option value="" selected disabled>Choose a course...</option>';
+      if (selectedOption && optionCourses[selectedOption]) {
+        optionCourses[selectedOption].forEach(course => {
+          const opt = document.createElement('option');
+          opt.value = course.id;
+          opt.textContent = course.name;
+          courseSelect.appendChild(opt);
+        });
+        courseSelect.disabled = false;
+      } else {
+        courseSelect.disabled = true;
+      }
+    });
+
+    function renderChart(optionId, courseId, startDate, endDate) {
+      const data =
+        attendanceData[optionId] && attendanceData[optionId][courseId]
+          ? attendanceData[optionId][courseId]
+          : [];
+
       const filteredData = data.filter(d => {
         if (startDate && d.date < startDate) return false;
         if (endDate && d.date > endDate) return false;
@@ -214,14 +281,7 @@
       const presentData = filteredData.map(d => d.present);
       const absentData = filteredData.map(d => d.absent);
 
-      const attendancePercent = filteredData.map(d => {
-        const total = d.present + d.absent;
-        return total === 0 ? 0 : Math.round((d.present / total) * 100);
-      });
-
-      if (attendanceChart) {
-        attendanceChart.destroy();
-      }
+      if (attendanceChart) attendanceChart.destroy();
 
       attendanceChart = new Chart(ctx, {
         type: 'bar',
@@ -251,7 +311,6 @@
         }
       });
 
-      // Populate table
       const tbody = document.getElementById('attendanceTableBody');
       tbody.innerHTML = '';
       filteredData.forEach(d => {
@@ -260,7 +319,8 @@
         const row = `
           <tr>
             <td>${d.date}</td>
-            <td>${document.getElementById('courseSelect').selectedOptions[0].text}</td>
+            <td>${optionId}</td>
+            <td>${courseSelect.selectedOptions[0].text}</td>
             <td>${d.present}</td>
             <td>${d.absent}</td>
             <td>${percent}%</td>
@@ -270,16 +330,23 @@
       });
     }
 
-    document.getElementById('filterForm').addEventListener('submit', (e) => {
+    document.getElementById('filterForm').addEventListener('submit', e => {
       e.preventDefault();
-      const courseId = document.getElementById('courseSelect').value;
+      const optionId = optionSelect.value;
+      const courseId = courseSelect.value;
       const startDate = document.getElementById('startDate').value;
       const endDate = document.getElementById('endDate').value;
-      if (!courseId) {
-        alert('Please select a course');
+
+      if (!optionId) {
+        alert('Please select an option.');
         return;
       }
-      renderChart(courseId, startDate, endDate);
+      if (!courseId) {
+        alert('Please select a course.');
+        return;
+      }
+
+      renderChart(optionId, courseId, startDate, endDate);
     });
   </script>
 </body>

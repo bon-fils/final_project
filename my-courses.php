@@ -115,6 +115,9 @@
           <th>#</th>
           <th>Course Name</th>
           <th>Course Code</th>
+          <th>Department</th>
+          <th>Option</th>
+          <th>Class</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -124,6 +127,9 @@
           <td>1</td>
           <td>Software Engineering</td>
           <td>SE101</td>
+          <td>ICT</td>
+          <td>Software Dev</td>
+          <td>Year 2</td>
           <td>
             <a href="attendance-session.php?course=SE101" class="btn btn-sm btn-primary me-1" title="Start Session">
               <i class="fas fa-play"></i>
@@ -137,6 +143,9 @@
           <td>2</td>
           <td>Computer Networks</td>
           <td>CN201</td>
+          <td>ICT</td>
+          <td>Networking</td>
+          <td>Year 3</td>
           <td>
             <a href="attendance-session.php?course=CN201" class="btn btn-sm btn-primary me-1" title="Start Session">
               <i class="fas fa-play"></i>
