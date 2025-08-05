@@ -60,6 +60,7 @@
     .main-content {
       margin-left: 250px;
       padding: 30px;
+      min-height: calc(100vh - 100px);
     }
 
     .footer {
@@ -125,7 +126,6 @@
     }
 
     @media (max-width: 768px) {
-
       .sidebar,
       .topbar,
       .main-content,
@@ -146,7 +146,7 @@
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="text-center mb-3">
-      <img src="assets/images/RP_Logo.jpg" alt="RP Logo" class="logo rounded-circle" />
+      <img src="RP_Logo.jpeg" alt="RP Logo" class="logo rounded-circle" />
       <h5>👨‍🎓 Student</h5>
       <hr style="border-color: #ffffff66;" />
     </div>

@@ -29,6 +29,14 @@
             color: white;
             padding-top: 20px;
             z-index: 1000;
+            overflow-y: auto;
+        }
+
+        .sidebar .logo {
+            width: 120px;
+            height: auto;
+            display: block;
+            margin: 0 auto 15px;
         }
 
         .sidebar h4 {
@@ -51,7 +59,7 @@
         .topbar {
             margin-left: 250px;
             background-color: #ffffff;
-            padding: 10px 30px;
+            padding: 12px 30px;
             border-bottom: 1px solid #ddd;
             display: flex;
             justify-content: space-between;
@@ -70,14 +78,23 @@
         .dashboard-card {
             border-left: 5px solid #0066cc;
             background-color: #ffffff;
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 20px;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
-            transition: transform 0.2s;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s ease;
         }
 
         .dashboard-card:hover {
             transform: translateY(-3px);
+        }
+
+        .dashboard-card h6 {
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .dashboard-card h4 {
+            font-weight: bold;
         }
 
         .dashboard-card i {
@@ -107,7 +124,6 @@
 
             .sidebar {
                 display: none;
-                /* Hidden for mobile view for now */
             }
         }
     </style>
@@ -117,7 +133,8 @@
 
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="text-center mb-4">
+        <div class="text-center mb-3">
+            <img src="RP_Logo.jpeg" alt="RP Logo" class="logo" />
             <h4>👩‍💼 Admin</h4>
             <hr style="border-color: #ffffff66;" />
         </div>
@@ -136,56 +153,68 @@
 
     <!-- Main Dashboard Content -->
     <div class="main-content container-fluid">
-        <div class="row g-4">
-            <div class="col-md-6 col-xl-3">
-                <div class="dashboard-card">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6>Total Students</h6>
-                            <h4>320</h4>
-                        </div>
-                        <i class="fas fa-users"></i>
+    <!-- First Row -->
+    <div class="row g-4">
+        <!-- Total Students -->
+        <div class="col-md-6 col-xl-6">
+            <div class="dashboard-card">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6>Total Students</h6>
+                        <h4>320</h4>
                     </div>
+                    <i class="fas fa-users"></i>
                 </div>
             </div>
+        </div>
 
-            <div class="col-md-6 col-xl-3">
-                <div class="dashboard-card">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6>Total Lecturers</h6>
-                            <h4>45</h4>
-                        </div>
-                        <i class="fas fa-chalkboard-teacher"></i>
+        <!-- Total Lecturers -->
+        <div class="col-md-6 col-xl-6">
+            <div class="dashboard-card">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6>Total Lecturers</h6>
+                        <h4>45</h4>
                     </div>
-                </div>
-            </div>
-
-            <div class="col-md-6 col-xl-3">
-                <div class="dashboard-card">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6>Active Attendance</h6>
-                            <h4>3</h4>
-                        </div>
-                        <i class="fas fa-video"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-md-6 col-xl-3">
-                <div class="dashboard-card">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6>Pending Leave Requests</h6>
-                            <h4>6</h4>
-                        </div>
-                        <i class="fas fa-envelope-open-text"></i>
-                    </div>
+                    <i class="fas fa-chalkboard-teacher"></i>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Space Between Rows -->
+    <div class="mt-4"></div>
+
+    <!-- Second Row -->
+    <div class="row g-4">
+        <!-- Active Attendance -->
+        <div class="col-md-6 col-xl-6">
+            <div class="dashboard-card">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6>Active Attendance</h6>
+                        <h4>3</h4>
+                    </div>
+                    <i class="fas fa-video"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pending Leave Requests -->
+        <div class="col-md-6 col-xl-6">
+            <div class="dashboard-card">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6>Pending Leave Requests</h6>
+                        <h4>6</h4>
+                    </div>
+                    <i class="fas fa-envelope-open-text"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 
     <!-- Footer -->
     <div class="footer">
