@@ -51,7 +51,7 @@
     .main-content {
       margin-left: 250px;
       padding: 30px;
-      max-width: 800px;
+      max-width: 1000px;
     }
 
     .footer {
@@ -74,6 +74,11 @@
 
       .sidebar {
         display: none;
+      }
+
+      .table th,
+      .table td {
+        font-size: 0.85rem;
       }
     }
   </style>
@@ -107,16 +112,22 @@
           <th>From Date</th>
           <th>To Date</th>
           <th>Reason</th>
+          <th>Recipient</th>
+          <th>Role</th>
+          <th>Course</th>
           <th>Status</th>
           <th>Supporting Document</th>
         </tr>
       </thead>
       <tbody>
-        <!-- Sample row -->
+        <!-- Example Data -->
         <tr>
           <td>2025-06-01</td>
           <td>2025-06-03</td>
           <td>Medical leave</td>
+          <td>Mr. John Doe</td>
+          <td>Lecturer</td>
+          <td>Web Development</td>
           <td><span class="badge bg-warning text-dark">Pending</span></td>
           <td><em>Not uploaded</em></td>
         </tr>
@@ -124,13 +135,21 @@
           <td>2025-05-10</td>
           <td>2025-05-12</td>
           <td>Family emergency</td>
+          <td>Mrs. Jane Smith</td>
+          <td>HoD</td>
+          <td></td>
           <td><span class="badge bg-success">Approved</span></td>
-          <td><a href="uploads/support_doc_123.pdf" target="_blank" class="btn btn-sm btn-outline-primary"><i class="fas fa-file-pdf me-1"></i>View</a></td>
+          <td><a href="uploads/support_doc_123.pdf" target="_blank" class="btn btn-sm btn-outline-primary">
+              <i class="fas fa-file-pdf me-1"></i>View</a>
+          </td>
         </tr>
         <tr>
           <td>2025-04-05</td>
           <td>2025-04-06</td>
           <td>Personal reasons</td>
+          <td>Mr. Paul Mwangi</td>
+          <td>Lecturer</td>
+          <td>Database Systems</td>
           <td><span class="badge bg-danger">Rejected</span></td>
           <td><em>Not uploaded</em></td>
         </tr>

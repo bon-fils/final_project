@@ -82,6 +82,7 @@
     }
 
     @media (max-width: 768px) {
+
       .sidebar,
       .topbar,
       .main-content,
@@ -170,16 +171,16 @@
         <button type="button" id="end-session" class="btn btn-danger" disabled>
           <i class="fas fa-stop me-2"></i> End Session
         </button>
-        <button type="button" class="btn btn-secondary">
+        <a href="#" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#manualMarkModal">
           <i class="fas fa-pen me-2"></i> Manual Mark
-        </button>
+        </a>
         <button type="button" class="btn btn-info">
           <i class="fas fa-fingerprint me-2"></i> Use Fingerprint
         </button>
       </div>
     </form>
 
-    <!-- Webcam -->
+    <!-- Webcam Preview -->
     <video id="webcam-preview" autoplay muted playsinline></video>
 
     <!-- Attendance Table -->
@@ -250,6 +251,50 @@
     </section>
 
   </main>
+
+  <!-- Manual Mark Modal -->
+  <div class="modal fade" id="manualMarkModal" tabindex="-1" aria-labelledby="manualMarkLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="manualMarkLabel">Manual Attendance Marking</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="studentName" class="form-label">Student Name</label>
+            <select id="studentName" class="form-select" required>
+              <option selected disabled>Select Student</option>
+              <option value="John Doe">John Doe</option>
+              <option value="Jane Smith">Jane Smith</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label for="attendanceDate" class="form-label">Date</label>
+            <input type="date" id="attendanceDate" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label d-block">Status</label>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="attendanceStatus" id="statusPresent" value="Present" required>
+              <label class="form-check-label" for="statusPresent">Present</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="attendanceStatus" id="statusAbsent" value="Absent" required>
+              <label class="form-check-label" for="statusAbsent">Absent</label>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label for="attendanceMethod" class="form-label">Method</label>
+            <input type="text" id="attendanceMethod" class="form-control" value="Manual" readonly>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary">Save Attendance</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- Footer -->
   <footer class="footer">
@@ -335,7 +380,9 @@
       endBtn.disabled = false;
 
       if (navigator.mediaDevices?.getUserMedia) {
-        navigator.mediaDevices.getUserMedia({ video: true })
+        navigator.mediaDevices.getUserMedia({
+            video: true
+          })
           .then(stream => webcamPreview.srcObject = stream)
           .catch(err => alert("Webcam error: " + err));
       }
@@ -348,6 +395,16 @@
         webcamPreview.srcObject.getTracks().forEach(track => track.stop());
         webcamPreview.srcObject = null;
       }
+    });
+
+    document.querySelector('#manualMarkModal form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const student = document.getElementById('studentName').value;
+      const date = document.getElementById('attendanceDate').value;
+      const status = document.querySelector('input[name="attendanceStatus"]:checked').value;
+      alert(`Manual attendance saved:\nStudent: ${student}\nDate: ${date}\nStatus: ${status}`);
+      const modal = bootstrap.Modal.getInstance(document.getElementById('manualMarkModal'));
+      modal.hide();
     });
   </script>
 
