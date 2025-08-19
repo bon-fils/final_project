@@ -1,59 +1,59 @@
 <?php
 // Dummy data for demo — replace with DB queries in your actual app
 $classes = [
-    ['id' => 1, 'name' => 'Year 1 - IT'],
-    ['id' => 2, 'name' => 'Year 2 - Electrical'],
-    ['id' => 3, 'name' => 'Year 3 - Mechanical'],
+  ['id' => 1, 'name' => 'Year 1 - IT'],
+  ['id' => 2, 'name' => 'Year 2 - Electrical'],
+  ['id' => 3, 'name' => 'Year 3 - Mechanical'],
 ];
 $courses = [];
 if (isset($_GET['class_id'])) {
-    switch ($_GET['class_id']) {
-        case 1:
-            $courses = [
-                ['id' => 101, 'name' => 'Web Development'],
-                ['id' => 102, 'name' => 'Database Systems']
-            ];
-            break;
-        case 2:
-            $courses = [
-                ['id' => 201, 'name' => 'Circuit Analysis'],
-                ['id' => 202, 'name' => 'Power Systems']
-            ];
-            break;
-        case 3:
-            $courses = [
-                ['id' => 301, 'name' => 'Thermodynamics'],
-                ['id' => 302, 'name' => 'Fluid Mechanics']
-            ];
-            break;
-    }
+  switch ($_GET['class_id']) {
+    case 1:
+      $courses = [
+        ['id' => 101, 'name' => 'Web Development'],
+        ['id' => 102, 'name' => 'Database Systems']
+      ];
+      break;
+    case 2:
+      $courses = [
+        ['id' => 201, 'name' => 'Circuit Analysis'],
+        ['id' => 202, 'name' => 'Power Systems']
+      ];
+      break;
+    case 3:
+      $courses = [
+        ['id' => 301, 'name' => 'Thermodynamics'],
+        ['id' => 302, 'name' => 'Fluid Mechanics']
+      ];
+      break;
+  }
 }
 // Dummy attendance data keyed by student and date for the modal
 $attendanceDetailsData = [
-    'John Doe' => [
-        '2025-06-01' => 'Present',
-        '2025-06-02' => 'Absent',
-        '2025-06-03' => 'Present',
-        '2025-06-04' => 'Present',
-        '2025-06-05' => 'Absent',
-        '2025-06-06' => 'Present'
-    ],
-    'Jane Smith' => [
-        '2025-06-01' => 'Present',
-        '2025-06-02' => 'Present',
-        '2025-06-03' => 'Absent',
-        '2025-06-04' => 'Absent',
-        '2025-06-05' => 'Present'
-    ],
+  'John Doe' => [
+    '2025-06-01' => 'Present',
+    '2025-06-02' => 'Absent',
+    '2025-06-03' => 'Present',
+    '2025-06-04' => 'Present',
+    '2025-06-05' => 'Absent',
+    '2025-06-06' => 'Present'
+  ],
+  'Jane Smith' => [
+    '2025-06-01' => 'Present',
+    '2025-06-02' => 'Present',
+    '2025-06-03' => 'Absent',
+    '2025-06-04' => 'Absent',
+    '2025-06-05' => 'Present'
+  ],
 ];
 
 $attendanceData = [];
 if (isset($_GET['class_id'], $_GET['course_id'])) {
-    $attendanceData = [
-        ['student' => 'John Doe', 'attendance_percent' => 92],
-        ['student' => 'Jane Smith', 'attendance_percent' => 78],
-        ['student' => 'Alice Johnson', 'attendance_percent' => 85],
-    ];
+  $attendanceData = [
+    ['student' => 'John Doe', 'attendance_percent' => 92],
+    ['student' => 'Jane Smith', 'attendance_percent' => 78],
+    ['student' => 'Alice Johnson', 'attendance_percent' => 85],
+  ];
 }
 ?>
 <!DOCTYPE html>
