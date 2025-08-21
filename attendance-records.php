@@ -1,6 +1,36 @@
+<?php
+session_start();
+require_once "config.php";
+require_once "session_check.php"; // ensures student is logged in
+
+$student_id = $_SESSION['student_id'];
+
+// Fetch all attendance records for this student
+$stmt = $pdo->prepare("
+    SELECT c.name AS course, s.session_date AS date, r.status
+    FROM attendance_records r
+    JOIN attendance_sessions s ON r.session_id = s.id
+    JOIN courses c ON s.course_id = c.id
+    WHERE r.student_id = ?
+    ORDER BY s.session_date DESC
+");
+$stmt->execute([$student_id]);
+$attendanceData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Fetch unique courses for dropdown filter
+$stmt2 = $pdo->prepare("
+    SELECT DISTINCT c.name
+    FROM attendance_records r
+    JOIN attendance_sessions s ON r.session_id = s.id
+    JOIN courses c ON s.course_id = c.id
+    WHERE r.student_id = ?
+    ORDER BY c.name
+");
+$stmt2->execute([$student_id]);
+$courses = $stmt2->fetchAll(PDO::FETCH_COLUMN);
+?>
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,195 +38,75 @@
 
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
 
   <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background-color: #f5f7fa;
-      margin: 0;
-    }
-
-    .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 250px;
-      height: 100vh;
-      background-color: #003366;
-      color: white;
-      padding-top: 20px;
-    }
-
-    .sidebar a {
-      display: block;
-      padding: 12px 20px;
-      color: #fff;
-      text-decoration: none;
-    }
-
-    .sidebar a:hover,
-    .sidebar a.active {
-      background-color: #0059b3;
-    }
-
-    .topbar {
-      margin-left: 250px;
-      background-color: #fff;
-      padding: 10px 30px;
-      border-bottom: 1px solid #ddd;
-    }
-
-    .main-content {
-      margin-left: 250px;
-      padding: 30px;
-    }
-
-    .footer {
-      text-align: center;
-      margin-left: 250px;
-      padding: 15px;
-      font-size: 0.9rem;
-      color: #666;
-      background-color: #f0f0f0;
-    }
-
-    .progress-circle {
-      width: 120px;
-      height: 120px;
-      margin: 20px auto;
-      position: relative;
-    }
-
-    .progress-circle svg {
-      transform: rotate(-90deg);
-      width: 120px;
-      height: 120px;
-    }
-
-    .progress-circle circle {
-      fill: none;
-      stroke-width: 12;
-      cx: 60;
-      cy: 60;
-      r: 54;
-    }
-
-    .progress-circle .bg {
-      stroke: #ddd;
-    }
-
-    .progress-circle .progress {
-      stroke: #0066cc;
-      stroke-linecap: round;
-      stroke-dasharray: 339.292;
-      stroke-dashoffset: 339.292;
-      transition: stroke-dashoffset 1.5s ease-out;
-    }
-
-    .progress-circle .percentage {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-weight: 600;
-      font-size: 1.4rem;
-      color: #0066cc;
-    }
-
-    .course-title {
-      text-align: center;
-      font-weight: 600;
-      margin-top: 8px;
-      color: #003366;
-    }
-
-    .attendance-table {
-      background-color: #fff;
-      border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-      overflow-x: auto;
-      margin-bottom: 40px;
-    }
-
-    @media (max-width: 768px) {
-      .sidebar,
-      .topbar,
-      .main-content,
-      .footer {
-        margin-left: 0 !important;
-        width: 100%;
-      }
-
-      .sidebar {
-        display: none;
-      }
-    }
+    body { font-family: 'Segoe UI', sans-serif; background-color: #f5f7fa; }
+    .sidebar { position: fixed; top: 0; left: 0; width: 240px; height: 100vh; background: #003366; color: white; padding-top: 20px; }
+    .sidebar .logo { width: 80px; margin: 0 auto 10px; display: block; }
+    .sidebar a { display: block; padding: 12px 20px; color: #fff; text-decoration: none; }
+    .sidebar a:hover, .sidebar a.active { background-color: #0059b3; }
+    .topbar { margin-left: 240px; background: #fff; padding: 12px 25px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; }
+    .main-content { margin-left: 240px; padding: 25px; }
+    .circle-container { display: flex; justify-content: center; margin-bottom: 20px; }
+    .circle { width: 160px; height: 160px; border-radius: 50%; border: 12px solid #e6e6e6; position: relative; }
+    .circle .inner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.6rem; font-weight: bold; }
+    .table-hover tbody tr:hover { background-color: #f1f9ff; }
+    .footer { text-align: center; margin-left: 240px; padding: 12px; background: #f0f0f0; border-top: 1px solid #ddd; }
+    @media(max-width:768px){ .sidebar{display:none;} .topbar,.main-content,.footer{margin-left:0;} }
   </style>
 </head>
-
 <body>
   <!-- Sidebar -->
   <div class="sidebar">
-    <div class="text-center mb-4">
-      <h4>👨🎓 Student</h4>
-      <hr style="border-color: #ffffff66;">
+    <div class="text-center">
+      <img src="RP_Logo.jpeg" alt="RP Logo" class="logo rounded-circle" />
+      <h5>👨‍🎓 Student</h5>
+      <hr />
     </div>
-    <a href="students-dashboard.php">Dashboard</a>
+    <a href="students-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
     <a href="attendance-records.php" class="active"><i class="fas fa-calendar-check me-2"></i> Attendance Records</a>
     <a href="request-leave.php"><i class="fas fa-file-signature me-2"></i> Request Leave</a>
-    <a href="leave-status.php"><i class="fas fa-info-circle me-2"></i> Leave Status</a>
-    <a href="index.php">Logout</a>
+    <a href="leave-status.php"><i class="fas fa-envelope-open-text me-2"></i> Leave Status</a>
+    <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
   </div>
 
   <!-- Topbar -->
-  <div class="topbar d-flex justify-content-between align-items-center">
-    <h5 class="m-0 fw-bold">Attendance Records</h5>
+  <div class="topbar">
+    <h5>Attendance Records</h5>
     <span>RP Attendance System</span>
   </div>
 
   <!-- Main Content -->
   <div class="main-content">
-
-    <!-- Course Filter -->
-<div class="mb-4">
-  <label for="courseFilter" class="form-label fw-semibold">Select Course:</label>
-  <select id="courseFilter" class="form-select w-auto d-inline-block">
-    <option value="All">All Courses</option>
-    <option value="Software Engineering">Software Engineering</option>
-    <option value="Networking">Networking</option>
-    <option value="Electrical Engineering">Electrical Engineering</option>
-  </select>
-</div>
-
-<!-- Attendance Circle -->
-<div class="row justify-content-center mb-4">
-  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-    <div class="progress-circle text-center" id="overallAttendanceCircle">
-      <svg>
-        <circle class="bg" cx="60" cy="60" r="54"></circle>
-        <circle class="progress"></circle>
-      </svg>
-      <div class="percentage" id="overallAttendancePct">0%</div>
-      <div class="course-title" id="circleTitle">Overall Attendance</div>
+    <div class="circle-container">
+      <div class="circle" id="circle">
+        <div class="inner" id="attendancePercent">0%</div>
+      </div>
     </div>
-  </div>
-</div>
+    <p class="text-center mb-4">Overall Attendance</p>
 
+    <div class="d-flex justify-content-between mb-3">
+      <h6>Attendance Table</h6>
+      <select id="courseFilter" class="form-select w-auto">
+        <option value="All">All Courses</option>
+        <?php foreach($courses as $course): ?>
+          <option value="<?= htmlspecialchars($course) ?>"><?= htmlspecialchars($course) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
 
-    <!-- Attendance Table -->
-    <div class="attendance-table mt-4 p-3">
-      <table class="table table-bordered table-hover align-middle">
+    <div class="table-responsive">
+      <table class="table table-bordered table-striped table-hover">
         <thead class="table-light">
           <tr>
-            <th scope="col">Course</th>
-            <th scope="col">Date</th>
-            <th scope="col">Status</th>
+            <th>Date</th>
+            <th>Course</th>
+            <th>Status</th>
           </tr>
         </thead>
-        <tbody id="attendance-table-body">
-          <!-- JS inserts data here -->
-        </tbody>
+        <tbody id="attendanceTable"></tbody>
       </table>
     </div>
   </div>
@@ -206,83 +116,52 @@
     &copy; 2025 Rwanda Polytechnic | Student Panel
   </div>
 
-  <!-- Bootstrap JS -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
+  <!-- Scripts -->
   <script>
-    const attendanceData = [
-      { course: 'Software Engineering', date: '2025-06-15', status: 'Present' },
-      { course: 'Networking', date: '2025-06-15', status: 'Absent' },
-      { course: 'Electrical Engineering', date: '2025-06-14', status: 'Present' },
-      { course: 'Software Engineering', date: '2025-06-14', status: 'Present' },
-      { course: 'Networking', date: '2025-06-13', status: 'Present' },
-      { course: 'Electrical Engineering', date: '2025-06-13', status: 'Absent' },
-    ];
+    const attendanceData = <?= json_encode($attendanceData) ?>;
+    const tableBody = document.getElementById("attendanceTable");
+    const courseFilter = document.getElementById("courseFilter");
+    const percentDisplay = document.getElementById("attendancePercent");
+    const circle = document.getElementById("circle");
 
-    function animateProgress(circleElement, targetPercent) {
-      const circumference = 2 * Math.PI * 54;
-      let start = null;
-      const duration = 1500;
-      const initialOffset = circumference;
-      const targetOffset = circumference - (targetPercent / 100) * circumference;
+    function loadTable(filter = "All") {
+      tableBody.innerHTML = "";
+      let total = 0, present = 0;
 
-      function step(timestamp) {
-        if (!start) start = timestamp;
-        const elapsed = timestamp - start;
-        const progress = Math.min(elapsed / duration, 1);
-        const currentOffset = initialOffset - progress * (initialOffset - targetOffset);
-        circleElement.style.strokeDashoffset = currentOffset;
-        if (progress < 1) requestAnimationFrame(step);
+      attendanceData.forEach(record => {
+        if (filter === "All" || record.course === filter) {
+          total++;
+          if (record.status === "Present") present++;
+
+          let badgeClass = "secondary";
+          if (record.status === "Present") badgeClass = "success";
+          else if (record.status === "Absent") badgeClass = "danger";
+          else if (record.status === "Excused") badgeClass = "info";
+
+          let row = `<tr>
+                      <td>${record.date}</td>
+                      <td>${record.course}</td>
+                      <td><span class="badge bg-${badgeClass}">${record.status}</span></td>
+                     </tr>`;
+          tableBody.innerHTML += row;
+        }
+      });
+
+      let percent = total ? Math.round((present / total) * 100) : 0;
+      percentDisplay.textContent = percent + "%";
+
+      // update circle border color dynamically
+      if (percent >= 75) {
+        circle.style.borderColor = "#28a745"; // green
+      } else if (percent >= 50) {
+        circle.style.borderColor = "#ffc107"; // yellow
+      } else {
+        circle.style.borderColor = "#dc3545"; // red
       }
-
-      requestAnimationFrame(step);
     }
 
-    function updateAttendanceCircle(data, courseLabel) {
-  const overall = { present: 0, total: 0 };
-  data.forEach(r => {
-    overall.total++;
-    if (r.status === 'Present') overall.present++;
-  });
-  const percent = overall.total ? (overall.present / overall.total) * 100 : 0;
-  const circle = document.querySelector('#overallAttendanceCircle .progress');
-  animateProgress(circle, percent);
-  document.getElementById('overallAttendancePct').textContent = percent.toFixed(1) + '%';
-  document.getElementById('circleTitle').textContent = `${courseLabel} Attendance`;
-}
-
-    function populateAttendanceTable(data) {
-      const tbody = document.getElementById('attendance-table-body');
-      tbody.innerHTML = '';
-      data.forEach(record => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${record.course}</td>
-          <td>${record.date}</td>
-          <td>
-            ${record.status === 'Present'
-              ? '<span class="badge bg-success">Present</span>'
-              : '<span class="badge bg-danger">Absent</span>'
-            }
-          </td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
-
-   function filterAndDisplay(course) {
-  const filtered = course === 'All' ? attendanceData : attendanceData.filter(r => r.course === course);
-  populateAttendanceTable(filtered);
-  updateAttendanceCircle(filtered, course === 'All' ? 'Overall' : course);
-}
-
-    document.addEventListener('DOMContentLoaded', () => {
-      filterAndDisplay('All');
-      document.getElementById('courseFilter').addEventListener('change', function () {
-        filterAndDisplay(this.value);
-      });
-    });
+    courseFilter.addEventListener("change", () => loadTable(courseFilter.value));
+    loadTable();
   </script>
 </body>
-
 </html>

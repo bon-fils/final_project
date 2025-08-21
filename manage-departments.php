@@ -97,7 +97,7 @@
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="text-center mb-4">
-      <img src="RP_Logo.jpg" alt="RP Logo" width="100" class="mb-2">
+      <img src="RP_Logo.jpeg" alt="RP Logo" width="100" class="mb-2">
       <h5 class="fw-bold">Admin</h5>
       <hr style="border-color: #ffffff66;">
     </div>

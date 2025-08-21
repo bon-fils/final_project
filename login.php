@@ -1,6 +1,66 @@
+<?php
+// login.php
+session_start();
+require 'config.php'; // contains $pdo connection
+
+$error = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $role = $_POST['role'] ?? '';
+    $emailOrUsername = trim($_POST['email'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+
+    if ($role && $emailOrUsername && $password) {
+        try {
+            // Query by email OR username and role
+            $stmt = $pdo->prepare("
+                SELECT * FROM users
+                WHERE (email = :email OR username = :username)
+                  AND role = :role
+                LIMIT 1
+            ");
+            $stmt->execute([
+                'email' => $emailOrUsername,
+                'username' => $emailOrUsername,
+                'role' => $role
+            ]);
+
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // Plain text password check
+            if ($user && $user['password'] === $password) {
+                $_SESSION['user_id']  = $user['id'];
+                $_SESSION['username'] = $user['username'];
+                $_SESSION['role']     = $user['role'];
+
+                // Redirect by role
+                switch ($user['role']) {
+                    case 'admin':
+                        header("Location: admin-dashboard.php"); exit;
+                    case 'lecturer':
+                        header("Location: lecturer-dashboard.php"); exit;
+                    case 'student':
+                        header("Location: students-dashboard.php"); exit;
+                    case 'hod':
+                        header("Location: hod-dashboard.php"); exit;
+                    case 'tech':
+                        header("Location: tech-dashboard.php"); exit;
+                    default:
+                        $error = "Role not recognized.";
+                }
+            } else {
+                $error = "Invalid email/username, password, or role.";
+            }
+        } catch (PDOException $e) {
+            $error = "Database error. Please try again later.";
+        }
+    } else {
+        $error = "All fields are required.";
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,10 +68,8 @@
 
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-
   <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
-
   <!-- AOS Animations -->
   <link href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css" rel="stylesheet" />
 
@@ -26,7 +84,6 @@
       justify-content: flex-start;
       padding-top: 70px;
     }
-
     .login-box {
       background: white;
       border-radius: 12px;
@@ -36,43 +93,18 @@
       max-width: 400px;
       margin: 30px 15px 60px;
     }
-
-    .form-control,
-    .form-select {
-      border-radius: 8px;
-    }
-
+    .form-control, .form-select { border-radius: 8px; }
     .btn-primary {
       border-radius: 8px;
       background-color: #0066cc;
       border: none;
     }
-
-    .btn-primary:hover {
-      background-color: #004b99;
-    }
-
-    .form-icon {
-      color: #0066cc;
-      font-size: 2rem;
-      margin-bottom: 15px;
-    }
-
-    .footer {
-      text-align: center;
-      color: #ffffffbb;
-      font-size: 0.9rem;
-      margin-bottom: 15px;
-    }
-
-    @media (max-width: 576px) {
-      .login-box {
-        padding: 30px 20px;
-      }
-    }
+    .btn-primary:hover { background-color: #004b99; }
+    .form-icon { color: #0066cc; font-size: 2rem; margin-bottom: 15px; }
+    .footer { text-align: center; color: #ffffffbb; font-size: 0.9rem; margin-bottom: 15px; }
+    @media (max-width: 576px) { .login-box { padding: 30px 20px; } }
   </style>
 </head>
-
 <body>
 
   <!-- Navbar -->
@@ -103,12 +135,15 @@
       <p class="text-muted small">Rwanda Polytechnic Attendance System</p>
     </div>
 
+    <?php if ($error): ?>
+      <div class="alert alert-danger text-center"><?php echo $error; ?></div>
+    <?php endif; ?>
 
     <!-- Login Form -->
-    <form onsubmit="handleLogin(event)">
+    <form method="POST" action="">
       <div class="mb-3 text-center">
         <label for="role" class="form-label fw-semibold">Select Role</label>
-        <select id="role" class="form-select" required>
+        <select id="role" name="role" class="form-select" required>
           <option value="" disabled selected>-- Choose your role --</option>
           <option value="admin">Admin</option>
           <option value="lecturer">Lecturer</option>
@@ -120,12 +155,12 @@
 
       <div class="mb-3">
         <label for="email" class="form-label">Email or Username</label>
-        <input type="text" class="form-control" id="email" placeholder="Enter your email or username" required>
+        <input type="text" class="form-control" id="email" name="email" placeholder="Enter your email or username" required>
       </div>
 
       <div class="mb-3">
         <label for="password" class="form-label">Password</label>
-        <input type="password" class="form-control" id="password" placeholder="Enter password" required>
+        <input type="password" class="form-control" id="password" name="password" placeholder="Enter password" required>
       </div>
 
       <div class="mb-3 form-check">
@@ -150,46 +185,12 @@
     &copy; 2025 Rwanda Polytechnic | All rights reserved
   </div>
 
-  <!-- Bootstrap + AOS + Login Logic -->
+  <!-- Bootstrap + AOS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
   <script>
     AOS.init();
-
-    function handleLogin(e) {
-      e.preventDefault();
-      const role = document.getElementById('role').value;
-      const email = document.getElementById('email').value.trim();
-      const password = document.getElementById('password').value.trim();
-
-      if (!role) {
-        alert("Please select your role.");
-        return;
-      }
-
-      // For now, redirect by role (replace with real backend auth later)
-      switch (role) {
-        case 'admin':
-          window.location.href = 'admin-dashboard.php';
-          break;
-        case 'lecturer':
-          window.location.href = 'lecturer-dashboard.php';
-          break;
-        case 'student':
-          window.location.href = 'students-dashboard.php';
-          break;
-        case 'hod':
-          window.location.href = 'hod-dashboard.php';
-          break;
-        case 'tech':
-          window.location.href = 'tech-dashboard.php';
-          break;
-        default:
-          alert("Invalid role selected.");
-      }
-    }
   </script>
 
 </body>
-
 </html>
