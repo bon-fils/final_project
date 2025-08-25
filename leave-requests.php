@@ -1,234 +1,173 @@
+<?php
+session_start();
+require_once "config.php";
+
+// Assuming logged-in student's ID is stored in session
+$student_id = $_SESSION['student_id'] ?? null;
+
+// Fetch available courses for this student
+$courses = [];
+if ($student_id) {
+    $query = "
+        SELECT c.id, c.name 
+        FROM courses c
+        INNER JOIN course_assignments ca ON ca.course_id = c.id
+        INNER JOIN students s ON s.class_id = ca.class_id
+        WHERE s.id = ?
+    ";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("i", $student_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
+        $courses[] = $row;
+    }
+    $stmt->close();
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Leave Requests | Lecturer | RP Attendance System</title>
+  <title>Request Leave | Student | RP Attendance System</title>
 
-  <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
-
   <style>
     body {
       font-family: 'Segoe UI', sans-serif;
       background-color: #f5f7fa;
       margin: 0;
     }
-
     .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 250px;
-      height: 100vh;
-      background-color: #003366;
-      color: white;
-      padding-top: 20px;
+      position: fixed; top: 0; left: 0; width: 250px; height: 100vh;
+      background-color: #003366; color: white; padding-top: 20px; overflow-y: auto;
     }
-
     .sidebar a {
-      display: block;
-      padding: 12px 20px;
-      color: #fff;
-      text-decoration: none;
+      display: block; padding: 12px 20px; color: #fff; text-decoration: none;
     }
-
-    .sidebar a:hover,
-    .sidebar a.active {
-      background-color: #0059b3;
-    }
-
-    .topbar {
-      margin-left: 250px;
-      background-color: #fff;
-      padding: 10px 30px;
-      border-bottom: 1px solid #ddd;
-    }
-
-    .main-content {
-      margin-left: 250px;
-      padding: 30px;
-    }
-
-    .footer {
-      text-align: center;
-      margin-left: 250px;
-      padding: 15px;
-      font-size: 0.9rem;
-      color: #666;
-      background-color: #f0f0f0;
-    }
-
-    .status-badge {
-      font-weight: 600;
-      padding: 0.4em 0.75em;
-      border-radius: 0.25rem;
-    }
-
-    .btn-approve {
-      background-color: #28a745;
-      border: none;
-      color: white;
-    }
-
-    .btn-approve:hover {
-      background-color: #218838;
-    }
-
-    .btn-reject {
-      background-color: #dc3545;
-      border: none;
-      color: white;
-    }
-
-    .btn-reject:hover {
-      background-color: #c82333;
-    }
-
+    .sidebar a:hover, .sidebar a.active { background-color: #0059b3; }
+    .topbar { margin-left: 250px; background-color: #fff; padding: 10px 30px; border-bottom: 1px solid #ddd; }
+    .main-content { margin-left: 250px; padding: 40px 30px; max-width: 700px; }
+    .footer { text-align: center; margin-left: 250px; padding: 15px; font-size: 0.9rem; color: #666; background-color: #f0f0f0; }
+    label { font-weight: 600; color: #003366; }
+    .form-container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05); }
+    .btn-primary { background-color: #003366; border-color: #003366; }
+    .btn-primary:hover { background-color: #0059b3; border-color: #0059b3; }
     @media (max-width: 768px) {
-      .sidebar,
-      .topbar,
-      .main-content,
-      .footer {
-        margin-left: 0 !important;
-        width: 100%;
-      }
-
-      .sidebar {
-        display: none;
-      }
+      .sidebar, .topbar, .main-content, .footer { margin-left: 0 !important; width: 100%; }
+      .sidebar { display: none; }
+      .main-content { padding: 20px; }
     }
   </style>
 </head>
 
 <body>
-
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="text-center mb-4">
-      <h4>👨‍🏫 Lecturer</h4>
-      <hr style="border-color: #ffffff66;" />
+      <h4>🎓 Student</h4>
+      <hr style="border-color: #ffffff66;">
     </div>
-    <a href="lecturer-dashboard.php">Dashboard</a>
-    <a href="lecturer-my-courses.php">My Courses</a>
-    <a href="attendance-session.php">Attendance Session</a>
-    <a href="attendance-reports.php">Attendance Reports</a>
-    <a href="leave-requests.php" class="active"><i class="fas fa-envelope-open-text me-2"></i> Leave Requests</a>
-    <a href="index.php">Logout</a>
+    <a href="students-dashboard.php"><i class="fas fa-home me-2"></i>Dashboard</a>
+    <a href="attendance-records.php"><i class="fas fa-calendar-check me-2"></i>Attendance Records</a>
+    <a href="request-leave.php" class="active"><i class="fas fa-file-signature me-2"></i>Request Leave</a>
+    <a href="leave-status.php"><i class="fas fa-info-circle me-2"></i>Leave Status</a>
+    <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
   </div>
 
   <!-- Topbar -->
   <div class="topbar d-flex justify-content-between align-items-center">
-    <h5 class="m-0 fw-bold">Leave Requests</h5>
+    <h5 class="m-0 fw-bold">Request Leave</h5>
     <span>RP Attendance System</span>
   </div>
 
   <!-- Main Content -->
   <div class="main-content">
-    <div class="card p-4">
-      <h5 class="mb-4">Pending Leave Requests</h5>
-      <div class="table-responsive">
-        <table class="table table-bordered table-hover align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>Student Name</th>
-              <th>Course</th>
-              <th>From</th>
-              <th>To</th>
-              <th>Reason</th>
-              <th>Attachment</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="leaveRequestsTable">
-            <!-- Sample with attachment -->
-            <tr>
-              <td>John Doe</td>
-              <td>Software Engineering</td>
-              <td>2025-06-22</td>
-              <td>2025-06-25</td>
-              <td>Medical Appointment</td>
-              <td>
-                <a href="uploads/john_medical.pdf" target="_blank" class="btn btn-sm btn-outline-primary">
-                  <i class="fas fa-file-alt me-1"></i>View
-                </a>
-              </td>
-              <td><span class="status-badge bg-warning text-dark">Pending</span></td>
-              <td>
-                <button class="btn btn-sm btn-approve me-1"><i class="fas fa-check"></i> Approve</button>
-                <button class="btn btn-sm btn-reject"><i class="fas fa-times"></i> Reject</button>
-              </td>
-            </tr>
+    <div class="form-container">
+      <form id="leaveRequestForm" method="post" action="submit-leave.php" enctype="multipart/form-data">
+        
+        <div class="mb-3">
+          <label for="requestTo" class="form-label">Request To</label>
+          <select id="requestTo" name="requestTo" class="form-control" required>
+            <option value="">-- Select --</option>
+            <option value="hod">Head of Department</option>
+            <option value="lecturer">Lecturer</option>
+          </select>
+        </div>
 
-            <!-- Without attachment -->
-            <tr>
-              <td>Jane Smith</td>
-              <td>Networking</td>
-              <td>2025-06-20</td>
-              <td>2025-06-21</td>
-              <td>Family Emergency</td>
-              <td>—</td>
-              <td><span class="status-badge bg-success">Approved</span></td>
-              <td>—</td>
-            </tr>
+        <div class="mb-3" id="courseSelectWrapper" style="display:none;">
+          <label for="courseId" class="form-label">Select Course</label>
+          <select id="courseId" name="courseId" class="form-control">
+            <option value="">-- Select Course --</option>
+            <?php foreach ($courses as $course): ?>
+              <option value="<?= $course['id'] ?>"><?= htmlspecialchars($course['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
 
-            <tr>
-              <td>Mark Johnson</td>
-              <td>Computer Architecture</td>
-              <td>2025-06-18</td>
-              <td>2025-06-20</td>
-              <td>Conference</td>
-              <td>
-                <a href="uploads/conference_invite.pdf" target="_blank" class="btn btn-sm btn-outline-primary">
-                  <i class="fas fa-file-alt me-1"></i>View
-                </a>
-              </td>
-              <td><span class="status-badge bg-danger">Rejected</span></td>
-              <td>—</td>
-            </tr>
-
-          </tbody>
-        </table>
-      </div>
+        <div class="mb-3">
+          <label for="fromDate" class="form-label">From Date</label>
+          <input type="date" id="fromDate" name="fromDate" class="form-control" required />
+        </div>
+        <div class="mb-3">
+          <label for="toDate" class="form-label">To Date</label>
+          <input type="date" id="toDate" name="toDate" class="form-control" required />
+        </div>
+        <div class="mb-3">
+          <label for="reason" class="form-label">Reason</label>
+          <textarea id="reason" name="reason" class="form-control" rows="4" placeholder="Enter your reason for leave" required></textarea>
+        </div>
+        <div class="mb-3">
+          <label for="supportingFile" class="form-label">Attach Supporting Document (optional)</label>
+          <input type="file" id="supportingFile" name="supportingFile" class="form-control" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" />
+        </div>
+        <div class="text-end">
+          <button type="submit" class="btn btn-primary px-4"><i class="fas fa-paper-plane me-2"></i>Submit Request</button>
+        </div>
+      </form>
     </div>
   </div>
 
   <!-- Footer -->
   <div class="footer">
-    &copy; 2025 Rwanda Polytechnic | Lecturer Panel
+    &copy; 2025 Rwanda Polytechnic | Student Panel
   </div>
 
-  <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
-  <!-- JS to handle Approve/Reject -->
   <script>
-    const table = document.getElementById('leaveRequestsTable');
+    const requestTo = document.getElementById('requestTo');
+    const courseSelectWrapper = document.getElementById('courseSelectWrapper');
 
-    table.addEventListener('click', (e) => {
-      const target = e.target.closest('button');
-      if (!target) return;
+    requestTo.addEventListener('change', function() {
+      if (this.value === 'lecturer') {
+        courseSelectWrapper.style.display = 'block';
+        document.getElementById('courseId').setAttribute('required', 'required');
+      } else {
+        courseSelectWrapper.style.display = 'none';
+        document.getElementById('courseId').removeAttribute('required');
+      }
+    });
 
-      const row = target.closest('tr');
-      const statusCell = row.querySelector('td:nth-child(7) span');
-      const actionsCell = row.querySelector('td:nth-child(8)');
+    document.getElementById('leaveRequestForm').addEventListener('submit', function (e) {
+      const fromDate = document.getElementById('fromDate').value;
+      const toDate = document.getElementById('toDate').value;
 
-      if (target.classList.contains('btn-approve')) {
-        statusCell.textContent = 'Approved';
-        statusCell.className = 'status-badge bg-success';
-        actionsCell.innerHTML = '—';
-      } else if (target.classList.contains('btn-reject')) {
-        statusCell.textContent = 'Rejected';
-        statusCell.className = 'status-badge bg-danger';
-        actionsCell.innerHTML = '—';
+      if (new Date(fromDate) > new Date(toDate)) {
+        e.preventDefault();
+        alert('From Date cannot be later than To Date.');
       }
     });
   </script>
-
 </body>
-
 </html>
+        case 'student':
+          window.location.href = 'students-dashboard.php';
+          break;
+        default:
+          alert("Invalid role selected.");
+      }
+    }
+  </script>

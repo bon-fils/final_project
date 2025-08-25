@@ -121,7 +121,7 @@
   <div class="main-content">
     <div class="card p-4">
       <form id="filterForm" class="row g-3 align-items-center">
-        <div class="col-md-4">
+        <div class="col-md-3">
           <label for="optionSelect" class="form-label">Select Option</label>
           <select id="optionSelect" class="form-select" required>
             <option value="" selected disabled>Choose an option...</option>
@@ -130,7 +130,16 @@
             <option value="CS">CS</option>
           </select>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-2">
+          <label for="yearSelect" class="form-label">Year/Level</label>
+          <select id="yearSelect" class="form-select" required>
+            <option value="" selected disabled>Select year...</option>
+            <option value="Year 1">Year 1</option>
+            <option value="Year 2">Year 2</option>
+            <option value="Year 3">Year 3</option>
+          </select>
+        </div>
+        <div class="col-md-3">
           <label for="courseSelect" class="form-label">Select Course</label>
           <select id="courseSelect" class="form-select" required disabled>
             <option value="" selected disabled>Choose a course...</option>
@@ -138,11 +147,11 @@
         </div>
         <div class="col-md-2">
           <label for="startDate" class="form-label">Start Date</label>
-          <input type="date" id="startDate" class="form-control" />
+          <input type="date" id="startDate" class="form-control" max="" required />
         </div>
         <div class="col-md-2">
           <label for="endDate" class="form-label">End Date</label>
-          <input type="date" id="endDate" class="form-control" />
+          <input type="date" id="endDate" class="form-control" max="" required />
         </div>
         <div class="col-md-12 d-flex justify-content-end">
           <button type="submit" class="btn btn-primary px-4">Filter</button>
@@ -163,6 +172,7 @@
             <th>Date</th>
             <th>Option</th>
             <th>Course</th>
+            <th>Year/Level</th>
             <th>Present</th>
             <th>Absent</th>
             <th>Attendance %</th>
@@ -186,6 +196,11 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
+    // Prevent future dates
+    const today = new Date().toISOString().split("T")[0];
+    document.getElementById("startDate").setAttribute("max", today);
+    document.getElementById("endDate").setAttribute("max", today);
+
     // Mapping of options to courses
     const optionCourses = {
       IT: [
@@ -202,7 +217,7 @@
       ]
     };
 
-    // Dummy attendance data for demo purposes
+    // Dummy attendance data
     const attendanceData = {
       IT: {
         SE: [
@@ -215,42 +230,18 @@
           { date: '2025-06-02', present: 21, absent: 9 },
           { date: '2025-06-03', present: 19, absent: 11 }
         ]
-      },
-      HWE: {
-        DS: [
-          { date: '2025-06-01', present: 18, absent: 12 },
-          { date: '2025-06-02', present: 20, absent: 10 },
-          { date: '2025-06-03', present: 22, absent: 8 }
-        ],
-        SE: [
-          { date: '2025-06-01', present: 24, absent: 6 },
-          { date: '2025-06-02', present: 26, absent: 4 },
-          { date: '2025-06-03', present: 23, absent: 7 }
-        ]
-      },
-      CS: {
-        NW: [
-          { date: '2025-06-01', present: 19, absent: 11 },
-          { date: '2025-06-02', present: 17, absent: 13 },
-          { date: '2025-06-03', present: 20, absent: 10 }
-        ],
-        DS: [
-          { date: '2025-06-01', present: 21, absent: 9 },
-          { date: '2025-06-02', present: 23, absent: 7 },
-          { date: '2025-06-03', present: 22, absent: 8 }
-        ]
       }
     };
 
     const optionSelect = document.getElementById('optionSelect');
+    const yearSelect = document.getElementById('yearSelect');
     const courseSelect = document.getElementById('courseSelect');
     const ctx = document.getElementById('attendanceChart').getContext('2d');
     let attendanceChart;
 
-    // Populate course dropdown when option changes
+    // Populate course dropdown
     optionSelect.addEventListener('change', () => {
       const selectedOption = optionSelect.value;
-
       courseSelect.innerHTML = '<option value="" selected disabled>Choose a course...</option>';
       if (selectedOption && optionCourses[selectedOption]) {
         optionCourses[selectedOption].forEach(course => {
@@ -265,7 +256,7 @@
       }
     });
 
-    function renderChart(optionId, courseId, startDate, endDate) {
+    function renderChart(optionId, courseId, yearLevel, startDate, endDate) {
       const data =
         attendanceData[optionId] && attendanceData[optionId][courseId]
           ? attendanceData[optionId][courseId]
@@ -288,27 +279,11 @@
         data: {
           labels,
           datasets: [
-            {
-              label: 'Present',
-              data: presentData,
-              backgroundColor: 'rgba(54, 162, 235, 0.7)'
-            },
-            {
-              label: 'Absent',
-              data: absentData,
-              backgroundColor: 'rgba(255, 99, 132, 0.7)'
-            }
+            { label: 'Present', data: presentData, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
+            { label: 'Absent', data: absentData, backgroundColor: 'rgba(255, 99, 132, 0.7)' }
           ]
         },
-        options: {
-          responsive: true,
-          scales: {
-            y: {
-              beginAtZero: true,
-              stepSize: 1
-            }
-          }
-        }
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
       const tbody = document.getElementById('attendanceTableBody');
@@ -321,11 +296,11 @@
             <td>${d.date}</td>
             <td>${optionId}</td>
             <td>${courseSelect.selectedOptions[0].text}</td>
+            <td>${yearLevel}</td>
             <td>${d.present}</td>
             <td>${d.absent}</td>
             <td>${percent}%</td>
-          </tr>
-        `;
+          </tr>`;
         tbody.insertAdjacentHTML('beforeend', row);
       });
     }
@@ -334,21 +309,16 @@
       e.preventDefault();
       const optionId = optionSelect.value;
       const courseId = courseSelect.value;
+      const yearLevel = yearSelect.value;
       const startDate = document.getElementById('startDate').value;
       const endDate = document.getElementById('endDate').value;
 
-      if (!optionId) {
-        alert('Please select an option.');
+      if (!optionId || !courseId || !yearLevel) {
+        alert('Please select option, course, and year.');
         return;
       }
-      if (!courseId) {
-        alert('Please select a course.');
-        return;
-      }
-
-      renderChart(optionId, courseId, startDate, endDate);
+      renderChart(optionId, courseId, yearLevel, startDate, endDate);
     });
   </script>
 </body>
-
 </html>
