@@ -1,7 +1,7 @@
 <?php
 session_start();
 require_once "config.php";
-require_once "session_check.php";
+require_once "session_check.php"; // checks if admin is logged in
 
 // Handle AJAX requests
 if(isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])){
@@ -10,7 +10,7 @@ if(isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])){
     // List departments with HoD names and programs
     if($action === 'list_departments'){
         $stmt = $pdo->query("
-            SELECT d.id AS dept_id, d.name AS dept_name, u.username AS hod_name
+            SELECT d.id AS dept_id, d.name AS dept_name, d.hod_id, u.username AS hod_name
             FROM department d
             LEFT JOIN users u ON d.hod_id = u.id
             ORDER BY d.name
@@ -210,28 +210,6 @@ body{font-family:'Segoe UI',sans-serif;background:#f5f7fa;margin:0;}
 </div>
 </div>
 
-<!-- Add Program Modal -->
-<div class="modal fade" id="addProgramModal" tabindex="-1" aria-hidden="true">
-<div class="modal-dialog">
-<form class="modal-content" id="addProgramForm">
-<div class="modal-header">
-    <h5 class="modal-title">Add Program</h5>
-    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-</div>
-<div class="modal-body">
-    <input type="hidden" name="department_id" id="programDeptId">
-    <div class="mb-3">
-        <label class="form-label">Program Name</label>
-        <input type="text" name="program_name" class="form-control" required>
-    </div>
-</div>
-<div class="modal-footer">
-    <button type="submit" class="btn btn-primary">Add Program</button>
-</div>
-</form>
-</div>
-</div>
-
 <div class="footer">&copy; 2025 Rwanda Polytechnic | Admin Panel</div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -241,7 +219,7 @@ function loadDepartments(){
     $.getJSON('manage-departments.php',{ajax:'1',action:'list_departments'},function(data){
         const tbody = $('#deptTable tbody').empty();
         data.forEach((dept,i)=>{
-            let programs = dept.programs.length ? '<ul class="mb-0">'+dept.programs.map(p=>'<li>'+p.name+' <button class="btn btn-sm btn-danger delete-prog" data-id="'+p.id+'"><i class="fas fa-times"></i></button></li>').join('')+'</ul>':'';
+            let programs = dept.programs.length ? '<ul class="mb-0">'+dept.programs.map(p=>'<li>'+p.name+' <button class="btn btn-sm btn-danger delete-prog" data-id="'+p.id+'"><i class="fas fa-times"></i></button></li>').join('')+'</ul>':''; 
             tbody.append(`<tr>
                 <td>${i+1}</td>
                 <td>${dept.dept_name}</td>
@@ -259,7 +237,6 @@ function loadDepartments(){
 $(document).ready(function(){
     loadDepartments();
 
-    // Add/Edit Department
     $('#addDeptForm').submit(function(e){
         e.preventDefault();
         let actionUrl = $('#deptId').val() ? 'edit_department' : 'add_department';
@@ -274,7 +251,6 @@ $(document).ready(function(){
         },'json');
     });
 
-    // Add/Remove program fields
     $('#addProgramBtn').click(function(){
         $('#programList').append(`<div class="input-group mb-2">
             <input type="text" name="programs[]" class="form-control" placeholder="Program Name" required>
@@ -283,7 +259,6 @@ $(document).ready(function(){
     });
     $(document).on('click','.remove-program',function(){ $(this).closest('.input-group').remove(); });
 
-    // Edit department
     $(document).on('click','.edit-dept',function(){
         $('#deptId').val($(this).data('id'));
         $('#deptName').val($(this).data('name'));
@@ -291,7 +266,6 @@ $(document).ready(function(){
         $('#addDeptModal').modal('show');
     });
 
-    // Delete department
     $(document).on('click','.delete-dept',function(){
         if(confirm('Delete this department?')){
             const dept_id = $(this).data('id');
@@ -302,13 +276,11 @@ $(document).ready(function(){
         }
     });
 
-    // Show Add Program Modal
     $(document).on('click','.add-program-btn',function(){
         $('#programDeptId').val($(this).data('dept'));
         $('#addProgramModal').modal('show');
     });
 
-    // Add Program
     $('#addProgramForm').submit(function(e){
         e.preventDefault();
         $.post('manage-departments.php?ajax=1&action=add_program',$(this).serialize(),function(resp){
@@ -321,7 +293,6 @@ $(document).ready(function(){
         },'json');
     });
 
-    // Delete Program
     $(document).on('click','.delete-prog',function(){
         if(confirm('Delete this program?')){
             const prog_id = $(this).data('id');

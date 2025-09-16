@@ -11,7 +11,7 @@ $hod = $stmt->fetch(PDO::FETCH_ASSOC);
 $hod_department = $hod['department_id'] ?? null;
 
 // Pagination & Search
-$limit = 10; // records per page
+$limit = 10;
 $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset = ($page - 1) * $limit;
 
@@ -34,7 +34,6 @@ $total_pages = ceil($total_records / $limit);
 // Fetch lecturers with pagination & search
 $params[] = $limit;
 $params[] = $offset;
-
 $stmt = $pdo->prepare("SELECT * FROM lecturers WHERE department_id = ? $search_sql ORDER BY id DESC LIMIT ? OFFSET ?");
 $stmt->execute($params);
 $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -50,7 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone      = trim($_POST['phone']);
     $education_level = $_POST['education_level'];
     $role = 'lecturer';
-    $password = password_hash('12345', PASSWORD_DEFAULT);
+    $password_plain = '12345';
+    $password = password_hash($password_plain, PASSWORD_DEFAULT);
 
     // Photo upload
     $photo_filename = null;
@@ -63,10 +63,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!move_uploaded_file($_FILES['photo']['tmp_name'], $target_file)) $photo_filename = null;
     }
 
+    // Insert into lecturers table
     $stmt = $pdo->prepare("INSERT INTO lecturers 
         (first_name, last_name, gender, dob, id_number, email, phone, department_id, education_level, role, password, photo)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    $stmt->execute([$first_name,$last_name,$gender,$dob,$id_number,$email,$phone,$hod_department,$education_level,$role,$password,$photo_filename]);
+    $stmt->execute([
+        $first_name,
+        $last_name,
+        $gender,
+        $dob,
+        $id_number,
+        $email,
+        $phone,
+        $hod_department,
+        $education_level,
+        $role,
+        $password,
+        $photo_filename
+    ]);
+
+    // Get new lecturer ID
+    $lecturer_id = $pdo->lastInsertId();
+
+    // Generate unique username: firstname.lastname (lowercase)
+    $username_base = strtolower($first_name . '.' . $last_name);
+    $username = $username_base;
+    $suffix = 1;
+    while ($pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?")->execute([$username]) && $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?")->fetchColumn() > 0) {
+        $username = $username_base . $suffix;
+        $suffix++;
+    }
+
+    // Insert into users table
+    $stmtUser = $pdo->prepare("INSERT INTO users (id, username, email, password, role, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmtUser->execute([
+        $lecturer_id,
+        $username,
+        $email,
+        $password,
+        'lecturer',
+        date('Y-m-d H:i:s')
+    ]);
+
     header("Location: hod-manage-lecturers.php");
     exit;
 }
@@ -149,8 +187,6 @@ body{font-family:'Segoe UI',sans-serif;background:#f4f6f9;margin:0;}
   <!-- Lecturer List Table -->
   <div class="table-section">
     <h5>Existing Lecturers</h5>
-
-    <!-- Search -->
     <form method="GET" class="mb-3">
       <div class="input-group">
         <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" class="form-control" placeholder="Search by name, email or ID">
@@ -201,11 +237,10 @@ body{font-family:'Segoe UI',sans-serif;background:#f4f6f9;margin:0;}
         <?php endfor; ?>
       </ul>
     </nav>
-
   </div>
 </div>
 
-<div class="footer">&copy; 2025 Rwanda Polytechnic | HoD Panel</div>
+<div class="footer">&copy; <?= date('Y') ?> Rwanda Polytechnic | HoD Panel</div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -1,3 +1,34 @@
+<?php
+session_start();
+require_once "config.php"; // contains $pdo = new PDO(...);
+
+// Ensure lecturer is logged in
+$user_id = $_SESSION['user_id'] ?? null;
+if (!$user_id) {
+  header("Location: index.php");
+  exit;
+}
+
+// Fetch lecturer’s courses
+$sql = "
+  SELECT 
+    c.id AS course_id,
+    c.name AS course_name,
+    c.code AS course_code,
+    d.name AS department_name,
+    o.name AS option_name,
+    cl.year AS class_year
+  FROM course_assignments ca
+  INNER JOIN courses c ON ca.course_id = c.id
+  INNER JOIN departments d ON c.department_id = d.id
+  INNER JOIN options o ON c.option_id = o.id
+  INNER JOIN classes cl ON c.class_id = cl.id
+  WHERE ca.lecturer_id = ?
+";
+$stmt = $pdo->prepare($sql);
+$stmt->execute([$user_id]);
+$courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,7 +46,6 @@
       font-family: 'Segoe UI', sans-serif;
       background-color: #f5f7fa;
     }
-
     .sidebar {
       position: fixed;
       top: 0;
@@ -26,31 +56,26 @@
       color: white;
       padding-top: 20px;
     }
-
     .sidebar a {
       display: block;
       padding: 12px 20px;
       color: #fff;
       text-decoration: none;
     }
-
     .sidebar a:hover,
     .sidebar a.active {
       background-color: #0059b3;
     }
-
     .topbar {
       margin-left: 250px;
       background-color: #fff;
       padding: 10px 30px;
       border-bottom: 1px solid #ddd;
     }
-
     .main-content {
       margin-left: 250px;
       padding: 30px;
     }
-
     .footer {
       text-align: center;
       margin-left: 250px;
@@ -59,26 +84,21 @@
       color: #666;
       background-color: #f0f0f0;
     }
-
     .card {
       border-radius: 10px;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
       transition: 0.3s ease;
     }
-
     .card:hover {
       transform: translateY(-2px);
     }
-
     .btn-action {
       margin-right: 5px;
     }
-
     .search-bar {
       max-width: 400px;
       margin-bottom: 25px;
     }
-
     @media (max-width: 768px) {
       .sidebar,
       .topbar,
@@ -87,14 +107,12 @@
         margin-left: 0 !important;
         width: 100%;
       }
-
       .sidebar {
         display: none;
       }
     }
   </style>
 </head>
-
 <body>
 
 <!-- Sidebar -->
@@ -108,7 +126,7 @@
   <a href="attendance-session.php"><i class="fas fa-video me-2"></i> Attendance Session</a>
   <a href="attendance-reports.php"><i class="fas fa-chart-bar me-2"></i> Attendance Reports</a>
   <a href="leave-requests.php"><i class="fas fa-envelope me-2"></i> Leave Requests</a>
-  <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+  <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
 </div>
 
 <!-- Topbar -->
@@ -122,38 +140,35 @@
   <input type="text" id="courseSearch" class="form-control search-bar" placeholder="Search courses by name or code...">
 
   <div class="row g-4" id="courseContainer">
-    <!-- Course Card -->
-    <div class="col-md-6 course-card">
-      <div class="card p-4">
-        <h6 class="fw-semibold course-title">Software Engineering</h6>
-        <p class="text-muted small mb-2 course-code">SE201</p>
-        <div>
-          <a href="attendance-session.php" class="btn btn-sm btn-primary btn-action">
-            <i class="fas fa-video me-1"></i> Start Session
-          </a>
-          <a href="attendance-reports.php" class="btn btn-sm btn-outline-secondary">
-            <i class="fas fa-chart-bar me-1"></i> View Reports
-          </a>
+    <?php if ($courses): ?>
+      <?php foreach ($courses as $course): ?>
+        <div class="col-md-6 course-card">
+          <div class="card p-4">
+            <h6 class="fw-semibold course-title">
+              <?= htmlspecialchars($course['course_name']) ?>
+            </h6>
+            <p class="text-muted small mb-2 course-code">
+              <?= htmlspecialchars($course['course_code']) ?>
+            </p>
+            <p class="small text-muted mb-2">
+              Dept: <?= htmlspecialchars($course['department_name']) ?> | 
+              Option: <?= htmlspecialchars($course['option_name']) ?> | 
+              Class: Year <?= htmlspecialchars($course['class_year']) ?>
+            </p>
+            <div>
+              <a href="attendance-session.php?course_id=<?= $course['course_id'] ?>" class="btn btn-sm btn-primary btn-action">
+                <i class="fas fa-video me-1"></i> Start Session
+              </a>
+              <a href="attendance-reports.php?course_id=<?= $course['course_id'] ?>" class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-chart-bar me-1"></i> View Reports
+              </a>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-
-    <div class="col-md-6 course-card">
-      <div class="card p-4">
-        <h6 class="fw-semibold course-title">Networking</h6>
-        <p class="text-muted small mb-2 course-code">NT101</p>
-        <div>
-          <a href="attendance-session.php" class="btn btn-sm btn-primary btn-action">
-            <i class="fas fa-video me-1"></i> Start Session
-          </a>
-          <a href="attendance-reports.php" class="btn btn-sm btn-outline-secondary">
-            <i class="fas fa-chart-bar me-1"></i> View Reports
-          </a>
-        </div>
-      </div>
-    </div>
-
-    <!-- Add more courses dynamically -->
+      <?php endforeach; ?>
+    <?php else: ?>
+      <p class="text-center">No courses assigned to you yet.</p>
+    <?php endif; ?>
   </div>
 </div>
 
@@ -172,11 +187,9 @@
 
   searchInput.addEventListener('keyup', function () {
     const query = this.value.toLowerCase();
-
     courseCards.forEach(card => {
       const title = card.querySelector('.course-title').textContent.toLowerCase();
       const code = card.querySelector('.course-code').textContent.toLowerCase();
-
       if (title.includes(query) || code.includes(query)) {
         card.style.display = 'block';
       } else {

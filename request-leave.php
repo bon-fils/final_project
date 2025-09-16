@@ -1,31 +1,35 @@
 <?php
 session_start();
-require_once "config.php";
+require_once "config.php"; // $pdo connection
 
 // Ensure student is logged in
-$student_id = $_SESSION['student_id'] ?? null;
-if (!$student_id) {
+$user_id = $_SESSION['user_id'] ?? null;
+if (!$user_id) {
     header("Location: index.php");
     exit;
 }
 
+// Get student info
+$stmt = $pdo->prepare("SELECT id, option_id, year_level FROM students WHERE user_id = ?");
+$stmt->execute([$user_id]);
+$student = $stmt->fetch();
+$student_id = $student['id'] ?? null;
+
+if (!$student_id) {
+    die("Student record not found.");
+}
+
 $successMsg = $errorMsg = "";
 
-// Fetch available courses for this student
+// Fetch available courses
 $courses = [];
-$query = "SELECT c.id, c.name 
-          FROM courses c
-          INNER JOIN course_assignments ca ON ca.course_id = c.id
-          INNER JOIN students s ON s.class_id = ca.class_id
-          WHERE s.id = ?";
-$stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $courses[] = $row;
-}
-$stmt->close();
+$sql = "SELECT c.id, c.name
+        FROM courses c
+        INNER JOIN course_assignments ca ON ca.course_id = c.id
+        WHERE ca.option_id = :option_id AND ca.year_level = :year_level";
+$stmt = $pdo->prepare($sql);
+$stmt->execute(['option_id' => $student['option_id'], 'year_level' => $student['year_level']]);
+$courses = $stmt->fetchAll();
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -35,17 +39,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $toDate     = $_POST['toDate'] ?? '';
     $reason     = trim($_POST['reason'] ?? '');
 
-    // Validate
+    $today = date('Y-m-d');
+
+    // Validation
     if (!$requestTo) {
         $errorMsg = "Please select who to request leave to.";
     } elseif ($requestTo === 'lecturer' && !$courseId) {
         $errorMsg = "Please select a course for lecturer leave request.";
     } elseif (!$reason) {
         $errorMsg = "Reason for leave is required.";
+    } elseif ($fromDate < $today || $toDate < $today) {
+        $errorMsg = "Leave cannot be requested for past dates.";
     } elseif (new DateTime($fromDate) > new DateTime($toDate)) {
         $errorMsg = "From Date cannot be later than To Date.";
     } else {
-        // Handle optional file upload
+        // File upload
         $supporting_file = null;
         if (!empty($_FILES['supportingFile']['name'])) {
             $uploadDir = "uploads/leave_docs/";
@@ -61,38 +69,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Insert into DB if no errors
+        // Insert into DB
         if (!$errorMsg) {
-            $sql = "INSERT INTO leave_requests
-                    (student_id, reason, supporting_file, status, requested_at, reviewed_by, reviewed_at, course_id)
-                    VALUES (?, ?, ?, 'pending', NOW(), NULL, NULL, ?)";
-            $stmt = $conn->prepare($sql);
-            $stmt->bind_param("issi", $student_id, $reason, $supporting_file, $courseId);
-            if ($stmt->execute()) {
-                $successMsg = "Leave request submitted successfully!";
-            } else {
-                $errorMsg = "Database error: " . $stmt->error;
+            if ($requestTo === 'lecturer') {
+                $sqlInsert = "INSERT INTO leave_requests
+                              (student_id, reason, supporting_file, status, requested_at, reviewed_by, reviewed_at, course_id, from_date, to_date)
+                              VALUES (:student_id, :reason, :supporting_file, 'pending', NOW(), NULL, NULL, :course_id, :from_date, :to_date)";
+                $stmt = $pdo->prepare($sqlInsert);
+                $stmt->bindValue(':student_id', $student_id, PDO::PARAM_INT);
+                $stmt->bindValue(':reason', $reason, PDO::PARAM_STR);
+                $stmt->bindValue(':supporting_file', $supporting_file, PDO::PARAM_STR);
+                $stmt->bindValue(':course_id', $courseId, PDO::PARAM_INT);
+                $stmt->bindValue(':from_date', $fromDate, PDO::PARAM_STR);
+                $stmt->bindValue(':to_date', $toDate, PDO::PARAM_STR);
+                $stmt->execute();
+            } else { // HOD
+                $sqlInsert = "INSERT INTO leave_requests
+                              (student_id, reason, supporting_file, status, requested_at, reviewed_by, reviewed_at, from_date, to_date)
+                              VALUES (:student_id, :reason, :supporting_file, 'pending', NOW(), NULL, NULL, :from_date, :to_date)";
+                $stmt = $pdo->prepare($sqlInsert);
+                $stmt->bindValue(':student_id', $student_id, PDO::PARAM_INT);
+                $stmt->bindValue(':reason', $reason, PDO::PARAM_STR);
+                $stmt->bindValue(':supporting_file', $supporting_file, PDO::PARAM_STR);
+                $stmt->bindValue(':from_date', $fromDate, PDO::PARAM_STR);
+                $stmt->bindValue(':to_date', $toDate, PDO::PARAM_STR);
+                $stmt->execute();
             }
-            $stmt->close();
+            $successMsg = "Leave request submitted successfully!";
         }
     }
 }
 
 // Fetch last 5 leave requests
-$leave_requests = [];
-$sql = "SELECT id, reason, supporting_file, status, requested_at 
-        FROM leave_requests WHERE student_id = ? 
-        ORDER BY requested_at DESC LIMIT 5";
-$stmt = $conn->prepare($sql);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $leave_requests[] = $row;
-}
-$stmt->close();
+$stmt = $pdo->prepare("SELECT id, reason, supporting_file, status, requested_at, from_date, to_date 
+                       FROM leave_requests 
+                       WHERE student_id = ? 
+                       ORDER BY requested_at DESC 
+                       LIMIT 5");
+$stmt->execute([$student_id]);
+$leave_requests = $stmt->fetchAll();
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -135,8 +151,8 @@ label { font-weight:600; color:#003366; }
 <div class="main-content">
 
 <div class="form-container">
-<?php if($errorMsg): ?><div class="alert alert-danger"><?= $errorMsg ?></div><?php endif; ?>
-<?php if($successMsg): ?><div class="alert alert-success"><?= $successMsg ?></div><?php endif; ?>
+<?php if($errorMsg): ?><div class="alert alert-danger"><?= htmlspecialchars($errorMsg) ?></div><?php endif; ?>
+<?php if($successMsg): ?><div class="alert alert-success"><?= htmlspecialchars($successMsg) ?></div><?php endif; ?>
 
 <form id="leaveRequestForm" method="post" enctype="multipart/form-data">
 <div class="mb-3">
@@ -193,6 +209,8 @@ label { font-weight:600; color:#003366; }
 <th>#</th>
 <th>Reason</th>
 <th>File</th>
+<th>From</th>
+<th>To</th>
 <th>Status</th>
 <th>Requested At</th>
 </tr>
@@ -202,7 +220,9 @@ label { font-weight:600; color:#003366; }
 <tr>
 <td><?= $i+1 ?></td>
 <td><?= htmlspecialchars($req['reason']) ?></td>
-<td><?php if($req['supporting_file']): ?><a href="uploads/leave_docs/<?= $req['supporting_file'] ?>" target="_blank">View</a><?php else: ?>-<?php endif; ?></td>
+<td><?php if($req['supporting_file']): ?><a href="uploads/leave_docs/<?= htmlspecialchars($req['supporting_file']) ?>" target="_blank">View</a><?php else: ?>-<?php endif; ?></td>
+<td><?= htmlspecialchars($req['from_date']) ?></td>
+<td><?= htmlspecialchars($req['to_date']) ?></td>
 <td>
 <?php if($req['status']=='pending'): ?><span class="badge bg-warning text-dark">Pending</span>
 <?php elseif($req['status']=='approved'): ?><span class="badge bg-success">Approved</span>
@@ -211,7 +231,7 @@ label { font-weight:600; color:#003366; }
 <td><?= date("d M Y, H:i", strtotime($req['requested_at'])) ?></td>
 </tr>
 <?php endforeach; else: ?>
-<tr><td colspan="5" class="text-center">No leave requests found.</td></tr>
+<tr><td colspan="7" class="text-center">No leave requests found.</td></tr>
 <?php endif; ?>
 </tbody>
 </table>
@@ -227,22 +247,30 @@ label { font-weight:600; color:#003366; }
 const requestTo = document.getElementById('requestTo');
 const courseSelectWrapper = document.getElementById('courseSelectWrapper');
 requestTo.addEventListener('change', function() {
-if(this.value==='lecturer'){
-courseSelectWrapper.style.display='block';
-document.getElementById('courseId').setAttribute('required','required');
-}else{
-courseSelectWrapper.style.display='none';
-document.getElementById('courseId').removeAttribute('required');
-}
+    if(this.value==='lecturer'){
+        courseSelectWrapper.style.display='block';
+        document.getElementById('courseId').setAttribute('required','required');
+    } else {
+        courseSelectWrapper.style.display='none';
+        document.getElementById('courseId').removeAttribute('required');
+    }
 });
 
+// Prevent past dates
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('fromDate').setAttribute('min', today);
+document.getElementById('toDate').setAttribute('min', today);
+
 document.getElementById('leaveRequestForm').addEventListener('submit', function(e){
-const fromDate = document.getElementById('fromDate').value;
-const toDate = document.getElementById('toDate').value;
-if(new Date(fromDate) > new Date(toDate)){
-e.preventDefault();
-alert('From Date cannot be later than To Date.');
-}
+    const fromDate = document.getElementById('fromDate').value;
+    const toDate = document.getElementById('toDate').value;
+    if(new Date(fromDate) < new Date(today) || new Date(toDate) < new Date(today)){
+        e.preventDefault();
+        alert('Cannot request leave for past dates.');
+    } else if(new Date(fromDate) > new Date(toDate)){
+        e.preventDefault();
+        alert('From Date cannot be later than To Date.');
+    }
 });
 </script>
 </body>
