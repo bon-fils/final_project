@@ -1,307 +1,201 @@
 <?php
 session_start();
 require_once "config.php";
-require_once "session_check.php"; // checks if admin is logged in
+require_once "session_check.php"; // ensure admin access
 
-// Handle AJAX requests
-if(isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])){
+function jsonResponse($status, $message, $extra = []) {
+    echo json_encode(array_merge(['status'=>$status,'message'=>$message],$extra));
+    exit;
+}
+
+// --- AJAX Actions ---
+if(isset($_GET['ajax']) && $_GET['ajax']==='1' && isset($_GET['action'])){
     $action = $_GET['action'];
 
-    // List departments with HoD names and programs
-    if($action === 'list_departments'){
-        $stmt = $pdo->query("
-            SELECT d.id AS dept_id, d.name AS dept_name, d.hod_id, u.username AS hod_name
-            FROM department d
-            LEFT JOIN users u ON d.hod_id = u.id
+    if($action==='list_departments'){
+        $stmt=$pdo->query("
+            SELECT d.id AS dept_id,d.name AS dept_name,d.hod_id,u.username AS hod_name
+            FROM departments d
+            LEFT JOIN users u ON d.hod_id=u.id
             ORDER BY d.name
         ");
-        $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+        $departments=$stmt->fetchAll(PDO::FETCH_ASSOC);
         foreach($departments as &$dept){
-            $stmt2 = $pdo->prepare("SELECT id, name FROM programs WHERE department_id = ?");
+            $stmt2=$pdo->prepare("SELECT id,name FROM programs WHERE department_id=?");
             $stmt2->execute([$dept['dept_id']]);
-            $dept['programs'] = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+            $dept['programs']=$stmt2->fetchAll(PDO::FETCH_ASSOC);
         }
-
-        echo json_encode($departments);
-        exit;
+        echo json_encode($departments); exit;
     }
 
-    // Add new department
-    if($action === 'add_department' && $_SERVER['REQUEST_METHOD'] === 'POST'){
-        $name = trim($_POST['department_name'] ?? '');
-        $hod_id = $_POST['hod_id'] ?: null;
-        $programs = $_POST['programs'] ?? [];
-
-        if($name){
-            $stmt = $pdo->prepare("INSERT INTO department (name, hod_id) VALUES (?, ?)");
-            $stmt->execute([$name, $hod_id]);
-            $dept_id = $pdo->lastInsertId();
-
-            if(!empty($programs)){
-                $stmt2 = $pdo->prepare("INSERT INTO programs (name, department_id) VALUES (?, ?)");
-                foreach($programs as $prog){
-                    if(trim($prog)) $stmt2->execute([trim($prog), $dept_id]);
-                }
-            }
-            echo json_encode(['status'=>'success','message'=>'Department added successfully']);
-        } else {
-            echo json_encode(['status'=>'error','message'=>'Department name required']);
+    if($action==='add_department' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $name=trim($_POST['department_name']??'');
+        $hod_id=!empty($_POST['hod_id'])?intval($_POST['hod_id']):null;
+        $programs=$_POST['programs']??[];
+        if($name==='') jsonResponse('error','Department name required');
+        $chk=$pdo->prepare("SELECT COUNT(*) FROM departments WHERE name=?");
+        $chk->execute([$name]);
+        if($chk->fetchColumn()>0) jsonResponse('error','Department already exists');
+        $stmt=$pdo->prepare("INSERT INTO departments(name,hod_id) VALUES(?,?)");
+        $stmt->execute([$name,$hod_id]);
+        $dept_id=$pdo->lastInsertId();
+        if(!empty($programs)){
+            $stmt2=$pdo->prepare("INSERT INTO programs(name,department_id) VALUES(?,?)");
+            foreach($programs as $prog){ if(trim($prog)) $stmt2->execute([trim($prog),$dept_id]); }
         }
-        exit;
+        jsonResponse('success','Department added');
     }
 
-    // Edit department
-    if($action === 'edit_department' && $_SERVER['REQUEST_METHOD'] === 'POST'){
-        $dept_id = $_POST['department_id'] ?? 0;
-        $name = trim($_POST['department_name'] ?? '');
-        $hod_id = $_POST['hod_id'] ?: null;
+    if($action==='edit_department' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $dept_id=intval($_POST['department_id']??0);
+        $name=trim($_POST['department_name']??'');
+        $hod_id=!empty($_POST['hod_id'])?intval($_POST['hod_id']):null;
+        if(!$dept_id||$name==='') jsonResponse('error','Invalid data');
+        $stmt=$pdo->prepare("UPDATE departments SET name=?,hod_id=? WHERE id=?");
+        $stmt->execute([$name,$hod_id,$dept_id]);
+        jsonResponse('success','Department updated');
+    }
 
-        if($dept_id && $name){
-            $stmt = $pdo->prepare("UPDATE department SET name=?, hod_id=? WHERE id=?");
-            $stmt->execute([$name, $hod_id, $dept_id]);
-            echo json_encode(['status'=>'success','message'=>'Department updated']);
-        } else {
-            echo json_encode(['status'=>'error','message'=>'Invalid data']);
+    if($action==='add_program' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $dept_id=intval($_POST['department_id']??0);
+        $program_name=trim($_POST['program_name']??'');
+        if(!$dept_id||$program_name==='') jsonResponse('error','Invalid data');
+        $chk=$pdo->prepare("SELECT COUNT(*) FROM programs WHERE name=? AND department_id=?");
+        $chk->execute([$program_name,$dept_id]);
+        if($chk->fetchColumn()>0) jsonResponse('error','Program already exists in this department');
+        $stmt=$pdo->prepare("INSERT INTO programs(name,department_id) VALUES(?,?)");
+        $stmt->execute([$program_name,$dept_id]);
+        jsonResponse('success','Program added');
+    }
+
+    if($action==='delete_department' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $dept_id=intval($_POST['department_id']??0);
+        if(!$dept_id) jsonResponse('error','Invalid department ID');
+        $pdo->beginTransaction();
+        try{
+            $pdo->prepare("DELETE FROM programs WHERE department_id=?")->execute([$dept_id]);
+            $pdo->prepare("DELETE FROM departments WHERE id=?")->execute([$dept_id]);
+            $pdo->commit();
+            jsonResponse('success','Department deleted');
+        }catch(Exception $e){
+            $pdo->rollBack();
+            jsonResponse('error','Failed to delete department');
         }
-        exit;
     }
 
-    // Add program to existing department
-    if($action === 'add_program' && $_SERVER['REQUEST_METHOD'] === 'POST'){
-        $dept_id = $_POST['department_id'] ?? 0;
-        $program_name = trim($_POST['program_name'] ?? '');
-        if($dept_id && $program_name){
-            $stmt = $pdo->prepare("INSERT INTO programs (name, department_id) VALUES (?, ?)");
-            $stmt->execute([$program_name, $dept_id]);
-            echo json_encode(['status'=>'success','message'=>'Program added']);
-        } else {
-            echo json_encode(['status'=>'error','message'=>'Invalid data']);
-        }
-        exit;
-    }
-
-    // Delete department
-    if($action === 'delete_department' && isset($_POST['department_id'])){
-        $dept_id = $_POST['department_id'];
-        $stmt = $pdo->prepare("DELETE FROM programs WHERE department_id = ?");
-        $stmt->execute([$dept_id]);
-        $stmt2 = $pdo->prepare("DELETE FROM department WHERE id = ?");
-        $stmt2->execute([$dept_id]);
-        echo json_encode(['status'=>'success','message'=>'Department deleted']);
-        exit;
-    }
-
-    // Delete program
-    if($action === 'delete_program' && isset($_POST['program_id'])){
-        $stmt = $pdo->prepare("DELETE FROM programs WHERE id = ?");
-        $stmt->execute([$_POST['program_id']]);
-        echo json_encode(['status'=>'success','message'=>'Program deleted']);
-        exit;
+    if($action==='delete_program' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $prog_id=intval($_POST['program_id']??0);
+        if(!$prog_id) jsonResponse('error','Invalid program ID');
+        $pdo->prepare("DELETE FROM programs WHERE id=?")->execute([$prog_id]);
+        jsonResponse('success','Program deleted');
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Manage Departments | RP Attendance System</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<title>Departments Management</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <style>
-body{font-family:'Segoe UI',sans-serif;background:#f5f7fa;margin:0;}
-.sidebar{position:fixed;top:0;left:0;width:250px;height:100vh;background:#003366;color:#fff;padding-top:20px;overflow-y:auto;}
-.sidebar a{display:block;padding:12px 20px;color:#fff;text-decoration:none;}
-.sidebar a:hover{background:#0059b3;}
-.topbar{margin-left:250px;background:#fff;padding:10px 30px;border-bottom:1px solid #ddd;}
-.main-content{margin-left:250px;padding:30px;}
-.card{border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.05);}
-.footer{text-align:center;margin-left:250px;padding:15px;font-size:0.9rem;color:#666;background:#f0f0f0;}
-@media(max-width:768px){.sidebar,.topbar,.main-content,.footer{margin-left:0 !important;width:100%;}.sidebar{display:none;}}
+body{background:#f8f9fa;font-family:'Segoe UI',sans-serif;}
+h2{font-weight:600;margin-bottom:20px;}
+.card{border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.08);}
+.card h5{font-size:1.1rem;margin-bottom:12px;}
+.program-list{list-style:none;padding-left:0;}
+.program-list li{padding:6px 10px;margin:4px 0;background:#eef3f9;border-radius:4px;display:flex;justify-content:space-between;align-items:center;}
+.program-list button{padding:2px 6px;font-size:0.8rem;}
+#addDepartmentForm{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.08);}
+.alert{margin-top:10px;}
 </style>
 </head>
-<body>
+<body class="container py-4">
 
-<div class="sidebar">
-    <div class="text-center mb-4">
-      <img src="RP_Logo.jpeg" width="100">
-      <h5 class="fw-bold">Admin</h5>
-      <hr style="border-color:#ffffff66;">
-    </div>
-    <a href="admin-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
-    <a href="register-student.php"><i class="fas fa-user-plus me-2"></i> Register Student</a>
-    <a href="manage-departments.php"><i class="fas fa-building me-2"></i> Manage Departments</a>
-    <a href="admin-reports.php"><i class="fas fa-chart-bar me-2"></i> Reports</a>
-    <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
-</div>
+<h2>Departments & Programs</h2>
+<div id="alertBox"></div>
 
-<div class="topbar d-flex justify-content-between align-items-center">
-    <h5 class="m-0 fw-bold">Manage Departments & Programs</h5>
-    <span>Admin Panel</span>
-</div>
-
-<div class="main-content">
-<div class="card p-4">
-    <div class="d-flex justify-content-between mb-3">
-        <h5 class="fw-semibold">Departments</h5>
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addDeptModal">
-            <i class="fas fa-plus me-1"></i> Add Department
-        </button>
-    </div>
-
-    <table class="table table-hover table-bordered align-middle" id="deptTable">
-        <thead class="table-light">
-            <tr>
-                <th>#</th>
-                <th>Department Name</th>
-                <th>HoD</th>
-                <th>Programs</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-</div>
-</div>
-
-<!-- Add/Edit Department Modal -->
-<div class="modal fade" id="addDeptModal" tabindex="-1" aria-hidden="true">
-<div class="modal-dialog">
-<form class="modal-content" id="addDeptForm">
-<div class="modal-header">
-    <h5 class="modal-title">Add / Edit Department</h5>
-    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-</div>
-<div class="modal-body">
-    <input type="hidden" name="department_id" id="deptId">
-    <div class="mb-3">
-        <label class="form-label">Department Name</label>
-        <input type="text" class="form-control" name="department_name" id="deptName" required>
-    </div>
-    <div class="mb-3">
-        <label class="form-label">HoD</label>
-        <select class="form-select" name="hod_id" id="hodSelect">
-            <option value="">-- Select HoD --</option>
-            <?php
-            $stmt = $pdo->query("SELECT id, username FROM users WHERE role='lecturer' ORDER BY username");
-            while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
-                echo "<option value='{$row['id']}'>{$row['username']}</option>";
-            }
-            ?>
-        </select>
-    </div>
-    <div class="mb-2">
-        <label class="form-label">Programs</label>
-        <div id="programList">
-            <div class="input-group mb-2">
-                <input type="text" name="programs[]" class="form-control" placeholder="Program Name" required>
-                <button type="button" class="btn btn-outline-danger remove-program"><i class="fas fa-times"></i></button>
-            </div>
-        </div>
-        <button type="button" id="addProgramBtn" class="btn btn-sm btn-outline-primary"><i class="fas fa-plus"></i> Add More</button>
-    </div>
-</div>
-<div class="modal-footer">
-    <button type="submit" class="btn btn-primary">Save</button>
-</div>
+<!-- Add Department Form -->
+<form id="addDepartmentForm" class="mb-4">
+  <input type="hidden" name="department_id" id="deptId">
+  <div class="mb-3">
+    <label class="form-label">Department Name</label>
+    <input type="text" name="department_name" id="deptName" class="form-control" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Head of Department</label>
+    <select name="hod_id" id="hodId" class="form-control">
+      <option value="">-- Select HoD --</option>
+      <?php
+      $hods=$pdo->query("SELECT id,username FROM users WHERE role='hod' ORDER BY username")->fetchAll();
+      foreach($hods as $hod){ echo "<option value='{$hod['id']}'>{$hod['username']}</option>"; }
+      ?>
+    </select>
+  </div>
+  <div id="programsWrapper" class="mb-3">
+    <label class="form-label">Programs</label>
+    <input type="text" name="programs[]" class="form-control mb-2" placeholder="Program name">
+  </div>
+  <button type="button" id="addProgramField" class="btn btn-outline-secondary btn-sm mb-3">+ Add Another Program</button><br>
+  <button type="submit" class="btn btn-primary">Save Department</button>
+  <button type="button" id="cancelEdit" class="btn btn-secondary d-none">Cancel Edit</button>
 </form>
-</div>
-</div>
 
-<div class="footer">&copy; 2025 Rwanda Polytechnic | Admin Panel</div>
+<!-- Departments List -->
+<div id="departmentsList"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
-function loadDepartments(){
-    $.getJSON('manage-departments.php',{ajax:'1',action:'list_departments'},function(data){
-        const tbody = $('#deptTable tbody').empty();
-        data.forEach((dept,i)=>{
-            let programs = dept.programs.length ? '<ul class="mb-0">'+dept.programs.map(p=>'<li>'+p.name+' <button class="btn btn-sm btn-danger delete-prog" data-id="'+p.id+'"><i class="fas fa-times"></i></button></li>').join('')+'</ul>':''; 
-            tbody.append(`<tr>
-                <td>${i+1}</td>
-                <td>${dept.dept_name}</td>
-                <td>${dept.hod_name ?? ''}</td>
-                <td>${programs}<button class="btn btn-sm btn-success add-program-btn mt-1" data-dept="${dept.dept_id}"><i class="fas fa-plus"></i> Add Program</button></td>
-                <td>
-                    <button class="btn btn-sm btn-warning edit-dept" data-id="${dept.dept_id}" data-name="${dept.dept_name}" data-hod="${dept.hod_id ?? ''}"><i class="fas fa-edit"></i></button>
-                    <button class="btn btn-sm btn-danger delete-dept" data-id="${dept.dept_id}"><i class="fas fa-trash"></i></button>
-                </td>
-            </tr>`);
+$(function(){
+  function showAlert(type,msg){$("#alertBox").html(`<div class="alert alert-${type}">${msg}</div>`);setTimeout(()=>$("#alertBox").html(""),3000);}
+  function loadDepartments(){
+    $.get("?ajax=1&action=list_departments",function(data){
+      let html="";
+      data.forEach(d=>{
+        html+=`<div class="card mb-3"><div class="card-body">
+          <h5>${d.dept_name} <small class="text-muted">(HoD: ${d.hod_name??'Not Assigned'})</small>
+            <button class="btn btn-sm btn-outline-warning editDept float-end" data-id="${d.dept_id}" data-name="${d.dept_name}" data-hod="${d.hod_id??''}"><i class="bi bi-pencil"></i> Edit</button>
+          </h5>
+          <ul class="program-list">`;
+        d.programs.forEach(p=>{
+          html+=`<li>${p.name}<button class="btn btn-danger btn-sm deleteProgram" data-id="${p.id}">Delete</button></li>`;
         });
-    });
-}
+        html+=`</ul>
+          <div class="input-group mb-2">
+            <input type="text" class="form-control form-control-sm addProgramInput" placeholder="New program">
+            <button class="btn btn-success btn-sm addProgramBtn" data-id="${d.dept_id}">+ Add Program</button>
+          </div>
+          <button class="btn btn-danger btn-sm deleteDept" data-id="${d.dept_id}">Delete Department</button>
+        </div></div>`;
+      });
+      $("#departmentsList").html(html);
+    },"json");
+  }
+  loadDepartments();
 
-$(document).ready(function(){
-    loadDepartments();
+  $("#addDepartmentForm").submit(function(e){
+    e.preventDefault();
+    let action=$("#deptId").val()?"edit_department":"add_department";
+    $.post("?ajax=1&action="+action,$(this).serialize(),function(res){
+      if(res.status==="success"){showAlert("success",res.message);$("#addDepartmentForm")[0].reset();$("#deptId").val("");$("#cancelEdit").addClass("d-none");loadDepartments();}
+      else showAlert("danger",res.message);
+    },"json");
+  });
 
-    $('#addDeptForm').submit(function(e){
-        e.preventDefault();
-        let actionUrl = $('#deptId').val() ? 'edit_department' : 'add_department';
-        $.post('manage-departments.php?ajax=1&action='+actionUrl,$(this).serialize(),function(resp){
-            alert(resp.message);
-            if(resp.status==='success'){
-                $('#addDeptModal').modal('hide');
-                $('#addDeptForm')[0].reset();
-                $('#deptId').val('');
-                loadDepartments();
-            }
-        },'json');
-    });
-
-    $('#addProgramBtn').click(function(){
-        $('#programList').append(`<div class="input-group mb-2">
-            <input type="text" name="programs[]" class="form-control" placeholder="Program Name" required>
-            <button type="button" class="btn btn-outline-danger remove-program"><i class="fas fa-times"></i></button>
-        </div>`);
-    });
-    $(document).on('click','.remove-program',function(){ $(this).closest('.input-group').remove(); });
-
-    $(document).on('click','.edit-dept',function(){
-        $('#deptId').val($(this).data('id'));
-        $('#deptName').val($(this).data('name'));
-        $('#hodSelect').val($(this).data('hod'));
-        $('#addDeptModal').modal('show');
-    });
-
-    $(document).on('click','.delete-dept',function(){
-        if(confirm('Delete this department?')){
-            const dept_id = $(this).data('id');
-            $.post('manage-departments.php?ajax=1&action=delete_department',{department_id:dept_id},function(resp){
-                alert(resp.message);
-                loadDepartments();
-            },'json');
-        }
-    });
-
-    $(document).on('click','.add-program-btn',function(){
-        $('#programDeptId').val($(this).data('dept'));
-        $('#addProgramModal').modal('show');
-    });
-
-    $('#addProgramForm').submit(function(e){
-        e.preventDefault();
-        $.post('manage-departments.php?ajax=1&action=add_program',$(this).serialize(),function(resp){
-            alert(resp.message);
-            if(resp.status==='success'){
-                $('#addProgramModal').modal('hide');
-                $('#addProgramForm')[0].reset();
-                loadDepartments();
-            }
-        },'json');
-    });
-
-    $(document).on('click','.delete-prog',function(){
-        if(confirm('Delete this program?')){
-            const prog_id = $(this).data('id');
-            $.post('manage-departments.php?ajax=1&action=delete_program',{program_id:prog_id},function(resp){
-                alert(resp.message);
-                loadDepartments();
-            },'json');
-        }
-    });
+  $("#addProgramField").click(function(){$("#programsWrapper").append(`<input type="text" name="programs[]" class="form-control mb-2" placeholder="Program name">`);});
+  $(document).on("click",".addProgramBtn",function(){
+    let id=$(this).data("id"),name=$(this).siblings(".addProgramInput").val();if(!name)return;
+    $.post("?ajax=1&action=add_program",{department_id:id,program_name:name},function(res){if(res.status==="success"){showAlert("success",res.message);loadDepartments();}else showAlert("danger",res.message);},"json");
+  });
+  $(document).on("click",".deleteDept",function(){if(!confirm("Delete this department and its programs?"))return;let id=$(this).data("id");$.post("?ajax=1&action=delete_department",{department_id:id},function(res){if(res.status==="success"){showAlert("success",res.message);loadDepartments();}else showAlert("danger",res.message);},"json");});
+  $(document).on("click",".deleteProgram",function(){if(!confirm("Delete this program?"))return;let id=$(this).data("id");$.post("?ajax=1&action=delete_program",{program_id:id},function(res){if(res.status==="success"){showAlert("success",res.message);loadDepartments();}else showAlert("danger",res.message);},"json");});
+  $(document).on("click",".editDept",function(){
+    $("#deptId").val($(this).data("id"));
+    $("#deptName").val($(this).data("name"));
+    $("#hodId").val($(this).data("hod"));
+    $("#cancelEdit").removeClass("d-none");
+    $('html,body').animate({scrollTop:0},200);
+  });
+  $("#cancelEdit").click(function(){$("#addDepartmentForm")[0].reset();$("#deptId").val("");$(this).addClass("d-none");});
 });
 </script>
 </body>
