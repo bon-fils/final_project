@@ -1,27 +1,8 @@
 <?php
 session_start();
-
-// Prevent caching to stop back-button access after logout
-header("Cache-Control: no-cache, no-store, must-revalidate");
-header("Pragma: no-cache");
-header("Expires: 0");
-
 require_once "config.php"; // PDO connection
-
-// Ensure user is logged in and is HoD
-$user_id = $_SESSION['user_id'] ?? null;
-if (!$user_id) {
-    header("Location: login.php");
-    exit;
-}
-
-// Get user info
-$stmt = $pdo->prepare("SELECT id, role FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
-if (!$user || $user['role'] !== 'hod') {
-    die("Access denied. You must be a Head of Department to access this page.");
-}
+require_once "session_check.php";
+require_role(['hod']);
 
 // Get HoD department id
 $deptStmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");

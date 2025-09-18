@@ -2,8 +2,20 @@
 session_start();
 require_once "config.php";
 require_once "session_check.php"; // ensures student is logged in
+require_role(['student']);
 
-$student_id = $_SESSION['student_id'];
+$student_id = $_SESSION['student_id'] ?? null;
+if(!$student_id){
+    // Resolve from user_id if not set (compatibility)
+    $uid = $_SESSION['user_id'] ?? 0;
+    if($uid){
+        $s=$pdo->prepare("SELECT id FROM students WHERE user_id=? LIMIT 1");
+        $s->execute([$uid]);
+        $student_id = $s->fetchColumn() ?: null;
+        if($student_id){ $_SESSION['student_id'] = (int)$student_id; }
+    }
+}
+if(!$student_id){ header("Location: login.php"); exit; }
 
 // Fetch all attendance records for this student
 $stmt = $pdo->prepare("

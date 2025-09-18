@@ -3,6 +3,7 @@ error_reporting(0);
 session_start();
 require_once "config.php";
 require_once "session_check.php"; // Ensure only logged-in admins can access
+require_role(['admin']);
 
 // Handle AJAX request for options based on department
 if(isset($_POST['get_options'])){

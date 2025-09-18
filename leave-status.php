@@ -1,6 +1,8 @@
 <?php
 session_start();
 require_once "config.php"; // PDO connection
+require_once "session_check.php";
+require_role(['student']);
 
 // Ensure student is logged in
 $user_id = $_SESSION['user_id'] ?? null;

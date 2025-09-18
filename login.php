@@ -27,28 +27,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            // Plain text password check
-            if ($user && $user['password'] === $password) {
+            if (!$user) {
+                error_log("Login failed: User not found for email/username: $emailOrUsername, role: $role");
+            }
+
+            $isAuthenticated = false;
+
+            if ($user) {
+                $storedPassword = (string)($user['password'] ?? '');
+
+                // If stored is a hash, verify securely; otherwise fall back to plain and upgrade to hash-on-login
+                $looksHashed = str_starts_with($storedPassword, '$2y$') || str_starts_with($storedPassword, '$argon2');
+
+                if ($looksHashed) {
+                    $isAuthenticated = password_verify($password, $storedPassword);
+                    // Rehash if needed (algorithm cost changes, etc.)
+                    if ($isAuthenticated && password_needs_rehash($storedPassword, PASSWORD_BCRYPT)) {
+                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $upd = $pdo->prepare("UPDATE users SET password = :p WHERE id = :id");
+                        $upd->execute(['p' => $newHash, 'id' => $user['id']]);
+                    }
+                } else {
+                    // Legacy plaintext support: if matches, upgrade to hash
+                    if (hash_equals($storedPassword, $password)) {
+                        $isAuthenticated = true;
+                        $newHash = password_hash($password, PASSWORD_BCRYPT);
+                        $upd = $pdo->prepare("UPDATE users SET password = :p WHERE id = :id");
+                        $upd->execute(['p' => $newHash, 'id' => $user['id']]);
+                        // If there is a duplicate password column for students, try to update too (best-effort)
+                        if ($user['role'] === 'student') {
+                            try {
+                                $updS = $pdo->prepare("UPDATE students SET password = :p WHERE user_id = :uid");
+                                $updS->execute(['p' => $newHash, 'uid' => $user['id']]);
+                            } catch (Throwable $t) {
+                                // ignore silently; column may not exist
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($isAuthenticated) {
                 $_SESSION['user_id']  = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['role']     = $user['role'];
 
-                // Redirect by role
+                // Set role-specific IDs for consistency across pages
                 switch ($user['role']) {
-                    case 'admin':
-                        header("Location: admin-dashboard.php"); exit;
-                    case 'lecturer':
-                        header("Location: lecturer-dashboard.php"); exit;
                     case 'student':
-                        header("Location: students-dashboard.php"); exit;
+                        try {
+                            $s = $pdo->prepare("SELECT id FROM students WHERE user_id = ? LIMIT 1");
+                            $s->execute([$user['id']]);
+                            $stu = $s->fetch(PDO::FETCH_ASSOC);
+                            if (!empty($stu['id'])) {
+                                $_SESSION['student_id'] = (int)$stu['id'];
+                            }
+                        } catch (Throwable $t) {}
+                        header("Location: students-dashboard.php");
+                        exit;
+                    case 'lecturer':
+                        $_SESSION['lecturer_id'] = (int)$user['id'];
+                        error_log("Redirecting lecturer to dashboard: " . $user['username']);
+                        header("Location: lecturer-dashboard.php");
+                        exit;
+                    case 'admin':
+                        header("Location: admin-dashboard.php");
+                        exit;
                     case 'hod':
-                        header("Location: hod-dashboard.php"); exit;
+                        header("Location: hod-dashboard.php");
+                        exit;
                     case 'tech':
-                        header("Location: tech-dashboard.php"); exit;
+                        header("Location: tech-dashboard.php");
+                        exit;
                     default:
                         $error = "Role not recognized.";
                 }
             } else {
+                error_log("Login failed: Authentication failed for user: " . ($user['username'] ?? 'unknown') . ", role: $role");
                 $error = "Invalid email/username, password, or role.";
             }
         } catch (PDOException $e) {

@@ -1,28 +1,28 @@
 <?php
 session_start();
-require_once "config.php";
+require_once "config.php"; // $pdo
+require_once "session_check.php";
+require_role(['student']);
 
-// Assuming logged-in student's ID is stored in session
-$student_id = $_SESSION['student_id'] ?? null;
-
-// Fetch available courses for this student
+// Resolve logged-in student
+$user_id = $_SESSION['user_id'] ?? null;
+$student_id = null;
 $courses = [];
-if ($student_id) {
-    $query = "
-        SELECT c.id, c.name 
-        FROM courses c
-        INNER JOIN course_assignments ca ON ca.course_id = c.id
-        INNER JOIN students s ON s.class_id = ca.class_id
-        WHERE s.id = ?
-    ";
-    $stmt = $conn->prepare($query);
-    $stmt->bind_param("i", $student_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    while ($row = $result->fetch_assoc()) {
-        $courses[] = $row;
+if ($user_id) {
+    $s = $pdo->prepare("SELECT id, option_id, year_level FROM students WHERE user_id = ? LIMIT 1");
+    $s->execute([$user_id]);
+    $stu = $s->fetch(PDO::FETCH_ASSOC);
+    if ($stu) { $student_id = (int)$stu['id']; }
+
+    // Minimal course list: from courses table by option_id/year_level if such mapping exists
+    try {
+        $c = $pdo->prepare("SELECT id, name FROM courses WHERE option_id = :opt OR year_level = :yl ORDER BY name");
+        $c->execute(['opt' => $stu['option_id'] ?? 0, 'yl' => $stu['year_level'] ?? '']);
+        $courses = $c->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $t) {
+        // Fallback to all courses if schema differs
+        $courses = $pdo->query("SELECT id, name FROM courses ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
     }
-    $stmt->close();
 }
 ?>
 <!DOCTYPE html>
