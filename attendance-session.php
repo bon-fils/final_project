@@ -2,7 +2,11 @@
 session_start();
 require_once "config.php";
 require_once "session_check.php";
-require_role(['lecturer']);
+require_role(['lecturer', 'admin']);
+
+// Get current page for active state
+$currentPage = basename($_SERVER['PHP_SELF']);
+$userRole = $_SESSION['role'] ?? 'admin';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -10,7 +14,7 @@ require_role(['lecturer']);
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Attendance Session | Lecturer | RP Attendance System</title>
+  <title>Attendance Session | <?php echo ucfirst($userRole); ?> | RP Attendance System</title>
 
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -117,15 +121,25 @@ require_role(['lecturer']);
   <!-- Sidebar -->
   <nav class="sidebar" aria-label="Sidebar Navigation">
     <div class="text-center mb-4">
-      <h4>👨‍🏫 Lecturer</h4>
+      <h4><?php echo $userRole === 'admin' ? '👨‍💼 Admin' : '👨‍🏫 Lecturer'; ?></h4>
       <hr style="border-color: #ffffff66;" />
     </div>
-    <a href="lecturer-dashboard.php">Dashboard</a>
-    <a href="lecturer-my-courses.php">My Courses</a>
-    <a href="attendance-session.php" class="active"><i class="fas fa-video me-2"></i> Attendance Session</a>
-    <a href="attendance-reports.php">Attendance Reports</a>
-    <a href="leave-requests.php">Leave Requests</a>
-    <a href="index.php">Logout</a>
+    <?php if ($userRole === 'admin'): ?>
+      <a href="admin-dashboard.php">Dashboard</a>
+      <a href="admin-reports.php">Reports & Analytics</a>
+      <a href="attendance-session.php" class="active"><i class="fas fa-video me-2"></i> Attendance Session</a>
+      <a href="attendance-records.php">Attendance Records</a>
+      <a href="leave-requests.php">Leave Management</a>
+      <a href="manage-departments.php">Manage Departments</a>
+      <a href="logout.php">Logout</a>
+    <?php else: ?>
+      <a href="lecturer-dashboard.php">Dashboard</a>
+      <a href="lecturer-my-courses.php">My Courses</a>
+      <a href="attendance-session.php" class="active"><i class="fas fa-video me-2"></i> Attendance Session</a>
+      <a href="attendance-reports.php">Attendance Reports</a>
+      <a href="leave-requests.php">Leave Requests</a>
+      <a href="logout.php">Logout</a>
+    <?php endif; ?>
   </nav>
 
   <!-- Topbar -->

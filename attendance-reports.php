@@ -2,7 +2,7 @@
 session_start();
 require_once "config.php"; // $pdo connection
 require_once "session_check.php";
-require_role(['lecturer']);
+require_role(['lecturer', 'admin']);
 
 // Ensure lecturer is logged in
 $lecturer_id = $_SESSION['lecturer_id'] ?? null;

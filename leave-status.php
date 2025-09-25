@@ -2,7 +2,7 @@
 session_start();
 require_once "config.php"; // PDO connection
 require_once "session_check.php";
-require_role(['student']);
+require_role(['student', 'admin']);
 
 // Ensure student is logged in
 $user_id = $_SESSION['user_id'] ?? null;
@@ -87,12 +87,58 @@ body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
 <?php if(count($leave_requests) > 0): ?>
     <?php foreach($leave_requests as $lr): ?>
     <tr>
-        <td><?= htmlspecialchars($lr['from_date'] ?? '-') ?></td>
-        <td><?= htmlspecialchars($lr['to_date'] ?? '-') ?></td>
-        <td><?= htmlspecialchars($lr['reason']) ?></td>
+        <td>
+        <?php
+        // Extract from date from structured reason
+        if (preg_match('/From:\s*([^\n\r]+)/', $lr['reason'], $matches)) {
+            echo date("d M Y", strtotime(trim($matches[1])));
+        } else {
+            echo '-';
+        }
+        ?>
+        </td>
+        <td>
+        <?php
+        // Extract to date from structured reason
+        if (preg_match('/To:\s*([^\n\r]+)/', $lr['reason'], $matches)) {
+            echo date("d M Y", strtotime(trim($matches[1])));
+        } else {
+            echo '-';
+        }
+        ?>
+        </td>
+        <td>
+        <?php
+        // Extract main reason (before structured details)
+        $reason_parts = explode('-- Details --', $lr['reason']);
+        $main_reason = trim($reason_parts[0]);
+        if (empty($main_reason)) {
+            $main_reason = 'Leave Request';
+        }
+        echo htmlspecialchars($main_reason);
+        ?>
+        </td>
         <td><?= htmlspecialchars($lr['reviewed_by'] ?? '-') ?></td>
-        <td><?= !empty($lr['course_name']) ? 'Lecturer' : 'HoD' ?></td>
-        <td><?= !empty($lr['course_name']) ? htmlspecialchars($lr['course_name']) : 'All Courses' ?></td>
+        <td>
+        <?php
+        // Determine role from structured reason
+        if (preg_match('/Requested To:\s*(HoD|Lecturer)/', $lr['reason'], $matches)) {
+            echo $matches[1];
+        } else {
+            echo 'HoD'; // Default
+        }
+        ?>
+        </td>
+        <td>
+        <?php
+        // Extract course information
+        if (preg_match('/Course ID:\s*([^\n\r]+)/', $lr['reason'], $matches)) {
+            echo 'Course ID: ' . htmlspecialchars(trim($matches[1]));
+        } else {
+            echo 'All Courses';
+        }
+        ?>
+        </td>
         <td>
             <?php
             switch($lr['status']){

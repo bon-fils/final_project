@@ -1,11 +1,19 @@
 <?php
 session_start();
 require_once "config.php"; // $pdo
+require_once "security_utils.php"; // For CSRF validation
+require_once "session_check.php"; // For CSRF token validation
 
 // Ensure student is logged in
 $user_id = $_SESSION['user_id'] ?? null;
 if (!$user_id) {
     header("Location: login.php");
+    exit;
+}
+
+// Validate CSRF token
+if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
+    header("Location: request-leave.php?error=csrf_invalid");
     exit;
 }
 

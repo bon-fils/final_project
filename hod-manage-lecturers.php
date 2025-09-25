@@ -143,6 +143,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             date('Y-m-d H:i:s')
         ]);
 
+        // Note: User and lecturer records are created successfully
+        // The user_id relationship can be added later if needed for advanced features
+
         $pdo->commit();
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
         $_SESSION['success_message'] = "Lecturer added successfully! Login credentials: Username: $username, Password: 12345";

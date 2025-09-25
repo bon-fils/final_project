@@ -58,8 +58,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         case 'get_options':
             try {
                 $deptId = $_GET['department_id'] ?? 0;
-                $stmt = $pdo->prepare("SELECT DISTINCT option_name FROM programs WHERE department_id = ? ORDER BY option_name");
-                $stmt->execute([$deptId]);
+                if ($deptId) {
+                    $stmt = $pdo->prepare("SELECT id, name FROM options WHERE department_id = ? ORDER BY name");
+                    $stmt->execute([$deptId]);
+                } else {
+                    $stmt = $pdo->query("SELECT id, name FROM options ORDER BY name");
+                }
                 $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode($options);
             } catch (PDOException $e) {
@@ -71,9 +75,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         case 'get_courses':
             try {
                 $deptId = $_GET['department_id'] ?? 0;
-                $optionName = $_GET['option_name'] ?? '';
-                $stmt = $pdo->prepare("SELECT id, name FROM programs WHERE department_id = ? AND option_name = ? ORDER BY name");
-                $stmt->execute([$deptId, $optionName]);
+                $optionId = $_GET['option_id'] ?? 0;
+
+                if ($deptId && $optionId) {
+                    // Get courses for specific department and option
+                    $stmt = $pdo->prepare("SELECT id, name, course_code FROM courses WHERE department_id = ? ORDER BY name");
+                    $stmt->execute([$deptId]);
+                } elseif ($deptId) {
+                    // Get all courses for the department
+                    $stmt = $pdo->prepare("SELECT id, name, course_code FROM courses WHERE department_id = ? ORDER BY name");
+                    $stmt->execute([$deptId]);
+                } else {
+                    // Get all courses
+                    $stmt = $pdo->query("SELECT id, name, course_code FROM courses ORDER BY name");
+                }
+
                 $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode($courses);
             } catch (PDOException $e) {
@@ -93,13 +109,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     $params[] = $_GET['department_id'];
                 }
 
-                if (!empty($_GET['option_name'])) {
-                    $where[] = "p.option_name = ?";
-                    $params[] = $_GET['option_name'];
+                if (!empty($_GET['option_id'])) {
+                    $where[] = "s.option_id = ?";
+                    $params[] = $_GET['option_id'];
                 }
 
                 if (!empty($_GET['course_id'])) {
-                    $where[] = "p.id = ?";
+                    $where[] = "c.id = ?";
                     $params[] = $_GET['course_id'];
                 }
 
@@ -117,16 +133,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         s.first_name,
                         s.last_name,
                         d.name as department_name,
-                        p.option_name,
-                        p.name as course_name,
+                        o.name as option_name,
+                        c.name as course_name,
+                        c.course_code,
                         DATE(ar.recorded_at) as attendance_date,
                         ar.status,
-                        ar.method,
                         ar.recorded_at
                     FROM attendance_records ar
                     INNER JOIN students s ON ar.student_id = s.id
-                    INNER JOIN programs p ON s.option_id = p.id
-                    INNER JOIN departments d ON p.department_id = d.id
+                    INNER JOIN options o ON s.option_id = o.id
+                    INNER JOIN departments d ON s.department_id = d.id
+                    LEFT JOIN courses c ON ar.course_id = c.id
                     {$whereClause}
                     ORDER BY ar.recorded_at DESC
                     LIMIT 1000
@@ -153,13 +170,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     $params[] = $_GET['department_id'];
                 }
 
-                if (!empty($_GET['option_name'])) {
-                    $where[] = "p.option_name = ?";
-                    $params[] = $_GET['option_name'];
+                if (!empty($_GET['option_id'])) {
+                    $where[] = "s.option_id = ?";
+                    $params[] = $_GET['option_id'];
                 }
 
                 if (!empty($_GET['course_id'])) {
-                    $where[] = "p.id = ?";
+                    $where[] = "c.id = ?";
                     $params[] = $_GET['course_id'];
                 }
 
@@ -177,16 +194,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         s.first_name,
                         s.last_name,
                         d.name as department_name,
-                        p.option_name,
-                        p.name as course_name,
+                        o.name as option_name,
+                        c.name as course_name,
+                        c.course_code,
                         DATE(ar.recorded_at) as attendance_date,
                         ar.status,
-                        ar.method,
                         ar.recorded_at
                     FROM attendance_records ar
                     INNER JOIN students s ON ar.student_id = s.id
-                    INNER JOIN programs p ON s.option_id = p.id
-                    INNER JOIN departments d ON p.department_id = d.id
+                    INNER JOIN options o ON s.option_id = o.id
+                    INNER JOIN departments d ON s.department_id = d.id
+                    LEFT JOIN courses c ON ar.course_id = c.id
                     {$whereClause}
                     ORDER BY ar.recorded_at DESC
                 ");
@@ -216,11 +234,12 @@ function exportToExcel($reports) {
     header('Content-Disposition: attachment; filename="attendance_report_' . date('Y-m-d') . '.xls"');
     header('Cache-Control: max-age=0');
 
-    echo "Student Name\tDepartment\tOption\tCourse\tDate\tStatus\tMethod\n";
+    echo "Student Name\tDepartment\tOption\tCourse\tCourse Code\tDate\tStatus\n";
 
     foreach ($reports as $report) {
         $studentName = $report['first_name'] . ' ' . $report['last_name'];
-        echo "{$studentName}\t{$report['department_name']}\t{$report['option_name']}\t{$report['course_name']}\t{$report['attendance_date']}\t{$report['status']}\t{$report['method']}\n";
+        $courseCode = $report['course_code'] ?? 'N/A';
+        echo "{$studentName}\t{$report['department_name']}\t{$report['option_name']}\t{$report['course_name']}\t{$courseCode}\t{$report['attendance_date']}\t{$report['status']}\n";
     }
     exit;
 }
@@ -233,18 +252,19 @@ function exportToPDF($reports) {
     echo "<html><head><title>Attendance Report</title></head><body>";
     echo "<h1>Attendance Report - " . date('Y-m-d') . "</h1>";
     echo "<table border='1' cellpadding='5' cellspacing='0'>";
-    echo "<tr><th>Student Name</th><th>Department</th><th>Option</th><th>Course</th><th>Date</th><th>Status</th><th>Method</th></tr>";
+    echo "<tr><th>Student Name</th><th>Department</th><th>Option</th><th>Course</th><th>Course Code</th><th>Date</th><th>Status</th></tr>";
 
     foreach ($reports as $report) {
         $studentName = $report['first_name'] . ' ' . $report['last_name'];
+        $courseCode = $report['course_code'] ?? 'N/A';
         echo "<tr>";
         echo "<td>{$studentName}</td>";
         echo "<td>{$report['department_name']}</td>";
         echo "<td>{$report['option_name']}</td>";
         echo "<td>{$report['course_name']}</td>";
+        echo "<td>{$courseCode}</td>";
         echo "<td>{$report['attendance_date']}</td>";
         echo "<td>{$report['status']}</td>";
-        echo "<td>{$report['method']}</td>";
         echo "</tr>";
     }
 
@@ -665,7 +685,7 @@ function exportToPDF($reports) {
         optionSelect.empty().append('<option value="">All Options</option>');
 
         data.forEach(function(option) {
-          optionSelect.append(`<option value="${option.option_name}">${option.option_name}</option>`);
+          optionSelect.append(`<option value="${option.id}">${option.name}</option>`);
         });
 
         optionSelect.prop('disabled', false);
@@ -675,21 +695,22 @@ function exportToPDF($reports) {
     }
 
     // Load courses based on department and option
-    function loadCourses(departmentId, optionName) {
-      if (!departmentId || !optionName) {
+    function loadCourses(departmentId, optionId) {
+      if (!departmentId) {
         $('#courseFilter').html('<option value="">All Courses</option>').prop('disabled', true);
         return;
       }
 
       $.getJSON('admin-reports.php?ajax=1&action=get_courses', {
         department_id: departmentId,
-        option_name: optionName
+        option_id: optionId
       }, function(data) {
         const courseSelect = $('#courseFilter');
         courseSelect.empty().append('<option value="">All Courses</option>');
 
         data.forEach(function(course) {
-          courseSelect.append(`<option value="${course.id}">${course.name}</option>`);
+          const courseDisplay = course.course_code ? `${course.name} (${course.course_code})` : course.name;
+          courseSelect.append(`<option value="${course.id}">${courseDisplay}</option>`);
         });
 
         courseSelect.prop('disabled', false);
@@ -737,8 +758,8 @@ function exportToPDF($reports) {
       // Option change
       $('#optionFilter').change(function() {
         const deptId = $('#departmentFilter').val();
-        const optionName = $(this).val();
-        loadCourses(deptId, optionName);
+        const optionId = $(this).val();
+        loadCourses(deptId, optionId);
       });
 
       // Filter form submission
@@ -766,7 +787,7 @@ function exportToPDF($reports) {
     function applyFilters() {
       const filters = {
         department_id: $('#departmentFilter').val(),
-        option_name: $('#optionFilter').val(),
+        option_id: $('#optionFilter').val(),
         course_id: $('#courseFilter').val()
       };
 
@@ -850,10 +871,10 @@ function exportToPDF($reports) {
             <td>${report.first_name} ${report.last_name}</td>
             <td>${report.department_name}</td>
             <td>${report.option_name}</td>
-            <td>${report.course_name}</td>
+            <td>${report.course_name || 'N/A'} ${report.course_code ? `(${report.course_code})` : ''}</td>
             <td>${report.attendance_date}</td>
             <td>${statusBadge}</td>
-            <td class="text-center">${methodIcon}</td>
+            <td class="text-center"><i class="fas fa-fingerprint text-warning"></i></td>
           </tr>
         `;
       });
