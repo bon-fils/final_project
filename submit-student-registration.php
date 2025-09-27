@@ -20,15 +20,15 @@ try {
     // Use InputValidator for robust validation
     $validator = new InputValidator($_POST);
     $validator
-        ->required(['first_name', 'last_name', 'email', 'telephone', 'department', 'option', 'reg_no', 'sex', 'year_level'])
+        ->required(['first_name', 'last_name', 'email', 'telephone', 'department_id', 'option_id', 'reg_no', 'sex', 'year_level'])
         ->length('first_name', 2, 50)
         ->length('last_name', 2, 50)
         ->email('email')
         ->phone('telephone')
         ->length('reg_no', 5, 20)
         // Validate select options are not left as default/empty
-        ->custom('department', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid department')
-        ->custom('option', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid program')
+        ->custom('department_id', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid department')
+        ->custom('option_id', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid program')
         ->custom('year_level', fn($v) => in_array($v, ['1','2','3']), 'Please select a valid year level')
         ->custom('sex', fn($v) => in_array($v, ['Male','Female']), 'Please select a valid gender');
 
@@ -75,8 +75,8 @@ try {
         'last_name' => DataSanitizer::string($_POST['last_name']),
         'email' => DataSanitizer::email($_POST['email']),
         'telephone' => DataSanitizer::string($_POST['telephone']),
-        'department_id' => (int)$_POST['department'],
-        'option_id' => (int)$_POST['option'],
+        'department_id' => (int)$_POST['department_id'],
+        'option_id' => (int)$_POST['option_id'],
         'reg_no' => DataSanitizer::string($_POST['reg_no']),
         'student_id' => DataSanitizer::string($_POST['studentIdNumber'] ?? ''),
         'province' => DataSanitizer::string($_POST['province'] ?? ''),

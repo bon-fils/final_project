@@ -799,6 +799,13 @@ $rwanda_cells = [
         ['id' => 3010204, 'name' => 'Murambi'],
         ['id' => 3010205, 'name' => 'Rubavu']
     ],
+    30103 => [ // Gishyita sector
+        ['id' => 3010301, 'name' => 'Gishyita Cell 1'],
+        ['id' => 3010302, 'name' => 'Gishyita Cell 2'],
+        ['id' => 3010303, 'name' => 'Gishyita Cell 3'],
+        ['id' => 3010304, 'name' => 'Gishyita Cell 4'],
+        ['id' => 3010305, 'name' => 'Gishyita Cell 5']
+    ],
 
     // Western Province - Ngororero District
     30201 => [ // Bwira sector
@@ -814,6 +821,13 @@ $rwanda_cells = [
         ['id' => 3020203, 'name' => 'Kabeza'],
         ['id' => 3020204, 'name' => 'Kibuye'],
         ['id' => 3020205, 'name' => 'Nyamirambo']
+    ],
+    30203 => [ // Hindiro sector
+        ['id' => 3020301, 'name' => 'Hindiro Cell 1'],
+        ['id' => 3020302, 'name' => 'Hindiro Cell 2'],
+        ['id' => 3020303, 'name' => 'Hindiro Cell 3'],
+        ['id' => 3020304, 'name' => 'Hindiro Cell 4'],
+        ['id' => 3020305, 'name' => 'Hindiro Cell 5']
     ],
 
     // Western Province - Nyabihu District
@@ -1088,6 +1102,14 @@ $rwanda_cells = [
         ['id' => 5050205, 'name' => 'Masoro']
     ]
 ];
+
+/**
+ * Get all provinces
+ */
+function getRwandaProvinces() {
+    global $rwanda_provinces;
+    return array_values($rwanda_provinces);
+}
 
 /**
  * Get districts for a province

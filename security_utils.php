@@ -68,8 +68,8 @@ class InputValidator {
             // Remove common formatting characters
             $phone = preg_replace('/[\s\-\(\)\.]/', '', $value);
 
-            if (!preg_match('/^\+?[\d]{10,15}$/', $phone)) {
-                $this->errors[$field][] = "Please enter a valid phone number";
+            if (!preg_match('/^\d{10}$/', $phone)) {
+                $this->errors[$field][] = "Please enter a valid 10-digit phone number (e.g., 0781234567)";
             }
         }
 

@@ -30,6 +30,17 @@ try {
     error_log("Error fetching provinces: " . $e->getMessage());
     $provinces = [];
 }
+
+// Fallback to hardcoded provinces if DB query failed or returned empty
+if (empty($provinces)) {
+    $provinces = [
+        ['id' => 1, 'name' => 'Kigali City'],
+        ['id' => 2, 'name' => 'Southern Province'],
+        ['id' => 3, 'name' => 'Western Province'],
+        ['id' => 4, 'name' => 'Eastern Province'],
+        ['id' => 5, 'name' => 'Northern Province']
+    ];
+}
 ?>
 
 <!DOCTYPE html>
@@ -278,13 +289,6 @@ try {
                         <select class="form-control location-field" id="province" name="province" aria-label="Province" aria-describedby="provinceHelp">
                             <option value="">🌍 Select Province</option>
                             <?php
-                            $provinces = [
-                                ['id' => 1, 'name' => 'Kigali City'],
-                                ['id' => 2, 'name' => 'Southern Province'],
-                                ['id' => 3, 'name' => 'Western Province'],
-                                ['id' => 4, 'name' => 'Eastern Province'],
-                                ['id' => 5, 'name' => 'Northern Province']
-                            ];
                             foreach ($provinces as $province) {
                                 echo "<option value=\"{$province['id']}\">{$province['name']}</option>";
                             }
@@ -997,6 +1001,16 @@ class StudentRegistration {
         $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
         $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
 
+        // Phone number input filtering (digits only)
+        $('input[name="telephone"]').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+
+        // Student ID number input filtering (digits only)
+        $('#studentIdNumber').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+
         // Fingerprint functionality
         $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
         $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
@@ -1171,7 +1185,7 @@ class StudentRegistration {
     }
 
     isValidPhone(phone) {
-        const phoneRegex = /^(\+?250|0)?[0-9]{9}$/;
+        const phoneRegex = /^0\d{9}$/;
         return phoneRegex.test(phone);
     }
 
@@ -1191,7 +1205,9 @@ class StudentRegistration {
         e.target.value = value;
 
         if (value.length >= 5) {
-            $(e.target).addClass('is-valid');
+            $(e.target).addClass('is-valid').removeClass('is-invalid');
+        } else if (value.length > 0) {
+            $(e.target).addClass('is-invalid').removeClass('is-valid');
         } else {
             $(e.target).removeClass('is-valid is-invalid');
         }
@@ -1254,7 +1270,7 @@ class StudentRegistration {
                 break;
             case 'telephone':
                 if (!this.isValidPhone(value)) {
-                    this.showFieldError(field, 'Please enter a valid phone number');
+                    this.showFieldError(field, 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
                 } else {
                     this.clearFieldError(field);
                 }
@@ -1708,12 +1724,21 @@ class StudentRegistration {
 
     populateCells(cells) {
         const $cell = $('#cell');
+
+        if (cells.length === 0) {
+            $cell.html('<option value="">No cells available for this sector</option>')
+                  .addClass('enabled');
+            $('#cellSearchContainer').hide();
+            this.originalCellOptions = [];
+            return;
+        }
+
         const options = cells.map(cell =>
             `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
         ).join('');
 
         $cell.html('<option value="">📍 Select Cell</option>' + options)
-             .addClass('enabled');
+              .addClass('enabled');
 
         // Store original options for search functionality
         this.originalCellOptions = cells;
@@ -1982,6 +2007,14 @@ class StudentRegistration {
         }
     });
 
+    // Registration number length validation
+    const regNo = $('#reg_no').val();
+    if (regNo && regNo.length < 5) {
+        this.showFieldError($('#reg_no')[0], 'Registration number must be at least 5 characters');
+        isValid = false;
+        errors.push('Registration number too short');
+    }
+
     // Department-program dependency validation
     const departmentId = $('#department').val();
     const optionId = $('#option').val();
@@ -2019,7 +2052,7 @@ class StudentRegistration {
     // Phone number validation
     const phone = $('#telephone').val();
     if (phone && !this.isValidPhone(phone)) {
-        this.showFieldError($('#telephone')[0], 'Please enter a valid phone number (e.g., 0781234567)');
+        this.showFieldError($('#telephone')[0], 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
         isValid = false;
         errors.push('Invalid phone number format');
     }
@@ -2032,7 +2065,7 @@ class StudentRegistration {
         errors.push('Invalid parent phone number format');
     }
 
-    // Registration number validation
+    // Registration number length validation
     const regNo = $('#reg_no').val();
     if (regNo && regNo.length < 5) {
         this.showFieldError($('#reg_no')[0], 'Registration number must be at least 5 characters');

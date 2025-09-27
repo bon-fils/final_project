@@ -32,6 +32,9 @@ try {
     $action = $_POST['action'] ?? '';
 
     switch ($action) {
+        case 'get_provinces':
+            handleGetProvinces();
+            break;
         case 'get_districts':
             handleGetDistricts();
             break;
@@ -50,6 +53,16 @@ try {
     echo json_encode([
         'success' => false,
         'message' => $e->getMessage()
+    ]);
+}
+
+function handleGetProvinces() {
+    // Get provinces from comprehensive Rwanda locations data
+    $provinces = getRwandaProvinces();
+
+    echo json_encode([
+        'success' => true,
+        'provinces' => $provinces
     ]);
 }
 
