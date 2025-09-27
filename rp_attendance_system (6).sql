@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 25, 2025 at 05:10 PM
+-- Generation Time: Sep 26, 2025 at 05:09 PM
 -- Server version: 10.4.18-MariaDB
 -- PHP Version: 8.0.3
 
@@ -20,6 +20,20 @@ SET time_zone = "+00:00";
 --
 -- Database: `rp_attendance_system`
 --
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `activity_logs`
+--
+
+CREATE TABLE `activity_logs` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `action` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `details` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -61,8 +75,11 @@ CREATE TABLE `courses` (
   `id` int(11) NOT NULL,
   `course_code` varchar(20) NOT NULL,
   `name` varchar(100) NOT NULL,
+  `course_name` varchar(100) DEFAULT NULL,
   `description` text DEFAULT NULL,
   `department_id` int(11) NOT NULL,
+  `option_id` int(11) DEFAULT NULL,
+  `lecturer_id` int(11) DEFAULT NULL,
   `credits` int(11) NOT NULL DEFAULT 0,
   `duration_hours` int(11) NOT NULL DEFAULT 0,
   `status` enum('active','inactive') NOT NULL DEFAULT 'active'
@@ -72,17 +89,23 @@ CREATE TABLE `courses` (
 -- Dumping data for table `courses`
 --
 
-INSERT INTO `courses` (`id`, `course_code`, `name`, `description`, `department_id`, `credits`, `duration_hours`, `status`) VALUES
-(11, 'ICT101', 'Introduction to Information Technology', 'Basic concepts of IT and computer systems', 7, 3, 45, 'active'),
-(12, 'ICT201', 'Programming Fundamentals', 'Introduction to programming concepts and logic', 7, 4, 60, 'active'),
-(13, 'ICT301', 'Database Management Systems', 'Database design and SQL programming', 7, 3, 45, 'active'),
-(14, 'ICT401', 'Web Development', 'HTML, CSS, JavaScript and web technologies', 7, 4, 60, 'active'),
-(15, 'ICT501', 'Network Administration', 'Computer networks and system administration', 7, 3, 45, 'active'),
-(16, 'CIV101', 'Introduction to Civil Engineering', 'Basic principles of civil engineering', 3, 3, 45, 'active'),
-(17, 'CIV201', 'Structural Analysis', 'Analysis of structures and materials', 3, 4, 60, 'active'),
-(18, 'CIV301', 'Construction Materials', 'Properties and testing of construction materials', 3, 3, 45, 'active'),
-(19, 'CIV401', 'Project Management', 'Construction project planning and management', 3, 3, 45, 'active'),
-(20, 'CIV501', 'Environmental Engineering', 'Environmental impact assessment and management', 3, 4, 60, 'active');
+INSERT INTO `courses` (`id`, `course_code`, `name`, `course_name`, `description`, `department_id`, `option_id`, `lecturer_id`, `credits`, `duration_hours`, `status`) VALUES
+(11, 'ICT101', 'Introduction to Information Technology', 'Introduction to Information Technology', 'Basic concepts of IT and computer systems', 7, NULL, NULL, 3, 45, 'active'),
+(12, 'ICT201', 'Programming Fundamentals', 'Programming Fundamentals', 'Introduction to programming concepts and logic', 7, NULL, NULL, 4, 60, 'active'),
+(13, 'ICT301', 'Database Management Systems', 'Database Management Systems', 'Database design and SQL programming', 7, NULL, NULL, 3, 45, 'active'),
+(14, 'ICT401', 'Web Development', 'Web Development', 'HTML, CSS, JavaScript and web technologies', 7, NULL, NULL, 4, 60, 'active'),
+(15, 'ICT501', 'Network Administration', 'Network Administration', 'Computer networks and system administration', 7, NULL, NULL, 3, 45, 'active'),
+(16, 'CIV101', 'Introduction to Civil Engineering', 'Introduction to Civil Engineering', 'Basic principles of civil engineering', 3, NULL, 2, 3, 45, 'active'),
+(17, 'CIV201', 'Structural Analysis', 'Structural Analysis', 'Analysis of structures and materials', 3, NULL, 2, 4, 60, 'active'),
+(18, 'CIV301', 'Construction Materials', 'Construction Materials', 'Properties and testing of construction materials', 3, NULL, 2, 3, 45, 'active'),
+(19, 'CIV401', 'Project Management', 'Project Management', 'Construction project planning and management', 3, NULL, 2, 3, 45, 'active'),
+(20, 'CIV501', 'Environmental Engineering', 'Environmental Engineering', 'Environmental impact assessment and management', 3, NULL, 2, 4, 60, 'active'),
+(21, 'CA101', 'Introduction to Creative Arts', 'Introduction to Creative Arts', NULL, 4, NULL, NULL, 3, 45, 'active'),
+(22, 'CA102', 'Digital Art Fundamentals', 'Digital Art Fundamentals', NULL, 4, NULL, NULL, 3, 45, 'active'),
+(23, 'CA201', 'Advanced Drawing Techniques', 'Advanced Drawing Techniques', NULL, 4, NULL, NULL, 4, 60, 'active'),
+(24, 'CA202', 'Color Theory and Application', 'Color Theory and Application', NULL, 4, NULL, NULL, 3, 45, 'active'),
+(25, 'CA301', 'Portfolio Development', 'Portfolio Development', NULL, 4, NULL, NULL, 4, 60, 'active'),
+(26, 'CA302', 'Art History and Criticism', 'Art History and Criticism', NULL, 4, NULL, NULL, 3, 45, 'active');
 
 -- --------------------------------------------------------
 
@@ -164,7 +187,8 @@ CREATE TABLE `lecturers` (
 --
 
 INSERT INTO `lecturers` (`id`, `first_name`, `last_name`, `gender`, `dob`, `id_number`, `email`, `phone`, `department_id`, `education_level`, `role`, `photo`, `password`, `created_at`, `updated_at`) VALUES
-(1, 'Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'phd', 'lecturer', NULL, '12345', '2025-09-23 09:43:25', '2025-09-23 09:43:25');
+(1, 'Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'phd', 'lecturer', NULL, '12345', '2025-09-23 09:43:25', '2025-09-23 09:43:25'),
+(2, 'scott', 'adkin', 'Male', '2008-06-25', '12345678900987654', 'scott@gmail.com', '078789234', 3, 'PhD', 'lecturer', 'lec_68d59ce7579f3.jpg', '$2y$10$/AznslTTSRmADosusuUnX.VdoAeZdVRV4uq649pxAnUCWdCP8tqVa', '2025-09-25 19:49:59', '2025-09-25 20:46:24');
 
 -- --------------------------------------------------------
 
@@ -201,7 +225,13 @@ INSERT INTO `options` (`id`, `name`, `department_id`) VALUES
 (16, 'Biomedical Equipment Technology', 6),
 (17, 'Information Technology', 7),
 (18, 'Mining Technology', 8),
-(19, 'Automobile Technology', 9);
+(19, 'Automobile Technology', 9),
+(20, 'Visual Arts', 4),
+(21, 'Digital Media', 4),
+(22, 'Performing Arts', 4),
+(23, 'Visual Arts', 4),
+(24, 'Digital Media', 4),
+(25, 'Performing Arts', 4);
 
 -- --------------------------------------------------------
 
@@ -216,25 +246,36 @@ CREATE TABLE `students` (
   `year_level` varchar(20) NOT NULL,
   `first_name` varchar(100) NOT NULL,
   `last_name` varchar(100) NOT NULL,
+  `dob` date DEFAULT NULL,
+  `cell` varchar(100) DEFAULT NULL,
+  `sector` varchar(100) DEFAULT NULL,
+  `district` varchar(100) DEFAULT NULL,
+  `province` varchar(100) DEFAULT NULL,
+  `parent_first_name` varchar(100) DEFAULT NULL,
+  `parent_last_name` varchar(100) DEFAULT NULL,
+  `parent_contact` varchar(20) DEFAULT NULL,
   `email` varchar(100) NOT NULL,
   `reg_no` varchar(50) NOT NULL,
+  `student_id_number` varchar(25) DEFAULT NULL,
   `department_id` int(11) NOT NULL,
   `telephone` varchar(20) NOT NULL,
   `sex` enum('Male','Female') NOT NULL,
   `photo` varchar(255) DEFAULT NULL,
   `fingerprint` varchar(255) DEFAULT NULL,
-  `password` varchar(255) DEFAULT NULL
+  `password` varchar(255) DEFAULT NULL,
+  `fingerprint_path` varchar(255) DEFAULT NULL,
+  `fingerprint_quality` int(11) DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 --
 -- Dumping data for table `students`
 --
 
-INSERT INTO `students` (`id`, `user_id`, `option_id`, `year_level`, `first_name`, `last_name`, `email`, `reg_no`, `department_id`, `telephone`, `sex`, `photo`, `fingerprint`, `password`) VALUES
-(4, 6, 1, '1', 'fils', 'iradukunda', 'iradukundabonfils2000@gmail.com', '22rp08765', 1, '0790759103', 'Male', 'uploads/WIN_20250821_11_20_24_Pro.jpg', '', '$2y$10$zfFOORZyxq7M7KKG2vwqMesNH5W9aatZ84S7urKS5YVQxohdEBcuq'),
-(5, 8, 2, '1', 'fils', 'iradukunda', 'sepacifiq@gmail.com', '22rp09877', 1, '0790759103', 'Male', 'uploads/68a6f5584d0f1.png', '', '$2y$10$llJls0sZ6wg2Um6kJIHoQ.dakn9lZeLeO9dfcoAcfXhHoZT.nRqXK'),
-(6, 11, 2, '1', 'Muganga', 'Antu', 'antu@gmail.com', '22rp08765', 1, '0790759103', 'Male', 'uploads/1755772530.png', '', '$2y$10$zMfAJOUUsuqRSg0JQv372uQTrZqfFdpyqvicFAZeeL/yMX4US1d7O'),
-(7, 12, 1, '1', 'ange', 'muni', 'ange@gmail.com', '22rp04657', 1, '0789262098', 'Female', 'uploads/68a6f7cc789cd.png', '', '$2y$10$jnXcv8du6.NWMFyfWD1H9uNW.s./VO619KlHBxiLC5hFpHo1HNRS6');
+INSERT INTO `students` (`id`, `user_id`, `option_id`, `year_level`, `first_name`, `last_name`, `dob`, `cell`, `sector`, `district`, `province`, `parent_first_name`, `parent_last_name`, `parent_contact`, `email`, `reg_no`, `student_id_number`, `department_id`, `telephone`, `sex`, `photo`, `fingerprint`, `password`, `fingerprint_path`, `fingerprint_quality`) VALUES
+(4, 6, 1, '1', 'fils', 'iradukunda', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'iradukundabonfils2000@gmail.com', '22rp08765', NULL, 1, '0790759103', 'Male', 'uploads/WIN_20250821_11_20_24_Pro.jpg', '', '$2y$10$zfFOORZyxq7M7KKG2vwqMesNH5W9aatZ84S7urKS5YVQxohdEBcuq', NULL, 0),
+(5, 8, 2, '1', 'fils', 'iradukunda', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'sepacifiq@gmail.com', '22rp09877', NULL, 1, '0790759103', 'Male', 'uploads/68a6f5584d0f1.png', '', '$2y$10$llJls0sZ6wg2Um6kJIHoQ.dakn9lZeLeO9dfcoAcfXhHoZT.nRqXK', NULL, 0),
+(6, 11, 2, '1', 'Muganga', 'Antu', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'antu@gmail.com', '22rp08765', NULL, 1, '0790759103', 'Male', 'uploads/1755772530.png', '', '$2y$10$zMfAJOUUsuqRSg0JQv372uQTrZqfFdpyqvicFAZeeL/yMX4US1d7O', NULL, 0),
+(7, 12, 1, '1', 'ange', 'muni', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'ange@gmail.com', '22rp04657', NULL, 1, '0789262098', 'Female', 'uploads/68a6f7cc789cd.png', '', '$2y$10$jnXcv8du6.NWMFyfWD1H9uNW.s./VO619KlHBxiLC5hFpHo1HNRS6', NULL, 0);
 
 -- --------------------------------------------------------
 
@@ -261,28 +302,41 @@ CREATE TABLE `users` (
   `email` varchar(100) NOT NULL,
   `password` varchar(255) NOT NULL,
   `role` enum('admin','lecturer','student','hod','tech') NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `status` enum('active','inactive','suspended') NOT NULL DEFAULT 'active',
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `last_login` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 --
 -- Dumping data for table `users`
 --
 
-INSERT INTO `users` (`id`, `username`, `email`, `password`, `role`, `created_at`) VALUES
-(1, 'adminuser', 'admin@example.com', '$2y$10$tAwjhVXmZuHtHyZ1HDITreA/D8kW7SkYI0LwwGbo24zX14uonrAFa', 'admin', '2025-08-20 11:17:29'),
-(2, 'lecturer1', 'lecturer1@example.com', '$2y$10$w8h1M1bKwjKv2J0DyNPRgOWdCiyMeiPnmrFcLO.JKPE3Z39cd6Ri6', 'lecturer', '2025-08-20 11:17:29'),
-(3, 'student1', 'student1@example.com', '$2y$10$z1KXFa6ufPAiTZjSg/fjOem8S5xGIiPGEt2f1liTRmSH/cL2fDPYW', 'student', '2025-08-20 11:17:29'),
-(4, 'hod1', 'hod1@example.com', '$2y$10$J3wOKED.9jMZkdlnfjIGtO3b0Pa8x4QaK31qWhUnttE5l4167r542', 'hod', '2025-08-20 11:17:29'),
-(5, 'tech1', 'tech1@example.com', 'Password123!', 'tech', '2025-08-20 11:17:29'),
-(6, 'fils_iradukunda', 'iradukundabonfils2000@gmail.com', '$2y$10$zfFOORZyxq7M7KKG2vwqMesNH5W9aatZ84S7urKS5YVQxohdEBcuq', 'student', '2025-08-21 10:14:52'),
-(8, 'fils iradukunda', 'sepacifiq@gmail.com', '$2y$10$llJls0sZ6wg2Um6kJIHoQ.dakn9lZeLeO9dfcoAcfXhHoZT.nRqXK', 'student', '2025-08-21 10:30:48'),
-(11, '22rp08765', 'antu@gmail.com', '$2y$10$zMfAJOUUsuqRSg0JQv372uQTrZqfFdpyqvicFAZeeL/yMX4US1d7O', 'student', '2025-08-21 10:35:30'),
-(12, 'ange muni', 'ange@gmail.com', '$2y$10$jnXcv8du6.NWMFyfWD1H9uNW.s./VO619KlHBxiLC5hFpHo1HNRS6', 'student', '2025-08-21 10:41:16'),
-(14, 'frank', 'frankm@gmail.com', '$2y$10$rCVEViMkddVSDdLIuQ.D4eUojG9exSJiSCoia8RfoxVt3wJDZJW76', 'lecturer', '2025-09-23 10:23:19');
+INSERT INTO `users` (`id`, `username`, `email`, `password`, `role`, `created_at`, `status`, `updated_at`, `last_login`) VALUES
+(1, 'adminuser', 'admin@example.com', '$2y$10$tAwjhVXmZuHtHyZ1HDITreA/D8kW7SkYI0LwwGbo24zX14uonrAFa', 'admin', '2025-08-20 11:17:29', 'active', '2025-09-25 15:38:03', NULL),
+(2, 'lecturer1', 'lecturer1@example.com', '$2y$10$w8h1M1bKwjKv2J0DyNPRgOWdCiyMeiPnmrFcLO.JKPE3Z39cd6Ri6', 'lecturer', '2025-08-20 11:17:29', 'active', '2025-09-25 15:38:03', NULL),
+(3, 'student1', 'student1@example.com', '$2y$10$z1KXFa6ufPAiTZjSg/fjOem8S5xGIiPGEt2f1liTRmSH/cL2fDPYW', 'student', '2025-08-20 11:17:29', 'active', '2025-09-25 15:38:03', NULL),
+(4, 'hod1', 'hod1@example.com', '$2y$10$J3wOKED.9jMZkdlnfjIGtO3b0Pa8x4QaK31qWhUnttE5l4167r542', 'hod', '2025-08-20 11:17:29', 'active', '2025-09-25 15:38:03', NULL),
+(5, 'tech1', 'tech1@example.com', 'Password123!', 'tech', '2025-08-20 11:17:29', 'active', '2025-09-25 15:38:03', NULL),
+(6, 'fils_iradukunda', 'iradukundabonfils2000@gmail.com', '$2y$10$zfFOORZyxq7M7KKG2vwqMesNH5W9aatZ84S7urKS5YVQxohdEBcuq', 'student', '2025-08-21 10:14:52', 'active', '2025-09-25 15:38:03', NULL),
+(8, 'fils iradukunda', 'sepacifiq@gmail.com', '$2y$10$llJls0sZ6wg2Um6kJIHoQ.dakn9lZeLeO9dfcoAcfXhHoZT.nRqXK', 'student', '2025-08-21 10:30:48', 'active', '2025-09-25 15:38:03', NULL),
+(11, '22rp08765', 'antu@gmail.com', '$2y$10$zMfAJOUUsuqRSg0JQv372uQTrZqfFdpyqvicFAZeeL/yMX4US1d7O', 'student', '2025-08-21 10:35:30', 'active', '2025-09-25 15:38:03', NULL),
+(12, 'ange muni', 'ange@gmail.com', '$2y$10$jnXcv8du6.NWMFyfWD1H9uNW.s./VO619KlHBxiLC5hFpHo1HNRS6', 'student', '2025-08-21 10:41:16', 'active', '2025-09-25 15:38:03', NULL),
+(14, 'frank', 'frankm@gmail.com', '$2y$10$rCVEViMkddVSDdLIuQ.D4eUojG9exSJiSCoia8RfoxVt3wJDZJW76', 'lecturer', '2025-09-23 10:23:19', 'active', '2025-09-25 15:38:03', NULL),
+(17, 'scott.adkin', 'scott@gmail.com', '$2y$10$/AznslTTSRmADosusuUnX.VdoAeZdVRV4uq649pxAnUCWdCP8tqVa', 'lecturer', '2025-09-25 19:49:59', 'active', '2025-09-25 19:49:59', NULL);
 
 --
 -- Indexes for dumped tables
 --
+
+--
+-- Indexes for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_user_id` (`user_id`),
+  ADD KEY `idx_action` (`action`),
+  ADD KEY `idx_created_at` (`created_at`);
 
 --
 -- Indexes for table `attendance_records`
@@ -306,7 +360,9 @@ ALTER TABLE `attendance_sessions`
 --
 ALTER TABLE `courses`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `department_id` (`department_id`);
+  ADD KEY `department_id` (`department_id`),
+  ADD KEY `idx_lecturer_id` (`lecturer_id`),
+  ADD KEY `fk_courses_option` (`option_id`);
 
 --
 -- Indexes for table `departments`
@@ -367,6 +423,12 @@ ALTER TABLE `users`
 --
 
 --
+-- AUTO_INCREMENT for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `attendance_records`
 --
 ALTER TABLE `attendance_records`
@@ -382,7 +444,7 @@ ALTER TABLE `attendance_sessions`
 -- AUTO_INCREMENT for table `courses`
 --
 ALTER TABLE `courses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
 
 --
 -- AUTO_INCREMENT for table `departments`
@@ -400,19 +462,19 @@ ALTER TABLE `leave_requests`
 -- AUTO_INCREMENT for table `lecturers`
 --
 ALTER TABLE `lecturers`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `options`
 --
 ALTER TABLE `options`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=26;
 
 --
 -- AUTO_INCREMENT for table `students`
 --
 ALTER TABLE `students`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `tech_logs`
@@ -424,11 +486,17 @@ ALTER TABLE `tech_logs`
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
 
 --
 -- Constraints for dumped tables
 --
+
+--
+-- Constraints for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  ADD CONSTRAINT `activity_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `attendance_records`
@@ -449,7 +517,8 @@ ALTER TABLE `attendance_sessions`
 -- Constraints for table `courses`
 --
 ALTER TABLE `courses`
-  ADD CONSTRAINT `courses_ibfk_1` FOREIGN KEY (`department_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE;
+  ADD CONSTRAINT `courses_ibfk_1` FOREIGN KEY (`department_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_courses_option` FOREIGN KEY (`option_id`) REFERENCES `options` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 --
 -- Constraints for table `departments`

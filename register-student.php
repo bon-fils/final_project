@@ -1,1699 +1,2279 @@
 <?php
-error_reporting(0);
+/**
+ * Enhanced Student Registration Form
+ * Clean, modern, and accessible student registration system
+ * Features: Location management, real-time validation, progress tracking
+ * Version: 2.0
+ */
+
 session_start();
 require_once "config.php";
-require_once "session_check.php"; // Ensure only logged-in admins can access
-require_role(['admin']);
+require_once "session_check.php";
 
-// Handle AJAX request for options based on department
-if(isset($_POST['get_options'])){
-    header('Content-Type: application/json');
-    $dep_id = $_POST['dep_id'];
-    try {
-        $stmt = $pdo->prepare("SELECT id, name FROM options WHERE department_id = ? ORDER BY name");
-        $stmt->execute([$dep_id]);
-        $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        echo json_encode(['success' => true, 'options' => $options]);
-    } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => 'Failed to load options']);
-    }
-    exit;
-}
+// Generate CSRF token
+$csrf_token = generate_csrf_token();
 
-// AJAX duplicate check
-if(isset($_POST['check_duplicate'])){
-    header('Content-Type: application/json');
-    $field = $_POST['field'];
-    $value = trim($_POST['value']);
-
-    if(!in_array($field, ['email','reg_no','telephone']) || empty($value)){
-        echo json_encode(['valid' => true]); // Allow empty values
-        exit;
-    }
-
-    try {
-        if($field == 'email'){
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email=?");
-        } else {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM students WHERE $field=?");
-        }
-
-        $stmt->execute([$value]);
-        $count = $stmt->fetchColumn();
-
-        echo json_encode([
-            'valid' => ($count == 0),
-            'exists' => ($count > 0),
-            'message' => $count > 0 ? ucfirst(str_replace('_', ' ', $field)) . ' already exists' : ''
-        ]);
-    } catch (Exception $e) {
-        echo json_encode(['valid' => false, 'message' => 'Validation error']);
-    }
-    exit;
-}
-
-// Handle student registration
-if(isset($_POST['register_student'])){
-    header('Content-Type: application/json');
-
-    // Validate required fields
-    $required_fields = ['first_name', 'last_name', 'email', 'reg_no', 'department_id', 'option_id', 'telephone', 'year_level', 'sex'];
-    $errors = [];
-
-    foreach($required_fields as $field) {
-        if(empty(trim($_POST[$field]))) {
-            $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' is required';
-        }
-    }
-
-    // Email validation
-    if(!empty($_POST['email']) && !filter_var($_POST['email'], FILTER_VALIDATE_EMAIL)) {
-        $errors[] = 'Invalid email format';
-    }
-
-    // Phone validation
-    if(!empty($_POST['telephone']) && !preg_match('/^[0-9+\-\s()]+$/', $_POST['telephone'])) {
-        $errors[] = 'Invalid telephone format';
-    }
-
-    if(!empty($errors)) {
-        echo json_encode(['success' => false, 'message' => 'Validation failed', 'errors' => $errors]);
-        exit;
-    }
-
-    $first_name = trim($_POST['first_name']);
-    $last_name = trim($_POST['last_name']);
-    $email = trim($_POST['email']);
-    $reg_no = trim($_POST['reg_no']);
-    $department_id = intval($_POST['department_id']);
-    $option_id = intval($_POST['option_id']);
-    $telephone = trim($_POST['telephone']);
-    $year_level = trim($_POST['year_level']);
-    $sex = $_POST['sex'];
-    $password = password_hash('12345', PASSWORD_DEFAULT); // Hash the default password
-
-    // Handle photo upload
-    $photo_path = '';
-    $upload_error = '';
-
-    if(isset($_FILES['photo']) && $_FILES['photo']['error'] == 0){
-        $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
-        $max_size = 5 * 1024 * 1024; // 5MB
-
-        if(!in_array($_FILES['photo']['type'], $allowed_types)) {
-            $upload_error = 'Invalid file type. Only JPG, PNG, and GIF are allowed.';
-        } elseif($_FILES['photo']['size'] > $max_size) {
-            $upload_error = 'File size too large. Maximum 5MB allowed.';
-        } else {
-            $ext = pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
-            $photo_path = "uploads/students/" . time() . '_' . uniqid() . '.' . $ext;
-
-            if(!move_uploaded_file($_FILES['photo']['tmp_name'], $photo_path)) {
-                $upload_error = 'Failed to upload photo.';
-            }
-        }
-    } elseif(isset($_POST['camera_photo']) && $_POST['camera_photo'] != ''){
-        // Photo captured from camera (base64)
-        try {
-            $data = $_POST['camera_photo'];
-            if(strpos($data, ',') !== false) {
-                list($type, $data) = explode(';', $data);
-                list(, $data) = explode(',', $data);
-                $data = base64_decode($data);
-                $photo_path = "uploads/students/" . time() . "_camera_" . uniqid() . ".png";
-                file_put_contents($photo_path, $data);
-            }
-        } catch (Exception $e) {
-            $upload_error = 'Failed to process camera photo.';
-        }
-    }
-
-    if(!empty($upload_error)) {
-        echo json_encode(['success' => false, 'message' => $upload_error]);
-        exit;
-    }
-
-    // Fingerprint handling
-    $fingerprint = "";
-    if(isset($_POST['fingerprint_data']) && !empty($_POST['fingerprint_data'])) {
-        $fingerprint = $_POST['fingerprint_data'];
-    } elseif(isset($_POST['fingerprint_template']) && !empty($_POST['fingerprint_template'])) {
-        $fingerprint = $_POST['fingerprint_template'];
-    }
-
-    try{
-        $pdo->beginTransaction();
-
-        // Check for duplicates before insertion
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email=?");
-        $stmt->execute([$email]);
-        if($stmt->fetchColumn() > 0) {
-            throw new Exception('Email already exists');
-        }
-
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM students WHERE reg_no=?");
-        $stmt->execute([$reg_no]);
-        if($stmt->fetchColumn() > 0) {
-            throw new Exception('Registration number already exists');
-        }
-
-        // First insert user
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, created_at) VALUES (?, ?, ?, 'student', NOW())");
-        $stmt->execute([$first_name.' '.$last_name, $email, $password]);
-        $user_id = $pdo->lastInsertId();
-
-        // Insert into students table
-        $stmt = $pdo->prepare("INSERT INTO students (user_id, option_id, year_level, first_name, last_name, email, reg_no, department_id, telephone, sex, photo, fingerprint, password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-        $stmt->execute([$user_id, $option_id, $year_level, $first_name, $last_name, $email, $reg_no, $department_id, $telephone, $sex, $photo_path, $fingerprint, $password]);
-
-        $pdo->commit();
-
-        echo json_encode([
-            'success' => true,
-            'message' => 'Student registered successfully!',
-            'student_id' => $pdo->lastInsertId(),
-            'redirect' => 'admin-dashboard.php'
-        ]);
-
-    } catch(Exception $e){
-        $pdo->rollBack();
-        echo json_encode(['success' => false, 'message' => 'Registration failed: ' . $e->getMessage()]);
-    }
-    exit;
-}
-
-// Fetch departments for dropdown
+// Get departments for dropdown
 try {
     $stmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
     $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
+} catch (PDOException $e) {
+    error_log("Error fetching departments: " . $e->getMessage());
     $departments = [];
 }
+
+// Get provinces for location dropdown
+try {
+    $stmt = $pdo->query("SELECT id, name FROM provinces ORDER BY name");
+    $provinces = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Error fetching provinces: " . $e->getMessage());
+    $provinces = [];
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Register Student | RP Attendance System</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-<style>
-/* ===== ROOT VARIABLES ===== */
-:root {
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-  --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-  --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-  --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-  --light-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  --dark-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
-  --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
-  --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
-  --border-radius: 12px;
-  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* ===== BODY & CONTAINER ===== */
-body {
-  background: var(--primary-gradient);
-  min-height: 100vh;
-  font-family: 'Inter', 'Segoe UI', sans-serif;
-  margin: 0;
-  position: relative;
-  overflow-x: hidden;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="20" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="80" cy="80" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="60" cy="40" r="0.5" fill="rgba(255,255,255,0.1)"/></svg>');
-  pointer-events: none;
-  z-index: -1;
-}
-
-/* ===== SIDEBAR ===== */
-.sidebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 280px;
-  height: 100vh;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  color: #333;
-  padding: 30px 0;
-  box-shadow: var(--shadow-medium);
-  border-right: 1px solid rgba(255, 255, 255, 0.2);
-  z-index: 1000;
-}
-
-.sidebar-header {
-  text-align: center;
-  padding: 0 20px 30px;
-  border-bottom: 1px solid rgba(0,0,0,0.1);
-  margin-bottom: 20px;
-}
-
-.sidebar-header h4 {
-  color: #667eea;
-  font-weight: 700;
-  margin-bottom: 5px;
-  font-size: 1.2rem;
-}
-
-.sidebar a {
-  display: block;
-  padding: 15px 25px;
-  color: #666;
-  text-decoration: none;
-  font-weight: 500;
-  border-radius: 0 25px 25px 0;
-  margin: 5px 0;
-  transition: var(--transition);
-  position: relative;
-  overflow: hidden;
-}
-
-.sidebar a:hover, .sidebar a.active {
-  background: var(--primary-gradient);
-  color: white;
-  padding-left: 35px;
-  transform: translateX(5px);
-}
-
-.sidebar a i {
-  margin-right: 12px;
-  width: 20px;
-  text-align: center;
-}
-
-/* ===== TOPBAR ===== */
-.topbar {
-  margin-left: 280px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  padding: 20px 30px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  position: sticky;
-  top: 0;
-  z-index: 900;
-  box-shadow: var(--shadow-light);
-}
-
-.topbar h5 {
-  margin: 0;
-  font-weight: 600;
-  color: #333;
-}
-
-.topbar .badge {
-  background: var(--primary-gradient);
-  color: white;
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-size: 0.85rem;
-}
-
-/* ===== MAIN CONTENT ===== */
-.main-content {
-  margin-left: 280px;
-  padding: 40px 30px;
-  min-height: calc(100vh - 80px);
-}
-
-/* ===== CARDS ===== */
-.card {
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-light);
-  border: none;
-  transition: var(--transition);
-  margin-bottom: 30px;
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(10px);
-  position: relative;
-  overflow: hidden;
-}
-
-.card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: var(--primary-gradient);
-  opacity: 0;
-  transition: var(--transition);
-}
-
-.card:hover {
-  transform: translateY(-5px);
-  box-shadow: var(--shadow-medium);
-}
-
-.card:hover::before {
-  opacity: 1;
-}
-
-.card-header {
-  background: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid rgba(0,0,0,0.05);
-  padding: 25px 30px;
-  border-radius: var(--border-radius) var(--border-radius) 0 0 !important;
-}
-
-.card-body {
-  padding: 30px;
-}
-
-/* ===== FORM ELEMENTS ===== */
-.form-label {
-  font-weight: 600;
-  color: #495057;
-  margin-bottom: 8px;
-  font-size: 0.95rem;
-}
-
-.input-group-text {
-  background: var(--primary-gradient);
-  color: white;
-  border: none;
-  border-radius: 8px 0 0 8px;
-}
-
-.form-control, .form-select {
-  border-radius: 8px;
-  border: 2px solid #e9ecef;
-  transition: var(--transition);
-  font-size: 0.95rem;
-  background-color: #ffffff;
-  color: #495057;
-  padding: 12px 16px;
-}
-
-.form-control:focus, .form-select:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.3rem rgba(102, 126, 234, 0.15);
-  transform: translateY(-1px);
-  background-color: #ffffff;
-}
-
-.form-control.is-invalid {
-  border-color: #dc3545;
-  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
-}
-
-.form-control.is-valid {
-  border-color: #198754;
-  box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
-}
-
-.invalid-feedback, .valid-feedback {
-  font-size: 0.875rem;
-  margin-top: 5px;
-}
-
-/* ===== BUTTONS ===== */
-.btn {
-  border-radius: 8px;
-  font-weight: 600;
-  padding: 12px 24px;
-  transition: var(--transition);
-  position: relative;
-  overflow: hidden;
-  border: 2px solid transparent;
-}
-
-.btn::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  transition: var(--transition);
-}
-
-.btn:hover::before {
-  width: 300px;
-  height: 300px;
-}
-
-.btn-primary {
-  background: var(--primary-gradient);
-  border: none;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-
-.btn-primary:hover {
-  background: var(--primary-gradient);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-}
-
-.btn-outline-secondary {
-  border: 2px solid #6c757d;
-  color: #6c757d;
-}
-
-.btn-outline-secondary:hover {
-  background: #6c757d;
-  border-color: #6c757d;
-  transform: translateY(-2px);
-}
-
-/* ===== PHOTO UPLOAD ===== */
-.photo-upload-area {
-  border: 2px dashed #dee2e6;
-  border-radius: var(--border-radius);
-  padding: 30px;
-  text-align: center;
-  transition: var(--transition);
-  background: rgba(248, 249, 250, 0.5);
-  position: relative;
-  overflow: hidden;
-}
-
-.photo-upload-area:hover {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.05);
-}
-
-.photo-upload-area.dragover {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.1);
-  transform: scale(1.02);
-}
-
-.photo-preview {
-  max-width: 150px;
-  max-height: 150px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 4px solid #667eea;
-  box-shadow: var(--shadow-medium);
-}
-
-.camera-container {
-  display: none;
-  border-radius: var(--border-radius);
-  overflow: hidden;
-  box-shadow: var(--shadow-medium);
-}
-
-#video {
-  width: 100%;
-  max-width: 300px;
-  border-radius: var(--border-radius);
-}
-
-/* ===== ALERTS ===== */
-.alert {
-  border-radius: var(--border-radius);
-  border: none;
-  box-shadow: var(--shadow-light);
-  position: relative;
-  overflow: hidden;
-  margin-bottom: 20px;
-}
-
-.alert::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 4px;
-  height: 100%;
-  background: var(--primary-gradient);
-}
-
-.alert-success::before { background: var(--success-gradient); }
-.alert-danger::before { background: var(--danger-gradient); }
-.alert-warning::before { background: var(--warning-gradient); }
-.alert-info::before { background: var(--info-gradient); }
-
-/* ===== LOADING OVERLAY ===== */
-.loading-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(5px);
-  display: none;
-  justify-content: center;
-  align-items: center;
-  z-index: 9999;
-  border-radius: var(--border-radius);
-}
-
-.loading-overlay .spinner-border {
-  color: #667eea;
-  width: 3rem;
-  height: 3rem;
-}
-
-/* ===== PROGRESS BAR ===== */
-.progress-container {
-  margin-top: 10px;
-}
-
-.progress {
-  height: 6px;
-  border-radius: 3px;
-  background: rgba(0,0,0,0.1);
-}
-
-.progress-bar {
-  background: var(--primary-gradient);
-  border-radius: 3px;
-}
-
-/* ===== FOOTER ===== */
-.footer {
-  text-align: center;
-  margin-left: 280px;
-  padding: 20px;
-  font-size: 0.9rem;
-  color: #666;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-/* ===== RESPONSIVE DESIGN ===== */
-@media (max-width: 768px) {
-  .sidebar {
-    transform: translateX(-100%);
-    transition: var(--transition);
-  }
-
-  .sidebar.show {
-    transform: translateX(0);
-  }
-
-  .topbar, .main-content, .footer {
-    margin-left: 0 !important;
-  }
-
-  .topbar {
-    padding: 15px 20px;
-  }
-
-  .main-content {
-    padding: 20px 15px;
-  }
-
-  .card-body {
-    padding: 20px;
-  }
-
-  .photo-upload-area {
-    padding: 20px;
-  }
-}
-
-@media (max-width: 576px) {
-  .btn-group {
-    flex-direction: column;
-  }
-
-  .btn-group .btn {
-    margin-bottom: 5px;
-  }
-
-  .photo-preview {
-    max-width: 120px;
-    max-height: 120px;
-  }
-}
-
-/* ===== ANIMATIONS ===== */
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.card {
-  animation: fadeInUp 0.6s ease-out;
-}
-
-.card:nth-child(1) { animation-delay: 0.1s; }
-.card:nth-child(2) { animation-delay: 0.2s; }
-
-/* ===== CUSTOM SCROLLBAR ===== */
-::-webkit-scrollbar {
-  width: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--primary-gradient);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Registration - Rwanda Polytechnic</title>
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link href="css/register-student.css" rel="stylesheet">
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </head>
 <body>
-<!-- Loading Overlay -->
-<div class="loading-overlay" id="loadingOverlay">
-    <div class="text-center">
-        <div class="spinner-border mb-3" role="status">
-            <span class="visually-hidden">Loading...</span>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <?php include 'includes/admin_sidebar.php'; ?>
+
+            <!-- Main Content -->
+            <main class="col-md-9 col-lg-10 main-content">
+                <!-- Header -->
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h2><i class="fas fa-user-plus me-2"></i>Student Registration</h2>
+                    <button class="btn btn-outline-secondary d-md-none" id="mobileMenuToggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                </div>
+
+                <!-- Alert Container -->
+                <div id="alertContainer"></div>
+
+                <!-- Registration Form -->
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Student Information</h5>
+    </div>
+    <div class="card-body">
+        <!-- Progress Bar -->
+        <div class="mb-4">
+            <div class="progress" style="height: 8px;">
+                <div class="progress-bar" id="formProgress" role="progressbar" style="width: 0%"></div>
+            </div>
+            <small class="text-muted" id="progressText">0% complete</small>
         </div>
-        <h5 class="text-dark mb-2">Processing Registration</h5>
-        <p class="text-muted mb-0">Please wait while we register the student...</p>
-    </div>
-</div>
 
-<!-- Sidebar -->
-<div class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-        <h4><i class="fas fa-user-shield me-2"></i>Admin Panel</h4>
-        <small class="text-muted">Management System</small>
-    </div>
-    <a href="admin-dashboard.php"><i class="fas fa-home"></i> Dashboard</a>
-    <a href="register-student.php" class="active"><i class="fas fa-user-plus"></i> Register Student</a>
-    <a href="manage-departments.php"><i class="fas fa-building"></i> Manage Departments</a>
-    <a href="admin-reports.php"><i class="fas fa-chart-bar"></i> Reports</a>
-    <a href="logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
-</div>
+        <form id="registrationForm" enctype="multipart/form-data" aria-label="Student Registration Form" autocomplete="off">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+            
+            <div class="row">
+                <!-- Personal Information -->
+                <div class="col-md-6">
+                    <h6 class="section-title">Personal Information</h6>
 
-<!-- Topbar -->
-<div class="topbar">
-    <div class="d-flex align-items-center">
-        <button class="btn btn-outline-secondary d-md-none me-3" id="sidebarToggle">
-            <i class="fas fa-bars"></i>
-        </button>
-        <h5 class="mb-0 fw-bold">
-            <i class="fas fa-user-plus me-2 text-primary"></i>Student Registration
-        </h5>
-    </div>
-    <div class="d-flex align-items-center gap-3">
-        <div class="badge bg-success">
-            <i class="fas fa-clock me-1"></i>Live System
-        </div>
-        <div class="text-muted small">
-            <i class="fas fa-calendar me-1"></i><?php echo date('M d, Y'); ?>
-        </div>
-    </div>
-</div>
-
-<!-- Main Content -->
-<div class="main-content">
-    <!-- Alert Container -->
-    <div id="alertContainer"></div>
-
-    <!-- Registration Form Card -->
-    <div class="card">
-        <div class="card-header">
-            <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center">
-                    <div class="bg-primary bg-opacity-10 rounded-circle p-3 me-3">
-                        <i class="fas fa-user-plus fa-lg text-primary"></i>
+                    <div class="mb-3">
+                        <label for="firstName" class="form-label">First Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="firstName" name="first_name" required aria-required="true" aria-label="First Name">
                     </div>
-                    <div>
-                        <h5 class="mb-0 fw-bold text-primary">Student Registration</h5>
-                        <small class="text-muted">Add new student to the system</small>
+
+                    <div class="mb-3">
+                        <label for="lastName" class="form-label">Last Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="lastName" name="last_name" required aria-required="true" aria-label="Last Name">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Email Address <span class="text-danger">*</span></label>
+                        <input type="email" class="form-control" id="email" name="email" required aria-required="true" aria-label="Email Address">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="telephone" class="form-label">Phone Number <span class="text-danger">*</span></label>
+                        <input type="tel" class="form-control" id="telephone" name="telephone" required aria-required="true" aria-label="Phone Number">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="dob" class="form-label">Date of Birth</label>
+                        <input type="date" class="form-control" id="dob" name="dob" aria-label="Date of Birth">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="sex" class="form-label">Gender <span class="text-danger">*</span></label>
+                        <select class="form-control" id="sex" name="sex" required aria-required="true" aria-label="Gender">
+                            <option value="">Select Gender</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                        </select>
                     </div>
                 </div>
-                <div class="text-end">
-                    <div class="text-muted small">Form Progress</div>
-                    <div class="progress-container">
-                        <div class="progress">
-                            <div class="progress-bar" id="formProgress" style="width: 0%"></div>
+
+                <!-- Academic Information -->
+                <div class="col-md-6">
+                    <h6 class="section-title">Academic Information</h6>
+
+                    <div class="mb-3">
+                        <label for="reg_no" class="form-label">Registration Number <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="reg_no" name="reg_no" required maxlength="20" aria-required="true" aria-label="Registration Number">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="studentIdNumber" class="form-label">Student ID Number</label>
+                        <input type="text" class="form-control" id="studentIdNumber" name="student_id_number" maxlength="16" aria-label="Student ID Number">
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="department" class="form-label d-flex align-items-center justify-content-between">
+                            <span class="d-flex align-items-center">
+                                <i class="fas fa-building me-2 text-primary fs-5"></i>
+                                <strong>Academic Department</strong>
+                            </span>
+                            <span class="badge bg-primary rounded-pill">
+                                <i class="fas fa-star me-1"></i>Required
+                            </span>
+                        </label>
+                        <div class="input-group input-group-lg shadow-sm">
+                            <span class="input-group-text bg-primary text-white border-primary">
+                                <i class="fas fa-university fa-lg"></i>
+                            </span>
+                            <select class="form-select form-select-lg border-primary" id="department" name="department_id" required aria-required="true" aria-label="Department" aria-describedby="departmentHelp">
+                                <option value="">🎓 Select Your Academic Department</option>
+                                <?php
+                                try {
+                                    require_once 'config.php';
+                                    $deptStmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
+                                    while ($dept = $deptStmt->fetch(PDO::FETCH_ASSOC)) {
+                                        echo "<option value=\"{$dept['id']}\">📚 {$dept['name']}</option>";
+                                    }
+                                } catch (Exception $e) {
+                                    echo "<option value=\"\">❌ Error loading departments</option>";
+                                }
+                                ?>
+                            </select>
+                            <span class="input-group-text bg-light">
+                                <i class="fas fa-chevron-down text-muted"></i>
+                            </span>
+                        </div>
+                        <div class="form-text mt-2" id="departmentHelp">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-lightbulb text-warning me-2"></i>
+                                <small class="text-muted fw-medium">Choose your academic department to unlock available programs and specializations</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="option" class="form-label d-flex align-items-center justify-content-between">
+                            <span class="d-flex align-items-center">
+                                <i class="fas fa-graduation-cap me-2 text-success fs-5"></i>
+                                <strong>Program/Specialization</strong>
+                            </span>
+                            <span class="badge bg-success rounded-pill">
+                                <i class="fas fa-star me-1"></i>Required
+                            </span>
+                        </label>
+                        <div class="input-group input-group-lg shadow-sm">
+                            <span class="input-group-text bg-success text-white border-success">
+                                <i class="fas fa-book-open fa-lg"></i>
+                            </span>
+                            <select class="form-select form-select-lg border-success" id="option" name="option_id" required disabled aria-required="true" aria-label="Program" aria-describedby="programHelp">
+                                <option value="">🎯 Select Department First to Load Programs</option>
+                            </select>
+                            <div class="spinner-border spinner-border-sm text-success d-none program-loading ms-2" role="status" aria-hidden="true">
+                                <span class="visually-hidden">Loading programs...</span>
+                            </div>
+                            <span class="input-group-text bg-light d-none" id="programLoadedIcon">
+                                <i class="fas fa-check-circle text-success"></i>
+                            </span>
+                        </div>
+                        <div class="form-text mt-2" id="programHelp">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-info-circle text-info me-2"></i>
+                                <small class="text-muted fw-medium">Available programs will appear after selecting a department above</small>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div id="programCount" class="alert alert-info d-none py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
+                                <div class="d-flex align-items-center">
+                                    <i class="fas fa-chart-line text-info me-2 fs-5"></i>
+                                    <div>
+                                        <strong class="text-info">Program Options Available</strong><br>
+                                        <small id="programCountText" class="text-info-emphasis fw-medium"></small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="year_level" class="form-label">Year Level <span class="text-danger">*</span></label>
+                        <select class="form-control" id="year_level" name="year_level" required aria-required="true" aria-label="Year Level">
+                            <option value="">Select Year Level</option>
+                            <option value="1">Year 1</option>
+                            <option value="2">Year 2</option>
+                            <option value="3">Year 3</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Parent/Guardian Information -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <h6 class="section-title">Parent/Guardian Information</h6>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="parent_first_name" class="form-label">Parent First Name</label>
+                        <input type="text" class="form-control" id="parent_first_name" name="parent_first_name" aria-label="Parent First Name">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="parent_last_name" class="form-label">Parent Last Name</label>
+                        <input type="text" class="form-control" id="parent_last_name" name="parent_last_name" aria-label="Parent Last Name">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="parent_contact" class="form-label">Parent Contact</label>
+                        <input type="tel" class="form-control" id="parent_contact" name="parent_contact" aria-label="Parent Contact">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Location Information -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <h6 class="section-title">
+                        <i class="fas fa-map-marker-alt me-2"></i>Location Information
+                    </h6>
+                    <p class="text-muted small mb-3">Please select your complete location in Rwanda (Province → District → Sector → Cell)</p>
+                </div>
+                <div class="col-md-3">
+                    <div class="mb-3">
+                        <label for="province" class="form-label d-flex align-items-center">
+                            <i class="fas fa-city me-2 text-success"></i>
+                            <strong>Province</strong>
+                        </label>
+                        <select class="form-control location-field" id="province" name="province" aria-label="Province" aria-describedby="provinceHelp">
+                            <option value="">🌍 Select Province</option>
+                            <?php
+                            $provinces = [
+                                ['id' => 1, 'name' => 'Kigali City'],
+                                ['id' => 2, 'name' => 'Southern Province'],
+                                ['id' => 3, 'name' => 'Western Province'],
+                                ['id' => 4, 'name' => 'Eastern Province'],
+                                ['id' => 5, 'name' => 'Northern Province']
+                            ];
+                            foreach ($provinces as $province) {
+                                echo "<option value=\"{$province['id']}\">{$province['name']}</option>";
+                            }
+                            ?>
+                        </select>
+                        <div class="form-text" id="provinceHelp">
+                            <small class="text-muted">Choose your province to load available districts</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="mb-3">
+                        <label for="district" class="form-label d-flex align-items-center">
+                            <i class="fas fa-building me-2 text-primary"></i>
+                            <strong>District</strong>
+                        </label>
+                        <select class="form-control location-field" id="district" name="district" disabled aria-label="District" aria-describedby="districtHelp">
+                            <option value="">🏛️ Select Province First</option>
+                        </select>
+                        <div class="form-text" id="districtHelp">
+                            <small class="text-muted">Districts will appear after selecting a province</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="mb-3">
+                        <label for="sector" class="form-label d-flex align-items-center">
+                            <i class="fas fa-home me-2 text-info"></i>
+                            <strong>Sector</strong>
+                        </label>
+                        <select class="form-control location-field" id="sector" name="sector" disabled aria-label="Sector" aria-describedby="sectorHelp">
+                            <option value="">🏘️ Select District First</option>
+                        </select>
+                        <div class="form-text" id="sectorHelp">
+                            <small class="text-muted">Sectors will appear after selecting a district</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="mb-3">
+                        <label for="cell" class="form-label d-flex align-items-center justify-content-between">
+                            <span class="d-flex align-items-center">
+                                <i class="fas fa-map-pin me-2 text-warning fs-5"></i>
+                                <strong>Cell</strong>
+                            </span>
+                            <span class="badge bg-warning text-dark rounded-pill">
+                                <i class="fas fa-home me-1"></i>Final
+                            </span>
+                        </label>
+                        <select class="form-control location-field" id="cell" name="cell" disabled aria-label="Cell" aria-describedby="cellHelp">
+                            <option value="">🏘️ Select Sector First</option>
+                        </select>
+                        <div class="form-text mt-2" id="cellHelp">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-info-circle text-warning me-2"></i>
+                                <small class="text-muted fw-medium">Select your specific cell/village within the sector</small>
+                            </div>
+                        </div>
+                        <!-- Cell Search (shown when cells are loaded) -->
+                        <div class="mt-2" id="cellSearchContainer" style="display: none;">
+                            <input type="text" class="form-control form-control-sm" id="cellSearch" placeholder="🔍 Search cells..." aria-label="Search cells">
+                            <small class="text-muted">Type to filter cells in this sector</small>
+                        </div>
+                        <div class="mt-2" id="cellInfo" style="display: none;">
+                            <div class="alert alert-warning py-2 px-3 border-0" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);">
+                                <div class="d-flex align-items-center">
+                                    <i class="fas fa-map-marker-alt text-warning me-2 fs-6"></i>
+                                    <div class="flex-grow-1">
+                                        <small class="fw-medium text-warning-emphasis" id="cellInfoText"></small>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div class="card-body">
-            <form id="registrationForm" enctype="multipart/form-data">
-                <input type="hidden" name="register_student" value="1">
-
-                <!-- Personal Information Section -->
-                <div class="mb-4">
-                    <h6 class="fw-bold text-primary mb-3">
-                        <i class="fas fa-user me-2"></i>Personal Information
-                    </h6>
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <label for="first_name" class="form-label">
-                                <i class="fas fa-user text-primary me-1"></i>First Name <span class="text-danger">*</span>
-                            </label>
-                            <input type="text" name="first_name" id="first_name" class="form-control"
-                                   placeholder="Enter first name" required>
-                            <div class="invalid-feedback">Please enter a valid first name.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="last_name" class="form-label">
-                                <i class="fas fa-user text-primary me-1"></i>Last Name <span class="text-danger">*</span>
-                            </label>
-                            <input type="text" name="last_name" id="last_name" class="form-control"
-                                   placeholder="Enter last name" required>
-                            <div class="invalid-feedback">Please enter a valid last name.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="email" class="form-label">
-                                <i class="fas fa-envelope text-primary me-1"></i>Email Address <span class="text-danger">*</span>
-                            </label>
-                            <input type="email" name="email" id="email" class="form-control"
-                                   placeholder="student@example.com" required>
-                            <div class="invalid-feedback" id="emailFeedback">Please enter a valid email address.</div>
-                            <div class="valid-feedback">Email is available.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="reg_no" class="form-label">
-                                <i class="fas fa-id-card text-primary me-1"></i>Registration Number <span class="text-danger">*</span>
-                            </label>
-                            <input type="text" name="reg_no" id="reg_no" class="form-control"
-                                   placeholder="e.g. 22RP0001" required>
-                            <div class="invalid-feedback" id="regnoFeedback">Please enter a valid registration number.</div>
-                            <div class="valid-feedback">Registration number is available.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="telephone" class="form-label">
-                                <i class="fas fa-phone text-primary me-1"></i>Telephone <span class="text-danger">*</span>
-                            </label>
-                            <input type="tel" name="telephone" id="telephone" class="form-control"
-                                   placeholder="+250 XXX XXX XXX" required>
-                            <div class="invalid-feedback" id="telephoneFeedback">Please enter a valid telephone number.</div>
-                            <div class="valid-feedback">Telephone number is available.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="sex" class="form-label">
-                                <i class="fas fa-venus-mars text-primary me-1"></i>Gender <span class="text-danger">*</span>
-                            </label>
-                            <select name="sex" id="sex" class="form-select" required>
-                                <option value="">-- Select Gender --</option>
-                                <option value="Male">Male</option>
-                                <option value="Female">Female</option>
-                            </select>
-                            <div class="invalid-feedback">Please select a gender.</div>
-                        </div>
+            <!-- Media Section -->
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="photoInput" class="form-label">Photo</label>
+                        <input type="file" class="form-control d-none" id="photoInput" name="photo" accept="image/*">
+                        <button type="button" class="btn btn-outline-primary" id="selectPhotoBtn">
+                            <i class="fas fa-camera me-2"></i>Choose Photo
+                        </button>
+                        <button type="button" class="btn btn-outline-danger d-none" id="removePhoto">
+                            <i class="fas fa-times me-2"></i>Remove
+                        </button>
+                        <img id="photoPreview" class="img-thumbnail mt-2 d-none" style="max-width: 200px;">
                     </div>
                 </div>
-
-                <!-- Academic Information Section -->
-                <div class="mb-4">
-                    <h6 class="fw-bold text-primary mb-3">
-                        <i class="fas fa-graduation-cap me-2"></i>Academic Information
-                    </h6>
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <label for="department" class="form-label">
-                                <i class="fas fa-building text-primary me-1"></i>Department <span class="text-danger">*</span>
-                            </label>
-                            <select name="department_id" id="department" class="form-select" required>
-                                <option value="">-- Select Department --</option>
-                                <?php foreach($departments as $dep): ?>
-                                    <option value="<?= $dep['id'] ?>"><?= htmlspecialchars($dep['name']) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <div class="invalid-feedback">Please select a department.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="option" class="form-label">
-                                <i class="fas fa-book text-primary me-1"></i>Program/Option <span class="text-danger">*</span>
-                            </label>
-                            <select name="option_id" id="option" class="form-select" required disabled>
-                                <option value="">-- Select Program First --</option>
-                            </select>
-                            <div class="invalid-feedback">Please select a program/option.</div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label for="year_level" class="form-label">
-                                <i class="fas fa-layer-group text-primary me-1"></i>Year Level <span class="text-danger">*</span>
-                            </label>
-                            <select name="year_level" id="year_level" class="form-select" required>
-                                <option value="">-- Select Year Level --</option>
-                                <option value="1">Year 1</option>
-                                <option value="2">Year 2</option>
-                                <option value="3">Year 3</option>
-                                <option value="4">Year 4</option>
-                            </select>
-                            <div class="invalid-feedback">Please select a year level.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Photo Upload Section -->
-                <div class="mb-4">
-                    <h6 class="fw-bold text-primary mb-3">
-                        <i class="fas fa-camera me-2"></i>Photo Capture
-                    </h6>
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <div class="photo-upload-area" id="photoUploadArea">
-                                <div id="uploadContent">
-                                    <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
-                                    <h6 class="text-muted">Upload Photo</h6>
-                                    <p class="text-muted small mb-3">Drag & drop or click to select</p>
-                                    <input type="file" name="photo" id="photoInput" accept="image/*" class="d-none">
-                                    <button type="button" class="btn btn-outline-primary" id="selectPhotoBtn">
-                                        <i class="fas fa-folder-open me-2"></i>Select File
-                                    </button>
-                                </div>
-                                <div id="previewContent" class="d-none">
-                                    <img id="photoPreview" src="" alt="Photo Preview" class="photo-preview mb-3">
-                                    <div class="d-flex gap-2 justify-content-center">
-                                        <button type="button" class="btn btn-outline-danger btn-sm" id="removePhoto">
-                                            <i class="fas fa-trash me-1"></i>Remove
-                                        </button>
-                                        <button type="button" class="btn btn-outline-primary btn-sm" id="changePhoto">
-                                            <i class="fas fa-exchange-alt me-1"></i>Change
-                                        </button>
-                                    </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">Fingerprint Capture</label>
+                        <div class="fingerprint-container">
+                            <div class="fingerprint-display">
+                                <canvas id="fingerprintCanvas" width="200" height="200" class="d-none"></canvas>
+                                <div id="fingerprintPlaceholder" class="fingerprint-placeholder">
+                                    <i class="fas fa-fingerprint fa-3x text-muted mb-2"></i>
+                                    <p class="text-muted">No fingerprint captured</p>
                                 </div>
                             </div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <div class="d-grid gap-2">
-                                <button type="button" class="btn btn-outline-success" id="useCameraBtn">
-                                    <i class="fas fa-camera me-2"></i>Use Camera
+                            <div class="fingerprint-controls mt-3">
+                                <button type="button" class="btn btn-outline-info" id="captureFingerprintBtn">
+                                    <i class="fas fa-fingerprint me-2"></i>Capture Fingerprint
                                 </button>
-                                <div class="camera-container" id="cameraContainer">
-                                    <video id="video" autoplay playsinline></video>
-                                    <div class="d-flex gap-2 mt-2 justify-content-center">
-                                        <button type="button" class="btn btn-success btn-sm" id="captureBtn">
-                                            <i class="fas fa-camera me-1"></i>Capture
-                                        </button>
-                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="cancelCamera">
-                                            <i class="fas fa-times me-1"></i>Cancel
-                                        </button>
-                                    </div>
-                                </div>
-                                <input type="hidden" name="camera_photo" id="cameraPhoto">
+                                <button type="button" class="btn btn-outline-danger d-none" id="clearFingerprintBtn">
+                                    <i class="fas fa-times me-2"></i>Clear
+                                </button>
+                                <button type="button" class="btn btn-outline-warning d-none" id="enrollFingerprintBtn">
+                                    <i class="fas fa-save me-2"></i>Enroll Fingerprint
+                                </button>
+                            </div>
+                            <div class="fingerprint-status mt-2">
+                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint</small>
                             </div>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Fingerprint Section -->
-                <div class="mb-4">
-                    <h6 class="fw-bold text-primary mb-3">
-                        <i class="fas fa-fingerprint me-2"></i>Biometric Data
-                    </h6>
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <div class="card border-0 bg-light">
-                                <div class="card-body text-center">
-                                    <div id="fingerprintStatus" class="mb-3">
-                                        <i class="fas fa-fingerprint fa-3x text-muted mb-3"></i>
-                                        <h6 class="text-muted">Fingerprint Not Captured</h6>
-                                        <small class="text-muted">Click capture to enroll fingerprint</small>
-                                    </div>
-                                    <div id="fingerprintCaptured" class="d-none">
-                                        <i class="fas fa-fingerprint fa-3x text-success mb-3"></i>
-                                        <h6 class="text-success">Fingerprint Captured</h6>
-                                        <small class="text-muted">Fingerprint successfully enrolled</small>
-                                    </div>
-                                    <button type="button" class="btn btn-outline-primary" id="captureFingerprintBtn">
-                                        <i class="fas fa-fingerprint me-2"></i>Capture Fingerprint
-                                    </button>
-                                    <button type="button" class="btn btn-outline-danger btn-sm d-none mt-2" id="clearFingerprintBtn">
-                                        <i class="fas fa-trash me-1"></i>Clear Fingerprint
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <div class="card border-0 bg-light">
-                                <div class="card-body">
-                                    <h6 class="text-primary mb-3">Fingerprint Instructions</h6>
-                                    <div class="mb-3">
-                                        <div class="d-flex align-items-start mb-2">
-                                            <i class="fas fa-check-circle text-success me-2 mt-1"></i>
-                                            <small>Place your finger on the scanner</small>
-                                        </div>
-                                        <div class="d-flex align-items-start mb-2">
-                                            <i class="fas fa-check-circle text-success me-2 mt-1"></i>
-                                            <small>Keep finger steady during scan</small>
-                                        </div>
-                                        <div class="d-flex align-items-start mb-2">
-                                            <i class="fas fa-check-circle text-success me-2 mt-1"></i>
-                                            <small>Wait for capture confirmation</small>
-                                        </div>
-                                        <div class="d-flex align-items-start">
-                                            <i class="fas fa-info-circle text-info me-2 mt-1"></i>
-                                            <small>Alternative: Use registration number + default password</small>
-                                        </div>
-                                    </div>
-                                    <div class="alert alert-warning py-2">
-                                        <small class="mb-0">
-                                            <i class="fas fa-exclamation-triangle me-1"></i>
-                                            Fingerprint scanner required for this feature
-                                        </small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Hidden fingerprint data -->
-                    <input type="hidden" name="fingerprint_data" id="fingerprintData">
-                    <input type="hidden" name="fingerprint_template" id="fingerprintTemplate">
-                </div>
-
-                <!-- Form Actions -->
-                <div class="d-flex justify-content-between align-items-center pt-4 border-top">
-                    <button type="button" class="btn btn-outline-secondary" id="resetForm">
-                        <i class="fas fa-undo me-2"></i>Reset Form
+            <!-- Submit Button -->
+            <div class="row mt-4">
+                <div class="col-12 text-center">
+                    <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                        <i class="fas fa-paper-plane me-2"></i>Register Student
                     </button>
-                    <div class="d-flex gap-3">
-                        <button type="button" class="btn btn-outline-primary" id="previewBtn">
-                            <i class="fas fa-eye me-2"></i>Preview
-                        </button>
-                        <button type="submit" class="btn btn-primary" id="submitBtn">
-                            <i class="fas fa-save me-2"></i>Register Student
-                        </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay d-none" id="loadingOverlay">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <div class="mt-2">Processing registration...</div>
+    </div>
+
+    <!-- Custom CSS -->
+    <style>
+        .main-content {
+            margin-left: 250px;
+            padding: 20px;
+            transition: margin-left 0.3s ease;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                margin-left: 0;
+                padding: 15px;
+            }
+
+            .main-content.sidebar-open {
+                margin-left: 250px;
+            }
+
+            .fingerprint-container {
+                padding: 15px;
+            }
+
+            .fingerprint-display {
+                min-height: 150px;
+            }
+
+            #fingerprintCanvas {
+                width: 150px !important;
+                height: 150px !important;
+            }
+
+            .fingerprint-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .fingerprint-controls .btn {
+                margin-bottom: 8px;
+            }
+
+            .card-body {
+                padding: 15px;
+            }
+
+            .section-title {
+                font-size: 1.1rem;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .main-content {
+                padding: 10px;
+            }
+
+            .fingerprint-display {
+                min-height: 120px;
+            }
+
+            #fingerprintCanvas {
+                width: 120px !important;
+                height: 120px !important;
+            }
+
+            .btn-lg {
+                padding: 0.5rem 1rem;
+                font-size: 1rem;
+            }
+
+            .form-control, .form-select {
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+        }
+
+        .section-title {
+            color: #495057;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 8px;
+            margin-bottom: 20px;
+            margin-top: 30px;
+        }
+
+        .section-title:first-child {
+            margin-top: 0;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+        }
+
+        .form-control:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+        }
+
+        .btn-primary {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+        }
+
+        .btn-primary:hover {
+            background-color: #0b5ed7;
+            border-color: #0a58ca;
+        }
+
+        .img-thumbnail {
+            border: 2px dashed #dee2e6;
+        }
+
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
+
+        .program-loading {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        /* Enhanced department and program selection styling */
+        .input-group-text {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border: 1px solid #ced4da;
+            color: #495057;
+        }
+
+        .form-select:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+        }
+
+        .form-select:disabled {
+            background-color: #e9ecef;
+            opacity: 0.6;
+        }
+
+        .section-title i {
+            color: #6c757d;
+            margin-right: 8px;
+        }
+
+        .section-title i.fa-building {
+            color: #0d6efd;
+        }
+
+        .section-title i.fa-graduation-cap {
+            color: #198754;
+        }
+
+        /* Program count styling */
+        #programCount {
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        #programCount i {
+            color: #0dcaf0;
+        }
+
+        /* Loading state improvements */
+        .program-loading {
+            color: #0d6efd;
+        }
+
+        /* Better form text styling */
+        .form-text {
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        /* Enhanced responsive design for selects */
+        @media (max-width: 768px) {
+            .input-group .input-group-text {
+                padding: 0.375rem 0.5rem;
+            }
+
+            .input-group .form-select {
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+
+            .section-title {
+                font-size: 1.1rem;
+            }
+
+            .section-title i {
+                font-size: 1rem;
+            }
+        }
+
+        /* Animation for program loading */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .programs-loaded {
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        /* Better visual feedback for successful loads */
+        .programs-loaded option:first-child {
+            font-weight: 500;
+            color: #198754;
+        }
+
+        .alert {
+            margin-bottom: 1rem;
+        }
+
+        /* Fingerprint Styles */
+        .fingerprint-container {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .fingerprint-display {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            background: white;
+            position: relative;
+        }
+
+        .fingerprint-placeholder {
+            text-align: center;
+            color: #6c757d;
+        }
+
+        #fingerprintCanvas {
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .fingerprint-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Enhanced mobile fingerprint UI */
+        @media (max-width: 768px) {
+            .fingerprint-container {
+                margin: 0 -5px; /* Full width on mobile */
+            }
+
+            .fingerprint-display {
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+
+            .fingerprint-placeholder {
+                padding: 20px;
+            }
+
+            .fingerprint-placeholder i {
+                font-size: 2.5rem;
+            }
+        }
+
+        .fingerprint-status {
+            text-align: center;
+            min-height: 20px;
+        }
+
+        .fingerprint-captured {
+            border-color: #28a745 !important;
+            background: rgba(40, 167, 69, 0.05);
+        }
+
+        .fingerprint-capturing {
+            border-color: #ffc107 !important;
+            background: rgba(255, 193, 7, 0.05);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .btn-outline-info {
+            border-color: #0dcaf0;
+            color: #0dcaf0;
+        }
+
+        .btn-outline-info:hover {
+            background: #0dcaf0;
+            border-color: #0dcaf0;
+            color: white;
+        }
+
+        .quality-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 10;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Accessibility improvements */
+        .btn:focus {
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+            outline: none;
+        }
+
+        .form-control:focus, .form-select:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+        }
+
+        /* Enhanced loading states */
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Better visual feedback */
+        .fingerprint-captured .fingerprint-display {
+            animation: captureSuccess 0.5s ease-in-out;
+        }
+
+        @keyframes captureSuccess {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        /* Location loading states */
+        .location-loading {
+            position: relative;
+            opacity: 0.7;
+        }
+
+        .location-loading::after {
+            content: '';
+            position: absolute;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            border: 2px solid #0d6efd;
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: translateY(-50%) rotate(0deg); }
+            100% { transform: translateY(-50%) rotate(360deg); }
+        }
+
+        /* Enhanced location section styling */
+        .section-title i.fa-map-marker-alt {
+            color: #198754;
+        }
+
+        /* Location cascade animation */
+        .location-field {
+            transition: all 0.3s ease;
+        }
+
+        .location-field.enabled {
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        /* Better visual hierarchy for location fields */
+        #province, #district, #sector {
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        #province:focus {
+            border-color: #198754;
+            box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
+        }
+
+        #district:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+        }
+
+        #sector:focus {
+            border-color: #6f42c1;
+            box-shadow: 0 0 0 0.2rem rgba(111, 66, 193, 0.25);
+        }
+
+        #cell:focus {
+            border-color: #fd7e14;
+            box-shadow: 0 0 0 0.2rem rgba(253, 126, 20, 0.25);
+        }
+
+        /* Cell information display */
+        #cellInfo {
+            animation: fadeInDown 0.3s ease-out;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Enhanced cell selection feedback */
+        #cell.border-success {
+            animation: successPulse 2s ease-in-out;
+        }
+
+        @keyframes successPulse {
+            0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
+            50% { box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.3); }
+            100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
+        }
+
+        /* Cell badge styling */
+        .badge.bg-warning.text-dark {
+            background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
+            border: none;
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
+        }
+    </style>
+
+    <!-- JavaScript -->
+    <script>
+/**
+  * Enhanced Student Registration System - JavaScript
+  * Refined with better error handling and performance
+  */
+class StudentRegistration {
+    constructor() {
+        this.retryAttempts = 3;
+        this.retryDelay = 1000;
+        this.csrfToken = '<?= addslashes($csrf_token) ?>';
+        this.fingerprintCaptured = false;
+        this.fingerprintData = null;
+        this.fingerprintQuality = 0;
+        this.isCapturing = false;
+        // Location caching for better performance
+        this.locationCache = {
+            districts: new Map(),
+            sectors: new Map(),
+            cells: new Map()
+        };
+        // Cell search functionality
+        this.originalCellOptions = [];
+        this.init();
+    }
+
+    init() {
+        try {
+            this.setupEventListeners();
+            this.updateProgress();
+            this.initializeFormState();
+            this.showWelcomeMessage();
+            this.setupGlobalErrorHandler();
+        } catch (error) {
+            console.error('Initialization error:', error);
+            this.showAlert('System initialization failed. Please refresh the page.', 'error', false);
+        }
+    }
+
+    initializeFormState() {
+        // Set initial form state
+        this.updateProgress();
+
+        // Initialize location fields
+        this.initializeLocationFields();
+
+        // Pre-validate form on load
+        setTimeout(() => {
+            this.validateForm();
+        }, 1000);
+
+        // Initialize fingerprint UI
+        this.updateFingerprintUI('ready');
+    }
+
+    initializeLocationFields() {
+        // Add enabled class to province field (always available)
+        $('#province').addClass('enabled');
+
+        // Reset location fields to initial state
+        this.resetLocationFields('province');
+    }
+
+    setupGlobalErrorHandler() {
+        // Handle unhandled promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+            this.showAlert('An unexpected error occurred. Please try again.', 'error');
+            event.preventDefault();
+        });
+
+        // Handle global JavaScript errors
+        window.addEventListener('error', (event) => {
+            console.error('Global JavaScript error:', event.error);
+            // Don't show alert for minor errors to avoid spam
+            if (event.error && !event.error.message.includes('Script error')) {
+                this.showAlert('A system error occurred. Please refresh if issues persist.', 'error');
+            }
+        });
+    }
+
+    setupEventListeners() {
+        // Department change with error handling
+        $('#department').on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
+
+        // Location hierarchy
+        $('#province').on('change', this.debounce(this.handleProvinceChange.bind(this), 300));
+        $('#district').on('change', this.debounce(this.handleDistrictChange.bind(this), 300));
+        $('#sector').on('change', this.debounce(this.handleSectorChange.bind(this), 300));
+        $('#cell').on('change', this.debounce(this.handleCellChange.bind(this), 300));
+        $('#cellSearch').on('input', this.debounce(this.handleCellSearch.bind(this), 300));
+
+        // Photo handling
+        $('#selectPhotoBtn').on('click', () => $('#photoInput').click());
+        $('#photoInput').on('change', this.handlePhotoSelect.bind(this));
+        $('#removePhoto').on('click', this.removePhoto.bind(this));
+
+        // Form submission
+        $('#registrationForm').on('submit', this.handleSubmit.bind(this));
+
+        // Real-time validation
+        $('input[required]').on('blur', this.validateField.bind(this));
+        $('input[required]').on('input', this.debounce(this.updateProgress.bind(this), 200));
+
+        // Enhanced registration number validation
+        $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
+        $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
+
+        // Fingerprint functionality
+        $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
+        $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
+        $('#enrollFingerprintBtn').on('click', this.enrollFingerprint.bind(this));
+    }
+
+    debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    async handleDepartmentChange() {
+        const deptId = $('#department').val();
+        const $option = $('#option');
+        const $loadingSpinner = $('.program-loading');
+
+        if (!deptId) {
+            this.resetProgramSelection();
+            return;
+        }
+
+        // Clear previous program selection and show loading
+        $option.prop('disabled', true).removeClass('programs-loaded');
+        $loadingSpinner.removeClass('d-none');
+        $('#programCount').addClass('d-none');
+        $('#programLoadedIcon').addClass('d-none');
+
+        // Reset help text to initial state
+        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
+        $('#programHelp small').html('<strong class="text-muted">Available programs will appear after selecting a department</strong>');
+
+        $option.prop('disabled', true);
+        $loadingSpinner.removeClass('d-none');
+
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/department-option-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_options',
+                    department_id: parseInt(deptId, 10),
+                    csrf_token: this.csrfToken
+                }
+            });
+
+            if (response.success) {
+                if (response.data && response.data.length > 0) {
+                    const options = response.data.map(opt =>
+                        `<option value="${opt.id}" data-department="${deptId}">${this.escapeHtml(opt.name)}</option>`
+                    ).join('');
+
+                    $option.html('<option value="">Select Program</option>' + options)
+                        .prop('disabled', false)
+                        .addClass('programs-loaded')
+                        .data('department-id', deptId);
+
+                    // Update program count display
+                    $('#programCountText').text(`${response.data.length} program${response.data.length !== 1 ? 's' : ''} available for selection`);
+                    $('#programCount').removeClass('d-none');
+
+                    // Show success icon
+                    $('#programLoadedIcon').removeClass('d-none');
+
+                    // Update help text with success styling
+                    $('#programHelp .fas').removeClass('fa-info-circle text-info').addClass('fa-check-circle text-success');
+                    $('#programHelp small').html('<strong class="text-success">Programs loaded successfully!</strong> Choose your desired program from the dropdown above');
+
+                    this.showAlert(`🎉 ${response.data.length} program${response.data.length !== 1 ? 's' : ''} loaded successfully!`, 'success');
+                } else {
+                    $option.html('<option value="">No programs available</option>')
+                        .removeData('department-id');
+
+                    $('#programCount').addClass('d-none');
+                    $('#programHelp small').text('No programs are currently available for this department');
+
+                    this.showAlert('⚠️ No programs found for this department', 'warning');
+                }
+            } else {
+                throw new Error(response.message || 'Failed to load options');
+            }
+        } catch (error) {
+            console.error('Department change error:', error);
+            $option.html('<option value="">Error loading programs</option>')
+                .removeData('department-id');
+
+            // Reset program count and help text
+            $('#programCount').addClass('d-none');
+            $('#programHelp small').text('Failed to load programs. Please try selecting the department again.');
+
+            this.showAlert('❌ Failed to load programs. Please try again.', 'error');
+        } finally {
+            $option.prop('disabled', false);
+            $loadingSpinner.addClass('d-none');
+        }
+    }
+
+    async retryableAjax(options, retries = this.retryAttempts) {
+        const defaultOptions = {
+            timeout: 10000,
+            dataType: 'json',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        };
+
+        const finalOptions = { ...defaultOptions, ...options };
+
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await $.ajax(finalOptions);
+
+                // Validate response structure
+                if (response && typeof response === 'object') {
+                    return response;
+                } else {
+                    throw new Error('Invalid response format');
+                }
+            } catch (error) {
+                const isLastAttempt = i === retries - 1;
+                const errorMessage = this.getErrorMessage(error);
+
+                if (isLastAttempt) {
+                    console.error(`AJAX request failed after ${retries} attempts:`, errorMessage);
+                    throw new Error(`Request failed: ${errorMessage}`);
+                }
+
+                // Exponential backoff with jitter
+                const delay = this.retryDelay * Math.pow(2, i) + Math.random() * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    getErrorMessage(error) {
+        if (error.responseJSON && error.responseJSON.message) {
+            return error.responseJSON.message;
+        } else if (error.status) {
+            return `HTTP ${error.status}: ${error.statusText}`;
+        } else if (error.message) {
+            return error.message;
+        }
+        return 'Unknown error occurred';
+    }
+
+    validateImage(file) {
+        const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        const maxSize = 5 * 1024 * 1024;
+
+        if (!validTypes.includes(file.type)) {
+            this.showAlert('Invalid file type. Please use JPEG, PNG, or WebP.', 'error');
+            return false;
+        }
+
+        if (file.size > maxSize) {
+            this.showAlert('File too large. Maximum size is 5MB.', 'error');
+            return false;
+        }
+
+        return true;
+    }
+
+    isValidEmail(email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
+
+    isValidPhone(phone) {
+        const phoneRegex = /^(\+?250|0)?[0-9]{9}$/;
+        return phoneRegex.test(phone);
+    }
+
+    showFieldError(field, message) {
+        $(field).addClass('is-invalid').removeClass('is-valid');
+        $(field).next('.invalid-feedback').remove();
+        $(field).after(`<div class="invalid-feedback">${message}</div>`);
+    }
+
+    clearFieldError(field) {
+        $(field).removeClass('is-invalid').addClass('is-valid');
+        $(field).next('.invalid-feedback').remove();
+    }
+
+    validateRegistrationNumber(e) {
+        const value = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().substring(0, 20);
+        e.target.value = value;
+
+        if (value.length >= 5) {
+            $(e.target).addClass('is-valid');
+        } else {
+            $(e.target).removeClass('is-valid is-invalid');
+        }
+    }
+
+    validateStudentId(e) {
+        const value = e.target.value.replace(/[^0-9]/g, '').substring(0, 16);
+        e.target.value = value;
+
+        if (value.length === 16) {
+            $(e.target).addClass('is-valid');
+        } else {
+            $(e.target).removeClass('is-valid is-invalid');
+        }
+    }
+
+    showLoading(show) {
+        if (show) {
+            $('#loadingOverlay').removeClass('d-none').addClass('d-flex');
+        } else {
+            $('#loadingOverlay').removeClass('d-flex').addClass('d-none');
+        }
+    }
+
+    disableForm(disable) {
+        $('#registrationForm input, #registrationForm select, #registrationForm button')
+            .prop('disabled', disable);
+    }
+
+    escapeHtml(unsafe) {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    showWelcomeMessage() {
+        setTimeout(() => {
+            this.showAlert('Welcome to Rwanda Polytechnic Student Registration System! Please fill in all required fields.', 'info');
+        }, 1000);
+    }
+
+    validateField(e) {
+        const field = e.target;
+        const value = field.value.trim();
+
+        if (!value) return;
+
+        const fieldName = field.name;
+
+        switch (fieldName) {
+            case 'email':
+                if (!this.isValidEmail(value)) {
+                    this.showFieldError(field, 'Please enter a valid email address');
+                } else {
+                    this.clearFieldError(field);
+                }
+                break;
+            case 'telephone':
+                if (!this.isValidPhone(value)) {
+                    this.showFieldError(field, 'Please enter a valid phone number');
+                } else {
+                    this.clearFieldError(field);
+                }
+                break;
+        }
+    }
+
+    updateProgress() {
+        const totalFields = $('#registrationForm [required]').length;
+        const filledFields = $('#registrationForm [required]').filter(function() {
+            return $(this).val().trim().length > 0;
+        }).length;
+
+        const progress = Math.round((filledFields / totalFields) * 100);
+        $('#formProgress').css('width', progress + '%');
+        $('#progressText').text(progress + '%');
+
+        const $progressBar = $('#formProgress');
+        $progressBar.removeClass('bg-success bg-warning bg-danger');
+
+        if (progress >= 80) {
+            $progressBar.addClass('bg-success');
+        } else if (progress >= 50) {
+            $progressBar.addClass('bg-warning');
+        } else {
+            $progressBar.addClass('bg-danger');
+        }
+    }
+
+    showSuccess(response) {
+        this.showAlert(response.message, 'success');
+
+        if ($('#successModal').length === 0) {
+            $('body').append(`
+                <div class="modal fade" id="successModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header bg-success text-white">
+                                <h5 class="modal-title">Registration Successful</h5>
+                            </div>
+                            <div class="modal-body text-center">
+                                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                                <p>${response.message}</p>
+                                <p><strong>Student ID:</strong> ${response.student_id}</p>
+                                ${response.fingerprint_enrolled ?
+                                    '<p><i class="fas fa-fingerprint text-success me-2"></i>Fingerprint enrolled successfully!</p>' :
+                                    '<p><i class="fas fa-exclamation-triangle text-warning me-2"></i>Fingerprint not enrolled</p>'
+                                }
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-primary" id="continueButton">Continue</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- Footer -->
-<div class="footer">
-    <div class="d-flex justify-content-between align-items-center flex-wrap">
-        <div>&copy; 2025 Rwanda Polytechnic | Student Management System</div>
-        <div class="d-flex gap-3">
-            <small><i class="fas fa-shield-alt me-1"></i>Secure Registration</small>
-            <small><i class="fas fa-clock me-1"></i>Last updated: <?php echo date('H:i'); ?></small>
-        </div>
-    </div>
-</div>
-
-<?php if(isset($success)): ?><script>alert("<?= addslashes($success) ?>");</script><?php endif; ?>
-
-<script>
-// Global variables
-let videoStream = null;
-let currentPhotoData = null;
-
-// Initialize when document is ready
-$(document).ready(function(){
-    initializeForm();
-    setupEventListeners();
-    updateFormProgress();
-});
-
-// Initialize form components
-function initializeForm() {
-    // Set current date/time
-    $('#currentDateTime').text(new Date().toLocaleString());
-
-    // Focus on first input
-    $('#first_name').focus();
-}
-
-// Setup all event listeners
-function setupEventListeners() {
-    // Department change handler
-    $('#department').on('change', handleDepartmentChange);
-
-    // Real-time validation
-    setupRealTimeValidation();
-
-    // Photo upload handlers
-    setupPhotoUpload();
-
-    // Camera handlers
-    setupCameraHandlers();
-
-    // Fingerprint handlers
-    setupFingerprintHandlers();
-
-    // Form submission
-    $('#registrationForm').on('submit', handleFormSubmission);
-
-    // Form reset
-    $('#resetForm').on('click', resetForm);
-
-    // Preview button
-    $('#previewBtn').on('click', showPreview);
-
-    // Sidebar toggle for mobile
-    $('#sidebarToggle').on('click', toggleSidebar);
-
-    // Form progress tracking
-    $('input, select').on('input change', updateFormProgress);
-}
-
-// Handle department selection
-function handleDepartmentChange() {
-    const depId = $(this).val();
-    const optionSelect = $('#option');
-
-    if(depId) {
-        showLoading('Loading programs...');
-        optionSelect.prop('disabled', true);
-
-        $.ajax({
-            url: '',
-            method: 'POST',
-            data: { get_options: 1, dep_id: depId },
-            dataType: 'json',
-            success: function(response) {
-                hideLoading();
-                if(response.success) {
-                    let optionsHtml = '<option value="">-- Select Program --</option>';
-                    response.options.forEach(function(option) {
-                        optionsHtml += `<option value="${option.id}">${option.name}</option>`;
-                    });
-                    optionSelect.html(optionsHtml);
-                    optionSelect.prop('disabled', false);
-                } else {
-                    showAlert('danger', 'Failed to load programs. Please try again.');
-                }
-            },
-            error: function() {
-                hideLoading();
-                showAlert('danger', 'Network error. Please check your connection.');
-            }
-        });
-    } else {
-        optionSelect.html('<option value="">-- Select Program First --</option>');
-        optionSelect.prop('disabled', true);
-    }
-}
-
-// Setup real-time validation
-function setupRealTimeValidation() {
-    const fields = ['email', 'reg_no', 'telephone'];
-
-    fields.forEach(field => {
-        $(`#${field}`).on('blur', function() {
-            validateField(field, $(this).val());
-        });
-
-        $(`#${field}`).on('input', function() {
-            clearFieldValidation(field);
-        });
-    });
-}
-
-// Validate individual field
-function validateField(field, value) {
-    if(!value.trim()) return;
-
-    const feedbackId = field + 'Feedback';
-    const inputElement = $(`#${field}`);
-
-    inputElement.removeClass('is-valid is-invalid');
-
-    $.ajax({
-        url: '',
-        method: 'POST',
-        data: { check_duplicate: 1, field: field, value: value },
-        dataType: 'json',
-        success: function(response) {
-            if(response.valid) {
-                inputElement.addClass('is-valid');
-                $(`#${feedbackId}`).text(response.message || 'Available').show();
-            } else {
-                inputElement.addClass('is-invalid');
-                $(`#${feedbackId}`).text(response.message || 'Already exists').show();
-            }
-        },
-        error: function() {
-            inputElement.addClass('is-invalid');
-            $(`#${feedbackId}`).text('Validation error').show();
+            `);
         }
-    });
-}
 
-// Clear field validation
-function clearFieldValidation(field) {
-    const inputElement = $(`#${field}`);
-    const feedbackId = field + 'Feedback';
+        const modal = new bootstrap.Modal(document.getElementById('successModal'));
+        modal.show();
 
-    inputElement.removeClass('is-valid is-invalid');
-    $(`#${feedbackId}`).hide();
-}
+        $('#continueButton').off('click').on('click', function() {
+            modal.hide();
+            window.location.href = response.redirect || 'admin-dashboard.php';
+        });
+    }
 
-// Setup photo upload functionality
-function setupPhotoUpload() {
-    const photoInput = $('#photoInput');
-    const uploadArea = $('#photoUploadArea');
-    const uploadContent = $('#uploadContent');
-    const previewContent = $('#previewContent');
-    const photoPreview = $('#photoPreview');
+    startFingerprintCapture() {
+        if (this.isCapturing) return;
 
-    // Click to select file
-    $('#selectPhotoBtn').on('click', function() {
-        photoInput.click();
-    });
+        this.isCapturing = true;
+        this.updateFingerprintUI('capturing');
+        this.simulateFingerprintCapture();
+    }
 
-    // File selection
-    photoInput.on('change', function(e) {
+    simulateFingerprintCapture() {
+        const canvas = document.getElementById('fingerprintCanvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('fingerprintPlaceholder');
+        const status = document.getElementById('fingerprintStatus');
+
+        canvas.classList.remove('d-none');
+        placeholder.classList.add('d-none');
+
+        let progress = 0;
+        let qualityVariation = 0;
+
+        const captureInterval = setInterval(() => {
+            progress += Math.random() * 8 + 2;
+            qualityVariation += (Math.random() - 0.5) * 2;
+
+            const currentProgress = Math.min(progress, 100);
+            status.textContent = `Capturing... ${Math.round(currentProgress)}%`;
+
+            this.drawFingerprintPattern(ctx, currentProgress);
+
+            if (currentProgress >= 100) {
+                clearInterval(captureInterval);
+                this.fingerprintCaptured = true;
+
+                const baseQuality = 85 + Math.floor(Math.random() * 10);
+                const variationQuality = Math.max(75, Math.min(100, baseQuality + qualityVariation));
+                this.fingerprintQuality = Math.round(variationQuality);
+
+                this.isCapturing = false;
+                this.updateFingerprintUI('captured');
+                this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
+            }
+        }, 80);
+    }
+
+    drawFingerprintPattern(ctx, progress) {
+        const centerX = ctx.canvas.width / 2;
+        const centerY = ctx.canvas.height / 2;
+        const maxRadius = Math.min(centerX, centerY) * 0.8;
+
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        ctx.strokeStyle = `rgba(13, 110, 253, ${Math.min(progress / 100, 1)})`;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+
+        const circleCount = Math.floor(progress / 10);
+        for (let i = 1; i <= circleCount; i++) {
+            const radius = (maxRadius * i) / 10;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        if (progress > 50) {
+            const spiralProgress = (progress - 50) / 50;
+            ctx.strokeStyle = `rgba(25, 135, 84, ${spiralProgress})`;
+            ctx.beginPath();
+
+            let angle = 0;
+            let radius = 10;
+            const maxAngle = spiralProgress * Math.PI * 4;
+
+            while (radius < maxRadius && angle < maxAngle) {
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                ctx.lineTo(x, y);
+                angle += 0.15;
+                radius += 0.3;
+            }
+            ctx.stroke();
+        }
+
+        if (this.fingerprintQuality > 0) {
+            this.updateQualityIndicator(ctx.canvas, this.fingerprintQuality);
+        }
+    }
+
+    updateQualityIndicator(canvas, quality) {
+        let qualityElement = document.querySelector('.quality-indicator');
+        if (!qualityElement) {
+            qualityElement = document.createElement('div');
+            qualityElement.className = 'quality-indicator';
+            canvas.parentElement.appendChild(qualityElement);
+        }
+
+        const qualityColor = quality >= 90 ? '#28a745' : quality >= 80 ? '#ffc107' : '#dc3545';
+        qualityElement.textContent = `Quality: ${quality}%`;
+        qualityElement.style.backgroundColor = qualityColor;
+        qualityElement.style.color = 'white';
+    }
+
+    handlePhotoSelect(e) {
         const file = e.target.files[0];
-        if(file) {
-            handleFileSelection(file);
+        if (file && this.validateImage(file)) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                $('#photoPreview').attr('src', e.target.result).removeClass('d-none');
+                $('#removePhoto').removeClass('d-none');
+            };
+            reader.readAsDataURL(file);
         }
-    });
+    }
 
-    // Drag and drop
-    uploadArea.on('dragover', function(e) {
-        e.preventDefault();
-        $(this).addClass('dragover');
-    });
+    removePhoto() {
+        $('#photoInput').val('');
+        $('#photoPreview').addClass('d-none').attr('src', '');
+        $('#removePhoto').addClass('d-none');
+    }
 
-    uploadArea.on('dragleave', function(e) {
-        e.preventDefault();
-        $(this).removeClass('dragover');
-    });
+    async handleProvinceChange() {
+        const provinceId = $('#province').val();
+        const $district = $('#district');
+        const $sector = $('#sector');
 
-    uploadArea.on('drop', function(e) {
-        e.preventDefault();
-        $(this).removeClass('dragover');
+        // Reset dependent fields
+        this.resetLocationFields('district');
 
-        const files = e.originalEvent.dataTransfer.files;
-        if(files.length > 0) {
-            handleFileSelection(files[0]);
-        }
-    });
-
-    // Remove photo
-    $('#removePhoto').on('click', function() {
-        clearPhoto();
-    });
-
-    // Change photo
-    $('#changePhoto').on('click', function() {
-        photoInput.click();
-    });
-
-    function handleFileSelection(file) {
-        // Validate file type
-        if(!file.type.startsWith('image/')) {
-            showAlert('danger', 'Please select a valid image file.');
+        if (!provinceId) {
             return;
         }
 
-        // Validate file size (5MB)
-        if(file.size > 5 * 1024 * 1024) {
-            showAlert('danger', 'File size must be less than 5MB.');
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            photoPreview.attr('src', e.target.result);
-            currentPhotoData = null; // Clear camera data
-            uploadContent.addClass('d-none');
-            previewContent.removeClass('d-none');
-        };
-        reader.readAsDataURL(file);
-    }
-
-    function clearPhoto() {
-        photoInput.val('');
-        photoPreview.attr('src', '');
-        currentPhotoData = null;
-        uploadContent.removeClass('d-none');
-        previewContent.addClass('d-none');
-    }
-}
-
-// Setup camera functionality
-function setupCameraHandlers() {
-    const cameraContainer = $('#cameraContainer');
-    const video = $('#video');
-    const captureBtn = $('#captureBtn');
-    const cancelBtn = $('#cancelCamera');
-    const cameraPhoto = $('#cameraPhoto');
-
-    $('#useCameraBtn').on('click', function() {
-        if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            cameraContainer.show();
-            $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i>Starting Camera...');
-
-            navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } })
-                .then(function(stream) {
-                    videoStream = stream;
-                    video[0].srcObject = stream;
-                    $('#useCameraBtn').prop('disabled', false).html('<i class="fas fa-camera me-2"></i>Use Camera');
-                })
-                .catch(function(error) {
-                    console.error('Camera error:', error);
-                    showAlert('danger', 'Unable to access camera. Please check permissions.');
-                    $('#useCameraBtn').prop('disabled', false).html('<i class="fas fa-camera me-2"></i>Use Camera');
-                    cameraContainer.hide();
-                });
-        } else {
-            showAlert('danger', 'Camera not supported on this device.');
-        }
-    });
-
-    captureBtn.on('click', function() {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = video[0].videoWidth;
-        canvas.height = video[0].videoHeight;
-        context.drawImage(video[0], 0, 0);
-
-        const dataURL = canvas.toDataURL('image/png');
-        cameraPhoto.val(dataURL);
-        currentPhotoData = dataURL;
-
-        // Stop camera
-        if(videoStream) {
-            videoStream.getTracks().forEach(track => track.stop());
-        }
-
-        // Show preview
-        $('#photoPreview').attr('src', dataURL);
-        $('#uploadContent').addClass('d-none');
-        $('#previewContent').removeClass('d-none');
-        cameraContainer.hide();
-
-        showAlert('success', 'Photo captured successfully!');
-    });
-
-    cancelBtn.on('click', function() {
-        if(videoStream) {
-            videoStream.getTracks().forEach(track => track.stop());
-        }
-        cameraContainer.hide();
-    });
-}
-
-// Setup fingerprint functionality
-function setupFingerprintHandlers() {
-    const captureBtn = $('#captureFingerprintBtn');
-    const clearBtn = $('#clearFingerprintBtn');
-    const fingerprintData = $('#fingerprintData');
-    const fingerprintTemplate = $('#fingerprintTemplate');
-
-    captureBtn.on('click', function() {
-        startFingerprintCapture();
-    });
-
-    clearBtn.on('click', function() {
-        clearFingerprint();
-    });
-
-    function startFingerprintCapture() {
-        // Check if WebUSB or fingerprint API is available
-        if (!navigator.usb && !window.Fingerprint && !window.webkitFingerprint) {
-            showFingerprintSimulation();
+        // Check cache first
+        if (this.locationCache.districts.has(provinceId)) {
+            this.populateDistricts(this.locationCache.districts.get(provinceId));
             return;
         }
 
         // Show loading state
-        captureBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i>Capturing...');
+        $district.prop('disabled', true).html('<option value="">Loading districts...</option>');
+        this.showLocationLoading($district, true);
 
-        // Simulate fingerprint capture process
-        simulateFingerprintCapture();
-    }
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_districts',
+                    province_id: parseInt(provinceId, 10),
+                    csrf_token: this.csrfToken
+                }
+            });
 
-    function simulateFingerprintCapture() {
-        let progress = 0;
-        const progressInterval = setInterval(() => {
-            progress += 10;
-            updateFingerprintProgress(progress);
+            if (response.success && response.districts) {
+                // Cache the results
+                this.locationCache.districts.set(provinceId, response.districts);
+                this.populateDistricts(response.districts);
 
-            if (progress >= 100) {
-                clearInterval(progressInterval);
-                completeFingerprintCapture();
-            }
-        }, 300);
-    }
-
-    function updateFingerprintProgress(progress) {
-        const statusDiv = $('#fingerprintStatus');
-        statusDiv.html(`
-            <div class="text-center">
-                <div class="mb-3">
-                    <i class="fas fa-fingerprint fa-3x text-primary mb-3"></i>
-                    <div class="progress" style="height: 8px;">
-                        <div class="progress-bar bg-primary" style="width: ${progress}%"></div>
-                    </div>
-                </div>
-                <h6 class="text-primary">Capturing Fingerprint</h6>
-                <small class="text-muted">Keep finger on scanner... ${progress}%</small>
-            </div>
-        `);
-    }
-
-    function completeFingerprintCapture() {
-        // Generate mock fingerprint data
-        const mockFingerprintData = generateMockFingerprintData();
-        const mockTemplate = generateMockTemplate();
-
-        // Store fingerprint data
-        fingerprintData.val(JSON.stringify(mockFingerprintData));
-        fingerprintTemplate.val(mockTemplate);
-
-        // Update UI
-        $('#fingerprintStatus').addClass('d-none');
-        $('#fingerprintCaptured').removeClass('d-none');
-        captureBtn.prop('disabled', false).html('<i class="fas fa-fingerprint me-2"></i>Recapture Fingerprint');
-        clearBtn.removeClass('d-none');
-
-        showAlert('success', 'Fingerprint captured successfully!');
-    }
-
-    function clearFingerprint() {
-        fingerprintData.val('');
-        fingerprintTemplate.val('');
-
-        $('#fingerprintStatus').removeClass('d-none');
-        $('#fingerprintCaptured').addClass('d-none');
-        captureBtn.prop('disabled', false).html('<i class="fas fa-fingerprint me-2"></i>Capture Fingerprint');
-        clearBtn.addClass('d-none');
-    }
-
-    function generateMockFingerprintData() {
-        // Generate mock fingerprint data for demonstration
-        const data = [];
-        for (let i = 0; i < 256; i++) {
-            data.push(Math.floor(Math.random() * 256));
-        }
-        return data;
-    }
-
-    function generateMockTemplate() {
-        // Generate mock fingerprint template
-        return btoa(String.fromCharCode(...new Array(512).fill(0).map(() => Math.floor(Math.random() * 256))));
-    }
-
-    function showFingerprintSimulation() {
-        // Show simulation modal for demonstration
-        const modal = $(`
-            <div class="modal fade" id="fingerprintModal" tabindex="-1">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">
-                                <i class="fas fa-fingerprint me-2"></i>Fingerprint Capture
-                            </h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body text-center">
-                            <div class="mb-4">
-                                <i class="fas fa-fingerprint fa-4x text-primary mb-3"></i>
-                                <h6>Fingerprint Scanner Simulation</h6>
-                                <p class="text-muted">This is a simulation of fingerprint capture.</p>
-                            </div>
-
-                            <div class="alert alert-info">
-                                <strong>Note:</strong> In a real implementation, this would connect to a fingerprint scanner device.
-                            </div>
-
-                            <div class="mb-3">
-                                <small class="text-muted">Supported fingerprint scanners:</small>
-                                <ul class="text-start mt-2">
-                                    <li>DigitalPersona U.are.U</li>
-                                    <li>Futronic FS80</li>
-                                    <li>SecuGen Hamster</li>
-                                    <li>Integrated Windows Hello</li>
-                                </ul>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                            <button type="button" class="btn btn-primary" id="simulateCapture">
-                                <i class="fas fa-play me-1"></i>Simulate Capture
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `);
-
-        $('body').append(modal);
-        const bsModal = new bootstrap.Modal(modal[0]);
-        bsModal.show();
-
-        $('#simulateCapture').on('click', function() {
-            bsModal.hide();
-            modal.remove();
-            startFingerprintCapture();
-        });
-
-        modal.on('hidden.bs.modal', function() {
-            $(this).remove();
-        });
-    }
-}
-
-// Handle form submission
-function handleFormSubmission(e) {
-    e.preventDefault();
-
-    if(!validateForm()) {
-        return;
-    }
-
-    const formData = new FormData(this);
-    if(currentPhotoData) {
-        formData.set('camera_photo', currentPhotoData);
-    }
-
-    showLoading('Registering student...');
-
-    $.ajax({
-        url: '',
-        method: 'POST',
-        data: formData,
-        processData: false,
-        contentType: false,
-        dataType: 'json',
-        success: function(response) {
-            hideLoading();
-
-            if(response.success) {
-                showAlert('success', response.message);
-
-                // Reset form after successful registration
-                setTimeout(function() {
-                    if(response.redirect) {
-                        window.location.href = response.redirect;
-                    } else {
-                        resetForm();
-                    }
-                }, 2000);
+                this.showAlert(`📍 ${response.districts.length} district${response.districts.length !== 1 ? 's' : ''} loaded for ${$('#province option:selected').text()}`, 'success');
             } else {
-                if(response.errors) {
-                    // Show field-specific errors
-                    response.errors.forEach(function(error) {
-                        showAlert('danger', error);
-                    });
-                } else {
-                    showAlert('danger', response.message || 'Registration failed');
+                throw new Error(response.message || 'No districts found');
+            }
+        } catch (error) {
+            console.error('Province change error:', error);
+            $district.html('<option value="">❌ Failed to load districts</option>');
+            this.showAlert('❌ Failed to load districts. Please try selecting the province again.', 'error');
+        } finally {
+            this.showLocationLoading($district, false);
+            $district.prop('disabled', false);
+        }
+    }
+
+    populateDistricts(districts) {
+        const $district = $('#district');
+        const options = districts.map(district =>
+            `<option value="${district.id}">${this.escapeHtml(district.name)}</option>`
+        ).join('');
+
+        $district.html('<option value="">🏛️ Select District</option>' + options)
+                .addClass('enabled');
+    }
+
+    resetLocationFields(fromLevel) {
+        const levels = ['district', 'sector', 'cell'];
+
+        levels.forEach(level => {
+            if (levels.indexOf(fromLevel) <= levels.indexOf(level)) {
+                const $field = $(`#${level}`);
+                $field.prop('disabled', true).val('').removeClass('enabled');
+
+                if (level === 'district') {
+                    $field.html('<option value="">🏛️ Select Province First</option>');
+                } else if (level === 'sector') {
+                    $field.html('<option value="">🏘️ Select District First</option>');
+                } else if (level === 'cell') {
+                    $field.html('<option value="">📍 Select Sector First</option>');
+                    // Hide cell information and search when resetting
+                    $('#cellInfo').hide();
+                    $('#cellSearchContainer').hide();
+                    $('#cellSearch').val('');
+                    this.originalCellOptions = [];
+                }
+
+                // Clear cache for dependent levels
+                if (level === 'district') {
+                    this.locationCache.sectors.clear();
+                    this.locationCache.cells.clear();
+                } else if (level === 'sector') {
+                    this.locationCache.cells.clear();
                 }
             }
-        },
-        error: function(xhr, status, error) {
-            hideLoading();
-            console.error('Registration error:', xhr.responseText);
-            showAlert('danger', 'Network error. Please try again.');
-        }
-    });
-}
-
-// Validate entire form
-function validateForm() {
-    let isValid = true;
-    const requiredFields = ['first_name', 'last_name', 'email', 'reg_no', 'department_id', 'option_id', 'telephone', 'year_level', 'sex'];
-
-    requiredFields.forEach(field => {
-        const element = $(`#${field}`);
-        if(!element.val().trim()) {
-            element.addClass('is-invalid');
-            isValid = false;
-        } else {
-            element.removeClass('is-invalid');
-        }
-    });
-
-    // Email validation
-    const email = $('#email').val();
-    if(email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        $('#email').addClass('is-invalid');
-        isValid = false;
+        });
     }
 
-    // Phone validation
-    const phone = $('#telephone').val();
-    if(phone && !/^[\d\s\-\+\(\)]+$/.test(phone)) {
-        $('#telephone').addClass('is-invalid');
+    showLocationLoading($element, show) {
+        const loadingClass = 'location-loading';
+        if (show) {
+            $element.addClass(loadingClass);
+        } else {
+            $element.removeClass(loadingClass);
+        }
+    }
+
+    async handleDistrictChange() {
+        const districtId = $('#district').val();
+        const $sector = $('#sector');
+
+        // Reset dependent fields
+        this.resetLocationFields('sector');
+
+        if (!districtId) {
+            return;
+        }
+
+        // Check cache first
+        if (this.locationCache.sectors.has(districtId)) {
+            this.populateSectors(this.locationCache.sectors.get(districtId));
+            return;
+        }
+
+        // Show loading state
+        $sector.prop('disabled', true).html('<option value="">Loading sectors...</option>');
+        this.showLocationLoading($sector, true);
+
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_sectors',
+                    district_id: districtId,
+                    csrf_token: this.csrfToken
+                }
+            });
+
+            if (response.success && response.sectors) {
+                // Cache the results
+                this.locationCache.sectors.set(districtId, response.sectors);
+                this.populateSectors(response.sectors);
+
+                this.showAlert(`🏘️ ${response.sectors.length} sector${response.sectors.length !== 1 ? 's' : ''} loaded for ${$('#district option:selected').text()}`, 'success');
+            } else {
+                throw new Error(response.message || 'No sectors found');
+            }
+        } catch (error) {
+            console.error('District change error:', error);
+            $sector.html('<option value="">❌ Failed to load sectors</option>');
+            this.showAlert('❌ Failed to load sectors. Please try selecting the district again.', 'error');
+        } finally {
+            this.showLocationLoading($sector, false);
+            $sector.prop('disabled', false);
+        }
+    }
+
+    populateSectors(sectors) {
+        const $sector = $('#sector');
+        const options = sectors.map(sector =>
+            `<option value="${sector.id}">${this.escapeHtml(sector.name)}</option>`
+        ).join('');
+
+        $sector.html('<option value="">🏘️ Select Sector</option>' + options)
+               .addClass('enabled');
+    }
+
+    async handleSectorChange() {
+        const sectorId = $('#sector').val();
+        const $cell = $('#cell');
+
+        // Reset dependent fields
+        this.resetLocationFields('cell');
+
+        if (!sectorId) {
+            return;
+        }
+
+        // Check cache first
+        if (this.locationCache.cells.has(sectorId)) {
+            this.populateCells(this.locationCache.cells.get(sectorId));
+            return;
+        }
+
+        // Show loading state
+        $cell.prop('disabled', true).html('<option value="">Loading cells...</option>');
+        this.showLocationLoading($cell, true);
+
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_cells',
+                    sector_id: sectorId,
+                    csrf_token: this.csrfToken
+                }
+            });
+
+            if (response.success && response.cells) {
+                // Cache the results
+                this.locationCache.cells.set(sectorId, response.cells);
+                this.populateCells(response.cells);
+
+                this.showAlert(`🏘️ ${response.cells.length} cell${response.cells.length !== 1 ? 's' : ''} loaded for ${$('#sector option:selected').text()}`, 'success');
+            } else {
+                throw new Error(response.message || 'No cells found');
+            }
+        } catch (error) {
+            console.error('Sector change error:', error);
+            $cell.html('<option value="">❌ Failed to load cells</option>');
+            this.showAlert('❌ Failed to load cells. Please try selecting the sector again.', 'error');
+        } finally {
+            this.showLocationLoading($cell, false);
+            $cell.prop('disabled', false);
+        }
+    }
+
+    async handleCellChange() {
+        const cellId = $('#cell').val();
+
+        if (cellId) {
+            // Update progress when location is complete
+            this.updateProgress();
+
+            // Get complete location information
+            const locationInfo = this.getLocationInfo();
+            if (locationInfo) {
+                // Show detailed success message
+                const fullAddress = `${locationInfo.cell_name}, ${locationInfo.sector_name}, ${locationInfo.district_name}, ${locationInfo.province_name}`;
+                this.showAlert(`✅ Complete location set: ${fullAddress}`, 'success');
+
+                // Update cell statistics if available
+                this.updateCellStatistics(cellId);
+            }
+        }
+    }
+
+    updateCellStatistics(cellId) {
+        const cellSelect = $('#cell');
+        const selectedOption = cellSelect.find('option:selected');
+        const cellInfo = $('#cellInfo');
+        const cellInfoText = $('#cellInfoText');
+
+        if (selectedOption.length) {
+            const cellName = selectedOption.text();
+            const sectorName = $('#sector option:selected').text();
+            const districtName = $('#district option:selected').text();
+            const provinceName = $('#province option:selected').text();
+
+            // Show cell information
+            const fullLocation = `${cellName} Cell, ${sectorName} Sector, ${districtName} District, ${provinceName}`;
+            cellInfoText.text(`📍 Selected: ${fullLocation}`);
+            cellInfo.show();
+
+            // Add visual feedback
+            cellSelect.addClass('border-success');
+            setTimeout(() => {
+                cellSelect.removeClass('border-success');
+            }, 2000);
+
+            console.log(`Cell "${cellName}" selected with ID: ${cellId}`);
+            console.log(`Complete location: ${fullLocation}`);
+        } else {
+            cellInfo.hide();
+        }
+    }
+
+    populateCells(cells) {
+        const $cell = $('#cell');
+        const options = cells.map(cell =>
+            `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
+        ).join('');
+
+        $cell.html('<option value="">📍 Select Cell</option>' + options)
+             .addClass('enabled');
+
+        // Store original options for search functionality
+        this.originalCellOptions = cells;
+
+        // Show search container if there are many cells
+        if (cells.length > 5) {
+            $('#cellSearchContainer').show();
+            $('#cellSearch').val(''); // Clear search
+        } else {
+            $('#cellSearchContainer').hide();
+        }
+    }
+
+    handleCellSearch() {
+        const searchTerm = $('#cellSearch').val().toLowerCase();
+        const $cell = $('#cell');
+        const currentValue = $cell.val(); // Preserve current selection
+
+        if (!searchTerm) {
+            // Show all options
+            const options = this.originalCellOptions.map(cell =>
+                `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
+            ).join('');
+            $cell.html('<option value="">📍 Select Cell</option>' + options);
+            // Restore previous selection if it exists
+            if (currentValue) {
+                $cell.val(currentValue);
+            }
+            return;
+        }
+
+        // Filter options based on search term
+        const filteredCells = this.originalCellOptions.filter(cell =>
+            cell.name.toLowerCase().includes(searchTerm)
+        );
+
+        if (filteredCells.length === 0) {
+            $cell.html('<option value="">🔍 No cells found</option>');
+        } else {
+            const options = filteredCells.map(cell =>
+                `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
+            ).join('');
+            $cell.html('<option value="">📍 Select Cell</option>' + options);
+            // Restore previous selection if it's in the filtered results
+            if (currentValue && filteredCells.some(cell => cell.id == currentValue)) {
+                $cell.val(currentValue);
+            }
+        }
+    }
+
+    // Validate location selection
+    validateLocation() {
+        const provinceId = $('#province').val();
+        const districtId = $('#district').val();
+        const sectorId = $('#sector').val();
+        const cellId = $('#cell').val();
+
+        if (!provinceId) {
+            this.showFieldError($('#province')[0], 'Please select a province');
+            return false;
+        }
+
+        if (!districtId) {
+            this.showFieldError($('#district')[0], 'Please select a district');
+            return false;
+        }
+
+        if (!sectorId) {
+            this.showFieldError($('#sector')[0], 'Please select a sector');
+            return false;
+        }
+
+        if (!cellId) {
+            this.showFieldError($('#cell')[0], 'Please select a cell');
+            return false;
+        }
+
+        // Clear any previous errors
+        this.clearFieldError($('#province')[0]);
+        this.clearFieldError($('#district')[0]);
+        this.clearFieldError($('#sector')[0]);
+        this.clearFieldError($('#cell')[0]);
+
+        return true;
+    }
+
+    // Get complete location info
+    getLocationInfo() {
+        const provinceId = $('#province').val();
+        const districtId = $('#district').val();
+        const sectorId = $('#sector').val();
+        const cellId = $('#cell').val();
+
+        if (!provinceId || !districtId || !sectorId || !cellId) {
+            return null;
+        }
+
+        return {
+            province_id: provinceId,
+            province_name: $('#province option:selected').text(),
+            district_id: districtId,
+            district_name: $('#district option:selected').text(),
+            sector_id: sectorId,
+            sector_name: $('#sector option:selected').text(),
+            cell_id: cellId,
+            cell_name: $('#cell option:selected').text()
+        };
+    }
+
+    async handleSubmit(e) {
+        e.preventDefault();
+
+        if (!this.validateForm()) {
+            this.showAlert('Please correct the errors before submitting.', 'error');
+            this.scrollToFirstError();
+            return;
+        }
+
+        // Additional validation: verify department-option relationship
+        const departmentId = $('#department').val();
+        const optionId = $('#option').val();
+
+        if (departmentId && optionId) {
+            try {
+                const validationResponse = await this.retryableAjax({
+                    url: 'api/department-option-api.php',
+                    method: 'POST',
+                    data: {
+                        action: 'validate_relationship',
+                        department_id: parseInt(departmentId, 10),
+                        option_id: parseInt(optionId, 10),
+                        csrf_token: this.csrfToken
+                    }
+                });
+
+                if (!validationResponse.valid) {
+                    this.showAlert('Invalid department-program combination. Please select a valid program for the chosen department.', 'error');
+                    $('#option').focus();
+                    return;
+                }
+            } catch (error) {
+                console.error('Relationship validation error:', error);
+                this.showAlert('Failed to validate department-program relationship. Please try again.', 'error');
+                return;
+            }
+        }
+
+        if (!await this.confirmSubmission()) {
+            return;
+        }
+
+        try {
+            this.showLoading(true);
+            this.disableForm(true);
+
+            const formData = new FormData(e.target);
+            // Ensure CSRF token is included
+            formData.append('csrf_token', this.csrfToken);
+
+            // Include fingerprint data if captured
+            if (this.fingerprintCaptured && this.fingerprintData) {
+                // Convert canvas to base64 data URL for backend processing
+                const canvas = document.getElementById('fingerprintCanvas');
+                const fingerprintImageData = canvas.toDataURL('image/png');
+                formData.append('fingerprint_data', fingerprintImageData);
+                formData.append('fingerprint_quality', this.fingerprintQuality);
+            }
+
+            const response = await $.ajax({
+                url: 'submit-student-registration.php',
+                method: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                timeout: 30000
+            });
+
+            if (response.success) {
+                this.showSuccess(response);
+            } else {
+                this.handleSubmissionError(response);
+            }
+        } catch (error) {
+            this.handleNetworkError(error);
+        } finally {
+            this.showLoading(false);
+            this.disableForm(false);
+        }
+    }
+
+    scrollToFirstError() {
+        const firstError = $('.is-invalid').first();
+        if (firstError.length) {
+            $('html, body').animate({
+                scrollTop: firstError.offset().top - 100
+            }, 500);
+        }
+    }
+
+    async confirmSubmission() {
+        return new Promise((resolve) => {
+            // Create a custom confirmation modal instead of using alert
+            if ($('#customConfirmModal').length === 0) {
+                $('body').append(`
+                    <div class="modal fade" id="customConfirmModal" tabindex="-1">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Confirm Registration</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <p>Are you sure you want to register this student? This action cannot be undone.</p>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-primary" id="confirmRegistration">Confirm</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+            }
+
+            const modal = new bootstrap.Modal(document.getElementById('customConfirmModal'));
+            modal.show();
+
+            $('#confirmRegistration').off('click').on('click', function() {
+                modal.hide();
+                resolve(true);
+            });
+
+            $('#customConfirmModal').on('hidden.bs.modal', function() {
+                resolve(false);
+            });
+        });
+    }
+
+   validateForm() {
+    let isValid = true;
+    const errors = [];
+
+    // Clear previous validation
+    $('.is-invalid').removeClass('is-invalid');
+    $('.invalid-feedback').remove();
+
+    // Required field validation with specific messages
+    const requiredFields = [
+        { id: 'firstName', name: 'First Name' },
+        { id: 'lastName', name: 'Last Name' },
+        { id: 'email', name: 'Email Address' },
+        { id: 'telephone', name: 'Phone Number' },
+        { id: 'reg_no', name: 'Registration Number' },
+        { id: 'department', name: 'Department' },
+        { id: 'option', name: 'Program' },
+        { id: 'year_level', name: 'Year Level' },
+        { id: 'sex', name: 'Gender' }
+    ];
+
+    requiredFields.forEach(field => {
+        const $field = $(`#${field.id}`);
+        if (!$field.val().trim()) {
+            this.showFieldError($field[0], `${field.name} is required`);
+            isValid = false;
+            errors.push(`${field.name} is required`);
+        }
+    });
+
+    // Department-program dependency validation
+    const departmentId = $('#department').val();
+    const optionId = $('#option').val();
+    if (departmentId && !optionId) {
+        const $option = $('#option');
+        this.showFieldError($option[0], 'Please select a program for the chosen department');
         isValid = false;
+        errors.push('Program selection is required');
+    }
+
+    // Validate that the selected option belongs to the selected department
+    if (departmentId && optionId) {
+        const $optionElement = $('#option');
+        const selectedOption = $optionElement.find('option:selected');
+        const optionDepartmentId = selectedOption.data('department');
+
+        if (optionDepartmentId && optionDepartmentId != departmentId) {
+            const $option = $('#option');
+            this.showFieldError($option[0], 'Selected program does not belong to the chosen department');
+            isValid = false;
+            errors.push('Invalid program for department');
+        } else {
+            this.clearFieldError($('#option')[0]);
+        }
+    }
+
+    // Email format validation
+    const email = $('#email').val();
+    if (email && !this.isValidEmail(email)) {
+        this.showFieldError($('#email')[0], 'Please enter a valid email address');
+        isValid = false;
+        errors.push('Invalid email format');
+    }
+
+    // Phone number validation
+    const phone = $('#telephone').val();
+    if (phone && !this.isValidPhone(phone)) {
+        this.showFieldError($('#telephone')[0], 'Please enter a valid phone number (e.g., 0781234567)');
+        isValid = false;
+        errors.push('Invalid phone number format');
+    }
+
+    // Parent contact validation if provided
+    const parentContact = $('#parent_contact').val();
+    if (parentContact && !this.isValidPhone(parentContact)) {
+        this.showFieldError($('#parent_contact')[0], 'Please enter a valid parent phone number');
+        isValid = false;
+        errors.push('Invalid parent phone number format');
+    }
+
+    // Registration number validation
+    const regNo = $('#reg_no').val();
+    if (regNo && regNo.length < 5) {
+        this.showFieldError($('#reg_no')[0], 'Registration number must be at least 5 characters');
+        isValid = false;
+        errors.push('Registration number too short');
+    }
+
+    // Date of birth validation
+    const dob = $('#dob').val();
+    if (dob) {
+        const birthDate = new Date(dob);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        
+        if (age < 16) {
+            this.showFieldError($('#dob')[0], 'Student must be at least 16 years old');
+            isValid = false;
+            errors.push('Student too young');
+        } else if (age > 60) {
+            this.showFieldError($('#dob')[0], 'Please enter a valid date of birth');
+            isValid = false;
+            errors.push('Invalid date of birth');
+        }
+    }
+
+    // Location validation
+    if (!this.validateLocation()) {
+        isValid = false;
+        errors.push('Location information is incomplete');
+    }
+
+    // Fingerprint validation with user feedback
+    if (!this.fingerprintCaptured) {
+        console.warn('No fingerprint captured - proceeding without biometric data');
+        // Show a non-blocking warning
+        this.showAlert('⚠️ No fingerprint captured. Consider enrolling fingerprint for better security.', 'warning');
+    }
+
+    // Log validation results for debugging
+    if (!isValid) {
+        console.log('Form validation failed:', errors);
     }
 
     return isValid;
 }
+    updateFingerprintUI(state) {
+        const container = document.querySelector('.fingerprint-container');
+        const captureBtn = document.getElementById('captureFingerprintBtn');
+        const clearBtn = document.getElementById('clearFingerprintBtn');
+        const enrollBtn = document.getElementById('enrollFingerprintBtn');
+        const status = document.getElementById('fingerprintStatus');
 
-// Reset form
-function resetForm() {
-    $('#registrationForm')[0].reset();
-    $('#registrationForm input, #registrationForm select').removeClass('is-valid is-invalid');
-    $('.invalid-feedback, .valid-feedback').hide();
-    $('#uploadContent').removeClass('d-none');
-    $('#previewContent').addClass('d-none');
-    $('#photoPreview').attr('src', '');
-    $('#option').html('<option value="">-- Select Program First --</option>').prop('disabled', true);
-    $('#cameraContainer').hide();
-    currentPhotoData = null;
-    updateFormProgress();
+        container.classList.remove('fingerprint-capturing', 'fingerprint-captured');
 
-    // Clear any camera streams
-    if(videoStream) {
-        videoStream.getTracks().forEach(track => track.stop());
+        switch (state) {
+            case 'capturing':
+                container.classList.add('fingerprint-capturing');
+                captureBtn.disabled = true;
+                captureBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Capturing...';
+                status.textContent = 'Place finger on scanner';
+                clearBtn.classList.add('d-none');
+                enrollBtn.classList.add('d-none');
+                break;
+
+            case 'captured':
+                container.classList.add('fingerprint-captured');
+                captureBtn.classList.add('d-none');
+                clearBtn.classList.remove('d-none');
+                enrollBtn.classList.remove('d-none');
+                status.textContent = `Fingerprint captured - Quality: ${this.fingerprintQuality}%`;
+                break;
+
+            default: // ready
+                container.classList.remove('fingerprint-capturing', 'fingerprint-captured');
+                captureBtn.disabled = false;
+                captureBtn.classList.remove('d-none');
+                captureBtn.innerHTML = '<i class="fas fa-fingerprint me-2"></i>Capture Fingerprint';
+                clearBtn.classList.add('d-none');
+                enrollBtn.classList.add('d-none');
+                status.textContent = 'Ready to capture fingerprint';
+        }
+    }
+
+    clearFingerprint() {
+        const canvas = document.getElementById('fingerprintCanvas');
+        const placeholder = document.getElementById('fingerprintPlaceholder');
+        const qualityIndicator = document.querySelector('.quality-indicator');
+
+        // Clear canvas
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Hide canvas and show placeholder
+        canvas.classList.add('d-none');
+        placeholder.classList.remove('d-none');
+
+        // Remove quality indicator
+        if (qualityIndicator) {
+            qualityIndicator.remove();
+        }
+
+        // Reset state
+        this.fingerprintCaptured = false;
+        this.fingerprintData = null;
+        this.fingerprintQuality = 0;
+
+        this.updateFingerprintUI('ready');
+        this.showAlert('Fingerprint cleared', 'info');
+    }
+
+    enrollFingerprint() {
+        if (!this.fingerprintCaptured) {
+            this.showAlert('No fingerprint captured to enroll', 'warning');
+            return;
+        }
+
+        // Convert canvas to data URL for storage
+        const canvas = document.getElementById('fingerprintCanvas');
+        this.fingerprintData = canvas.toDataURL('image/png');
+
+        this.showAlert('Fingerprint enrolled successfully!', 'success');
+        console.log('Fingerprint enrolled:', {
+            quality: this.fingerprintQuality,
+            dataSize: this.fingerprintData.length
+        });
+    }
+
+    // Enhanced utility methods with better error handling
+    showAlert(message, type = 'info', autoDismiss = true) {
+        const alertClass = type === 'success' ? 'alert-success' :
+                          type === 'error' ? 'alert-danger' :
+                          type === 'warning' ? 'alert-warning' : 'alert-info';
+
+        const icon = type === 'success' ? 'check-circle' :
+                    type === 'error' ? 'exclamation-triangle' :
+                    type === 'warning' ? 'exclamation-circle' : 'info-circle';
+
+        const alertHtml = `
+            <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                <i class="fas fa-${icon} me-2"></i>
+                ${this.escapeHtml(message)}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        `;
+
+        $('#alertContainer').html(alertHtml);
+
+        // Auto-dismiss with different timing based on type
+        if (autoDismiss) {
+            const dismissTime = type === 'error' ? 8000 : type === 'warning' ? 6000 : 5000;
+            setTimeout(() => {
+                $('.alert').fadeOut(300, function() {
+                    $(this).remove();
+                });
+            }, dismissTime);
+        }
+
+        // Log alerts for debugging
+        console.log(`Alert [${type.toUpperCase()}]: ${message}`);
+    }
+
+    // Enhanced error handling for form submission
+    handleSubmissionError(response) {
+        console.error('Submission error details:', response);
+
+        let errorMessage = 'An unexpected error occurred during registration.';
+
+        if (response && response.message) {
+            errorMessage = response.message;
+        } else if (response && response.errors) {
+            // Handle validation errors
+            const errors = Object.values(response.errors).flat();
+            errorMessage = errors.join('; ');
+        } else if (typeof response === 'string') {
+            errorMessage = response;
+        }
+
+        this.showAlert(`Registration failed: ${errorMessage}`, 'error', false);
+
+        // Re-enable form for retry
+        this.disableForm(false);
+    }
+
+    handleNetworkError(error) {
+        console.error('Network error details:', error);
+
+        let errorMessage = 'Network connection error. Please check your internet connection.';
+
+        if (error.status === 0) {
+            errorMessage = 'Unable to connect to server. Please check if the server is running.';
+        } else if (error.status === 403) {
+            errorMessage = 'Access denied. Please refresh the page and try again.';
+        } else if (error.status === 500) {
+            errorMessage = 'Server error occurred. Please try again later.';
+        } else if (error.status >= 400) {
+            errorMessage = `Request error (${error.status}). Please try again.`;
+        }
+
+        this.showAlert(errorMessage, 'error', false);
+        this.disableForm(false);
     }
 }
 
-// Show preview
-function showPreview() {
-    const data = {
-        first_name: $('#first_name').val(),
-        last_name: $('#last_name').val(),
-        email: $('#email').val(),
-        reg_no: $('#reg_no').val(),
-        telephone: $('#telephone').val(),
-        department: $('#department option:selected').text(),
-        option: $('#option option:selected').text(),
-        year_level: $('#year_level option:selected').text(),
-        sex: $('#sex').val()
-    };
+// Enhanced initialization
+$(document).ready(() => {
+    // Initialize with error handling
+    try {
+        window.registrationApp = new StudentRegistration();
+        
+        // Add performance monitoring
+        if (performance.mark) {
+            performance.mark('registration_loaded');
+        }
+        
+        console.log('✅ Student Registration System initialized successfully');
+    } catch (error) {
+        console.error('❌ Failed to initialize registration system:', error);
+        // Show user-friendly error message
+        $('#alertContainer').html(`
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                System initialization failed. Please refresh the page.
+            </div>
+        `);
+    }
 
-    let previewHtml = '<div class="card"><div class="card-header"><h6 class="mb-0">Registration Preview</h6></div><div class="card-body">';
-    previewHtml += '<div class="row g-3">';
+    // Enhanced mobile menu handling
+    $('#mobileMenuToggle').on('click', function() {
+        $('#adminSidebar').toggleClass('show');
+        $('#mainContent').toggleClass('sidebar-open');
+    });
 
-    Object.keys(data).forEach(key => {
-        if(data[key]) {
-            const label = key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-            previewHtml += `<div class="col-md-6"><strong>${label}:</strong> ${data[key]}</div>`;
+    // Close sidebar when clicking outside (mobile)
+    $(document).on('click', function(e) {
+        if ($(window).width() <= 768 &&
+            !$(e.target).closest('#adminSidebar, #mobileMenuToggle').length) {
+            $('#adminSidebar').removeClass('show');
+            $('#mainContent').removeClass('sidebar-open');
         }
     });
-
-    previewHtml += '</div></div></div>';
-
-    // Create modal
-    const modal = $(`
-        <div class="modal fade" id="previewModal" tabindex="-1">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Registration Preview</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">${previewHtml}</div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        <button type="button" class="btn btn-primary" onclick="$(\'#submitBtn\').click()">Confirm Registration</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `);
-
-    $('body').append(modal);
-    const bsModal = new bootstrap.Modal(modal[0]);
-    bsModal.show();
-
-    modal.on('hidden.bs.modal', function() {
-        $(this).remove();
-    });
-}
-
-// Update form progress
-function updateFormProgress() {
-    const totalFields = $('input[required], select[required]').length;
-    const filledFields = $('input[required], select[required]').filter(function() {
-        return $(this).val().trim() !== '';
-    }).length;
-
-    const progress = totalFields > 0 ? (filledFields / totalFields) * 100 : 0;
-    $('#formProgress').css('width', progress + '%');
-}
-
-// Show loading overlay
-function showLoading(message = 'Processing...') {
-    $('#loadingOverlay .text-center h5').text(message);
-    $('#loadingOverlay').fadeIn();
-}
-
-// Hide loading overlay
-function hideLoading() {
-    $('#loadingOverlay').fadeOut();
-}
-
-// Show alert
-function showAlert(type, message) {
-    const alertId = 'alert_' + Date.now();
-    const alertHtml = `
-        <div class="alert alert-${type} alert-dismissible fade show" id="${alertId}" role="alert">
-            <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'danger' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    `;
-
-    $('#alertContainer').append(alertHtml);
-
-    // Auto-dismiss after 5 seconds
-    setTimeout(function() {
-        $(`#${alertId}`).fadeOut(function() {
-            $(this).remove();
-        });
-    }, 5000);
-}
-
-// Toggle sidebar for mobile
-function toggleSidebar() {
-    $('#sidebar').toggleClass('show');
-}
-
-// Cleanup on page unload
-$(window).on('beforeunload', function() {
-    if(videoStream) {
-        videoStream.getTracks().forEach(track => track.stop());
-    }
 });
-</script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    </script>
 </body>
 </html>

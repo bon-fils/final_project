@@ -5,9 +5,9 @@
  * Automatically creates user accounts when assigning HODs
  */
 
-session_start();
-require_once __DIR__ . "/../config.php";
-require_once __DIR__ . "/../session_check.php";
+require_once __DIR__ . "/../config.php"; // Must be first - defines SESSION_LIFETIME
+require_once __DIR__ . "/../session_check.php"; // Session management - requires config.php constants
+session_start(); // Start session after config and session_check
 require_role(['admin']);
 
 // Set JSON response headers
@@ -93,19 +93,21 @@ exit;
  */
 function handleGetDepartments(PDO $pdo): array {
     $stmt = $pdo->prepare("
-        SELECT 
-            d.id, 
-            d.name as dept_name,
+        SELECT
+            d.id,
+            d.name,
             d.hod_id,
-            CASE 
-                WHEN l.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
+            CASE
+                WHEN u.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
                 ELSE 'Not Assigned'
             END as hod_name,
             l.email as hod_email,
-            u.username as hod_username
+            u.username as hod_username,
+            u.role as hod_role,
+            l.role as lecturer_role
         FROM departments d
-        LEFT JOIN lecturers l ON d.hod_id = l.id
-        LEFT JOIN users u ON u.email = l.email AND u.role = 'hod'
+        LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
+        LEFT JOIN lecturers l ON u.email = l.email AND l.role IN ('lecturer', 'hod')
         ORDER BY d.name
     ");
 
@@ -114,12 +116,13 @@ function handleGetDepartments(PDO $pdo): array {
 
     // Add additional metadata
     foreach ($departments as &$dept) {
+        $dept['dept_name'] = $dept['name']; // Add dept_name for compatibility
         $dept['is_assigned'] = !empty($dept['hod_id']);
         $dept['assignment_status'] = $dept['is_assigned'] ? 'assigned' : 'unassigned';
         $dept['has_user_account'] = !empty($dept['hod_username']);
-        
+
         // Get program count for each department
-        $programStmt = $pdo->prepare("SELECT COUNT(*) as program_count FROM options WHERE department_id = ?");
+        $programStmt = $pdo->prepare("SELECT COUNT(*) as program_count FROM courses WHERE department_id = ?");
         $programStmt->execute([$dept['id']]);
         $dept['program_count'] = $programStmt->fetchColumn();
     }
@@ -137,7 +140,7 @@ function handleGetDepartments(PDO $pdo): array {
  */
 function handleGetLecturers(PDO $pdo): array {
     $stmt = $pdo->prepare("
-        SELECT 
+        SELECT
             l.id,
             l.first_name,
             l.last_name,
@@ -169,10 +172,10 @@ function handleGetLecturers(PDO $pdo): array {
         $assignedStmt = $pdo->prepare("SELECT COUNT(*) FROM departments WHERE hod_id = ?");
         $assignedStmt->execute([$lecturer['id']]);
         $lecturer['is_assigned_as_hod'] = $assignedStmt->fetchColumn() > 0;
-        
+
         // Check if user account exists
         $lecturer['has_user_account'] = !empty($lecturer['user_id']);
-        
+
         // Get department name if assigned to a department
         if ($lecturer['department_id']) {
             $deptStmt = $pdo->prepare("SELECT name FROM departments WHERE id = ?");
@@ -197,7 +200,18 @@ function handleGetLecturers(PDO $pdo): array {
 function handleAssignHod(PDO $pdo): array {
     // Validate input
     $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
-    $hod_id = !empty($_POST['hod_id']) ? filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT) : null;
+
+    // Handle hod_id - can be null to remove assignment
+    $hod_id_raw = $_POST['hod_id'] ?? null;
+
+    if ($hod_id_raw === null || $hod_id_raw === 'null' || $hod_id_raw === '') {
+        $hod_id = null;
+    } else {
+        $hod_id = filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT);
+        if ($hod_id === false) {
+            throw new Exception('Invalid HOD ID format');
+        }
+    }
 
     if (!$department_id || $department_id <= 0) {
         throw new Exception('Invalid department selected');
@@ -240,37 +254,98 @@ function handleAssignHod(PDO $pdo): array {
     // Start transaction for atomic operation
     $pdo->beginTransaction();
     try {
-        // If assigning a new HOD, remove them from any previous HOD role
-        if ($hod_id) {
-            $stmt = $pdo->prepare("UPDATE departments SET hod_id = NULL WHERE hod_id = ?");
-            $stmt->execute([$hod_id]);
+        $old_hod_id = null;
+
+        // Get current HOD assignment for this department
+        $stmt = $pdo->prepare("SELECT hod_id FROM departments WHERE id = ?");
+        $stmt->execute([$department_id]);
+        $current_hod = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($current_hod && $current_hod['hod_id']) {
+            $old_hod_id = $current_hod['hod_id'];
         }
 
-        // Update the department with the new HOD
-        $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
-        $stmt->execute([$hod_id, $department_id]);
+        // If assigning a new HOD, handle the previous HOD first
+        if ($hod_id && $old_hod_id && $old_hod_id != $hod_id) {
+            // Remove previous HOD from this department
+            $stmt = $pdo->prepare("UPDATE departments SET hod_id = NULL WHERE id = ?");
+            $stmt->execute([$department_id]);
 
-        // If assigning a HOD, create/update user account
+            // Check if the previous HOD is still HOD of any other department
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM departments WHERE hod_id = ?");
+            $stmt->execute([$old_hod_id]);
+            if ($stmt->fetchColumn() == 0) {
+                // No longer HOD of any department, set role back to lecturer
+                $stmt = $pdo->prepare("UPDATE lecturers SET role = 'lecturer', updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$old_hod_id]);
+
+                // Update user role back to lecturer if they exist
+                $stmt = $pdo->prepare("UPDATE users SET role = 'lecturer', updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$old_hod_id]);
+            }
+        }
+
+        // Handle new HOD assignment
         if ($hod_id) {
-            createOrUpdateHodUserAccount($pdo, $lecturer);
+            // Get lecturer details
+            $stmt = $pdo->prepare("SELECT * FROM lecturers WHERE id = ?");
+            $stmt->execute([$hod_id]);
+            $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lecturer) {
+                throw new Exception('Selected HOD is not a valid lecturer');
+            }
+
+            // Create or update user account for the HOD
+            $user_id = createOrUpdateHodUserAccount($pdo, $lecturer);
+
+            // Update lecturer role to 'hod'
+            $stmt = $pdo->prepare("UPDATE lecturers SET role = 'hod', updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$hod_id]);
+
+            // Update the department with the new HOD (using user ID, not lecturer ID)
+            $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
+            $stmt->execute([$user_id, $department_id]);
+
+            error_log("Assigned HOD: Department ID {$department_id} -> User ID {$user_id} (Lecturer: {$lecturer['first_name']} {$lecturer['last_name']})");
+        } else {
+            // Removing HOD assignment
+            $stmt = $pdo->prepare("UPDATE departments SET hod_id = NULL WHERE id = ?");
+            $stmt->execute([$department_id]);
+
+            // If there was a previous HOD, set their role back to lecturer
+            if ($old_hod_id) {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM departments WHERE hod_id = ?");
+                $stmt->execute([$old_hod_id]);
+                if ($stmt->fetchColumn() == 0) {
+                    // No longer HOD of any department, set role back to lecturer
+                    $stmt = $pdo->prepare("UPDATE lecturers SET role = 'lecturer', updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$old_hod_id]);
+
+                    // Update user role back to lecturer
+                    $stmt = $pdo->prepare("UPDATE users SET role = 'lecturer', updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$old_hod_id]);
+                }
+            }
         }
 
         // Get assignment details for response
         $stmt = $pdo->prepare("
-            SELECT 
-                d.name as dept_name,
-                CASE 
+            SELECT
+                d.name,
+                CASE
                     WHEN l.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
                     ELSE 'Not Assigned'
                 END as hod_name,
                 u.username as hod_username
             FROM departments d
-            LEFT JOIN lecturers l ON l.id = ?
+            LEFT JOIN lecturers l ON d.hod_id = l.id AND l.role IN ('lecturer', 'hod')
             LEFT JOIN users u ON u.email = l.email AND u.role = 'hod'
             WHERE d.id = ?
         ");
-        $stmt->execute([$hod_id, $department_id]);
+        $stmt->execute([$department_id]);
         $assignment = $stmt->fetch(PDO::FETCH_ASSOC);
+        $assignment['dept_name'] = $assignment['name']; // Add dept_name for compatibility
 
         // Log the assignment
         error_log(sprintf(
@@ -297,8 +372,9 @@ function handleAssignHod(PDO $pdo): array {
 
 /**
  * Create or update HOD user account in users table
+ * @return int The user ID
  */
-function createOrUpdateHodUserAccount(PDO $pdo, array $lecturer): void {
+function createOrUpdateHodUserAccount(PDO $pdo, array $lecturer): int {
     // Generate username from first name and last name
     $username = generateUsername($lecturer['first_name'], $lecturer['last_name']);
     $password = generateTemporaryPassword();
@@ -311,19 +387,22 @@ function createOrUpdateHodUserAccount(PDO $pdo, array $lecturer): void {
 
     if ($existing_user) {
         // Update existing user to HOD role
-        $stmt = $pdo->prepare("UPDATE users SET username = ?, role = 'hod', password = ?, updated_at = NOW() WHERE id = ?");
+        $stmt = $pdo->prepare("UPDATE users SET username = ?, role = 'hod', password = ?, status = 'active', updated_at = NOW() WHERE id = ?");
         $stmt->execute([$username, $hashed_password, $existing_user['id']]);
-        
+
         error_log("Updated existing user to HOD role: {$lecturer['email']}");
+        return $existing_user['id'];
     } else {
         // Create new HOD user account
         $stmt = $pdo->prepare("
-            INSERT INTO users (username, email, password, role, created_at, updated_at) 
-            VALUES (?, ?, ?, 'hod', NOW(), NOW())
+            INSERT INTO users (username, email, password, role, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'hod', 'active', NOW(), NOW())
         ");
         $stmt->execute([$username, $lecturer['email'], $hashed_password]);
-        
+        $user_id = $pdo->lastInsertId();
+
         error_log("Created new HOD user account: {$lecturer['email']} with temporary password");
+        return $user_id;
     }
 
     // Log the user account creation (you might want to email the credentials in a real system)
@@ -410,20 +489,21 @@ function handleGetDepartmentDetails(PDO $pdo): array {
     }
 
     $stmt = $pdo->prepare("
-        SELECT 
-            d.id, 
-            d.name as dept_name,
+        SELECT
+            d.id,
+            d.name,
             d.hod_id,
-            CASE 
-                WHEN l.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
+            CASE
+                WHEN u.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
                 ELSE 'Not Assigned'
             END as hod_name,
             l.email as hod_email,
             l.education_level as hod_education,
-            u.username as hod_username
+            u.username as hod_username,
+            l.role as lecturer_role
         FROM departments d
-        LEFT JOIN lecturers l ON d.hod_id = l.id
-        LEFT JOIN users u ON u.email = l.email AND u.role = 'hod'
+        LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
+        LEFT JOIN lecturers l ON u.email = l.email AND l.role IN ('lecturer', 'hod')
         WHERE d.id = ?
     ");
 
@@ -434,12 +514,14 @@ function handleGetDepartmentDetails(PDO $pdo): array {
         throw new Exception('Department not found');
     }
 
+    $department['dept_name'] = $department['name']; // Add dept_name for compatibility
+
     // Get program count and list
-    $programStmt = $pdo->prepare("SELECT COUNT(*) as program_count FROM options WHERE department_id = ?");
+    $programStmt = $pdo->prepare("SELECT COUNT(*) as program_count FROM courses WHERE department_id = ?");
     $programStmt->execute([$department_id]);
     $department['program_count'] = $programStmt->fetchColumn();
 
-    $programListStmt = $pdo->prepare("SELECT name FROM options WHERE department_id = ? ORDER BY name");
+    $programListStmt = $pdo->prepare("SELECT name FROM courses WHERE department_id = ? ORDER BY name");
     $programListStmt->execute([$department_id]);
     $department['programs'] = $programListStmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -475,7 +557,7 @@ function handleValidateAssignment(PDO $pdo): array {
     $stmt = $pdo->prepare("SELECT name FROM departments WHERE id = ?");
     $stmt->execute([$department_id]);
     $department = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     $validation_result['department_valid'] = (bool)$department;
     $validation_result['department_name'] = $department['name'] ?? null;
 
@@ -492,30 +574,31 @@ function handleValidateAssignment(PDO $pdo): array {
         $stmt = $pdo->prepare("SELECT first_name, last_name, email FROM lecturers WHERE id = ? AND role IN ('lecturer', 'hod')");
         $stmt->execute([$hod_id]);
         $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         $validation_result['hod_valid'] = (bool)$lecturer;
         $validation_result['hod_name'] = $lecturer ? $lecturer['first_name'] . ' ' . $lecturer['last_name'] : null;
         $validation_result['hod_email'] = $lecturer['email'] ?? null;
 
         if ($validation_result['hod_valid']) {
-            // Check for conflicts
-            $stmt = $pdo->prepare("SELECT name FROM departments WHERE hod_id = ? AND id != ?");
+            // Check for conflicts - but wait, HODs are stored in users table, not lecturers
+            // The conflict check should be against users table
+            $stmt = $pdo->prepare("SELECT d.name FROM departments d JOIN users u ON d.hod_id = u.id WHERE u.id = ? AND d.id != ?");
             $stmt->execute([$hod_id, $department_id]);
             $conflicts = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
             if (!empty($conflicts)) {
                 $validation_result['conflicts'] = $conflicts;
-                $validation_result['warnings'][] = 'This lecturer is already assigned as HOD to other departments';
+                $validation_result['warnings'][] = 'This user is already assigned as HOD to other departments';
             }
 
             // Check if user account already exists
-            $stmt = $pdo->prepare("SELECT username FROM users WHERE email = ? AND role = 'hod'");
-            $stmt->execute([$lecturer['email']]);
+            $stmt = $pdo->prepare("SELECT username FROM users WHERE id = ? AND role = 'hod'");
+            $stmt->execute([$hod_id]);
             $existing_user = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($existing_user) {
                 $validation_result['existing_user_account'] = $existing_user['username'];
-                $validation_result['warnings'][] = 'User account already exists for this lecturer';
+                $validation_result['warnings'][] = 'User account already exists for this HOD';
             }
         }
     } else {
@@ -542,21 +625,20 @@ function handleCreateHodUser(PDO $pdo): array {
         throw new Exception('Invalid HOD ID');
     }
 
-    // Get lecturer details
-    $stmt = $pdo->prepare("SELECT * FROM lecturers WHERE id = ? AND role IN ('lecturer', 'hod')");
+    // Get user details (HODs are stored in users table)
+    $stmt = $pdo->prepare("SELECT u.*, l.first_name, l.last_name, l.email as lecturer_email FROM users u LEFT JOIN lecturers l ON u.email = l.email WHERE u.id = ? AND u.role = 'hod'");
     $stmt->execute([$hod_id]);
-    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$lecturer) {
-        throw new Exception('Lecturer not found');
+    if (!$user) {
+        throw new Exception('HOD user not found');
     }
 
     try {
-        createOrUpdateHodUserAccount($pdo, $lecturer);
-        
+        // User already exists, no need to create
         return [
             'status' => 'success',
-            'message' => 'HOD user account created/updated successfully'
+            'message' => 'HOD user account already exists'
         ];
     } catch (Exception $e) {
         throw new Exception('Failed to create HOD user account: ' . $e->getMessage());

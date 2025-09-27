@@ -484,11 +484,11 @@ $('<style>')
             box-shadow: 0 6px 20px rgba(0,0,0,0.15) !important;
         }
         .file-upload-area.dragover {
-            border-color: #667eea !important;
-            background: rgba(102, 126, 234, 0.1) !important;
+            border-color: #0066cc !important;
+            background: rgba(0, 102, 204, 0.1) !important;
         }
         .history-item:hover {
-            background: rgba(102, 126, 234, 0.05) !important;
+            background: rgba(0, 102, 204, 0.05) !important;
         }
     `)
     .appendTo('head');

@@ -20,7 +20,7 @@ require_role(['tech']);
     <style>
         body {
             font-family: 'Segoe UI', sans-serif;
-            background-color: #f5f7fa;
+            background: linear-gradient(to right, #0066cc, #003366);
         }
 
         .sidebar {
@@ -43,7 +43,7 @@ require_role(['tech']);
 
         .sidebar a:hover,
         .sidebar a.active {
-            background-color: #0059b3;
+            background-color: #0066cc;
         }
 
         .topbar {

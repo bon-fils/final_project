@@ -187,14 +187,15 @@ try {
 <style>
 /* ===== ROOT VARIABLES ===== */
 :root {
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-  --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-  --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-  --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+  --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #0052a3 0%, #002b50 100%);
+  --secondary-gradient: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
+  --success-gradient: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  --warning-gradient: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+  --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  --info-gradient: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
   --light-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  --dark-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --dark-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
   --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
   --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
   --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
@@ -204,7 +205,7 @@ try {
 
 /* ===== BODY & CONTAINER ===== */
 body {
-  background: var(--primary-gradient);
+  background: linear-gradient(to right, #0066cc, #003366);
   min-height: 100vh;
   font-family: 'Inter', 'Segoe UI', sans-serif;
   margin: 0;
@@ -263,7 +264,7 @@ body::before {
 }
 
 .sidebar-header h5 {
-  color: #667eea;
+  color: #0066cc;
   font-weight: 700;
   margin-bottom: 5px;
   font-size: 1.1rem;
@@ -342,7 +343,7 @@ body::before {
 }
 
 .topbar .notification-bell:hover {
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(0, 102, 204, 0.1);
 }
 
 .notification-count {
@@ -508,7 +509,7 @@ body::before {
   border-radius: var(--border-radius);
   padding: 25px;
   margin-bottom: 15px;
-  border-left: 4px solid #667eea;
+  border-left: 4px solid #0066cc;
   box-shadow: var(--shadow-light);
   transition: var(--transition);
 }
@@ -622,8 +623,8 @@ body::before {
   justify-content: center;
   margin: 0 auto 15px;
   font-size: 1.5rem;
-  background: rgba(102, 126, 234, 0.1);
-  color: #667eea;
+  background: rgba(0, 102, 204, 0.1);
+  color: #0066cc;
   transition: var(--transition);
 }
 
@@ -683,7 +684,7 @@ body::before {
 .schedule-time {
   width: 80px;
   font-weight: 600;
-  color: #667eea;
+  color: #0066cc;
   font-size: 0.9rem;
 }
 
@@ -819,7 +820,7 @@ body::before {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+  background: linear-gradient(135deg, #0052a3 0%, #002b50 100%);
 }
 </style>
 </head>
@@ -1401,7 +1402,7 @@ $('<style>')
             box-shadow: 0 8px 25px rgba(0,0,0,0.15) !important;
         }
         .notifications-dropdown .notification-item:hover {
-            background-color: rgba(102, 126, 234, 0.05);
+            background-color: rgba(0, 102, 204, 0.05);
         }
     `)
     .appendTo('head');

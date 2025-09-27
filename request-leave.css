@@ -1,29 +1,29 @@
 /* ===== ROOT VARIABLES ===== */
 :root {
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-  --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-  --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-  --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+  --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+  --secondary-gradient: linear-gradient(135deg, #003366 0%, #002b50 100%);
+  --success-gradient: linear-gradient(135deg, #0066cc 0%, #004080 100%);
+  --warning-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  --info-gradient: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
   --light-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  --dark-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --dark-gradient: linear-gradient(135deg, #003366 0%, #002b50 100%);
   --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
   --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
   --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
   --border-radius: 12px;
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  --primary-color: #667eea;
-  --secondary-color: #764ba2;
-  --success-color: #4facfe;
-  --warning-color: #43e97b;
-  --danger-color: #fa709a;
+  --primary-color: #0066cc;
+  --secondary-color: #003366;
+  --success-color: #0066cc;
+  --warning-color: #f8f9fa;
+  --danger-color: #dc3545;
   --muted-color: #6c757d;
 }
 
 /* ===== BODY & CONTAINER ===== */
 body {
-  background: var(--primary-gradient);
+  background: #f8f9fa;
   min-height: 100vh;
   font-family: 'Inter', 'Segoe UI', sans-serif;
   margin: 0;
@@ -809,7 +809,7 @@ body::before {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+  background: linear-gradient(135deg, #004080 0%, #002b50 100%);
 }
 
 /* ===== EMPTY STATE ===== */

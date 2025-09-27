@@ -79,11 +79,11 @@ if ($userRole === 'student') {
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
 
   <style>
-    body { font-family: 'Segoe UI', sans-serif; background-color: #f5f7fa; }
+    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(to right, #0066cc, #003366); }
     .sidebar { position: fixed; top: 0; left: 0; width: 240px; height: 100vh; background: #003366; color: white; padding-top: 20px; }
     .sidebar .logo { width: 80px; margin: 0 auto 10px; display: block; }
     .sidebar a { display: block; padding: 12px 20px; color: #fff; text-decoration: none; }
-    .sidebar a:hover, .sidebar a.active { background-color: #0059b3; }
+    .sidebar a:hover, .sidebar a.active { background-color: #0066cc; }
     .topbar { margin-left: 240px; background: #fff; padding: 12px 25px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; }
     .main-content { margin-left: 240px; padding: 25px; }
     .circle-container { display: flex; justify-content: center; margin-bottom: 20px; }

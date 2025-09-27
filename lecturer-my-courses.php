@@ -11,24 +11,79 @@ if (!$user_id) {
   exit;
 }
 
-// Fetch lecturer’s courses
+// Get lecturer's department_id first - join on email instead of ID
+$dept_stmt = $pdo->prepare("
+    SELECT l.department_id, l.id as lecturer_id
+    FROM lecturers l
+    INNER JOIN users u ON l.email = u.email
+    WHERE u.id = :user_id AND u.role = 'lecturer'
+");
+$dept_stmt->execute(['user_id' => $user_id]);
+$lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+    // Try to create a lecturer record if it doesn't exist
+    $create_lecturer_stmt = $pdo->prepare("
+        INSERT INTO lecturers (first_name, last_name, email, department_id, role, password)
+        SELECT
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
+            email, 7, 'lecturer', '12345'
+        FROM users
+        WHERE id = :user_id AND role = 'lecturer'
+        ON DUPLICATE KEY UPDATE email = email
+    ");
+    $create_lecturer_stmt->execute(['user_id' => $user_id]);
+
+    // Try again to get the department
+    $dept_stmt->execute(['user_id' => $user_id]);
+    $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+        // If still not found, redirect with error
+        header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
+        exit;
+    }
+}
+
+// Store lecturer_id in session for other pages to use
+$_SESSION['lecturer_id'] = $lecturer_dept['lecturer_id'];
+
+// First, add lecturer_id column to courses table if it doesn't exist
+try {
+    $pdo->query("ALTER TABLE courses ADD COLUMN lecturer_id INT NULL AFTER department_id");
+    $pdo->query("CREATE INDEX idx_lecturer_id ON courses(lecturer_id)");
+} catch (PDOException $e) {
+    // Column might already exist, continue
+}
+
+// Update courses to assign them to the current lecturer if not already assigned
+$update_stmt = $pdo->prepare("
+    UPDATE courses
+    SET lecturer_id = :lecturer_id
+    WHERE lecturer_id IS NULL AND department_id = :department_id
+");
+$update_stmt->execute([
+    'lecturer_id' => $lecturer_dept['lecturer_id'],
+    'department_id' => $lecturer_dept['department_id']
+]);
+
+// Fetch courses for this lecturer
 $sql = "
-  SELECT 
+  SELECT
     c.id AS course_id,
     c.name AS course_name,
-    c.code AS course_code,
+    c.course_code AS course_code,
     d.name AS department_name,
-    o.name AS option_name,
-    cl.year AS class_year
-  FROM course_assignments ca
-  INNER JOIN courses c ON ca.course_id = c.id
+    c.credits,
+    c.duration_hours
+  FROM courses c
   INNER JOIN departments d ON c.department_id = d.id
-  INNER JOIN options o ON c.option_id = o.id
-  INNER JOIN classes cl ON c.class_id = cl.id
-  WHERE ca.lecturer_id = ?
+  WHERE c.lecturer_id = ? AND c.status = 'active'
+  ORDER BY c.name ASC
 ";
 $stmt = $pdo->prepare($sql);
-$stmt->execute([$user_id]);
+$stmt->execute([$lecturer_dept['lecturer_id']]);
 $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
@@ -46,7 +101,7 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
   <style>
     body {
       font-family: 'Segoe UI', sans-serif;
-      background-color: #f5f7fa;
+      background: linear-gradient(to right, #0066cc, #003366);
     }
     .sidebar {
       position: fixed;
@@ -66,7 +121,7 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     .sidebar a:hover,
     .sidebar a.active {
-      background-color: #0059b3;
+      background-color: #0066cc;
     }
     .topbar {
       margin-left: 250px;
@@ -153,9 +208,9 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
               <?= htmlspecialchars($course['course_code']) ?>
             </p>
             <p class="small text-muted mb-2">
-              Dept: <?= htmlspecialchars($course['department_name']) ?> | 
-              Option: <?= htmlspecialchars($course['option_name']) ?> | 
-              Class: Year <?= htmlspecialchars($course['class_year']) ?>
+              Dept: <?= htmlspecialchars($course['department_name']) ?> |
+              Credits: <?= htmlspecialchars($course['credits']) ?> |
+              Duration: <?= htmlspecialchars($course['duration_hours']) ?> hrs
             </p>
             <div>
               <a href="attendance-session.php?course_id=<?= $course['course_id'] ?>" class="btn btn-sm btn-primary btn-action">

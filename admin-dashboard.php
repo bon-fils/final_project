@@ -111,11 +111,11 @@ extract($dashboard_stats);
 
     <style>
         :root {
-            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-            --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-            --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+            --success-gradient: linear-gradient(135deg, #0066cc 0%, #004080 100%);
+            --warning-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            --info-gradient: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
             --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
             --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
             --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
@@ -124,7 +124,7 @@ extract($dashboard_stats);
         }
 
         body {
-            background: var(--primary-gradient);
+            background: linear-gradient(to right, #0066cc, #003366);
             min-height: 100vh;
             font-family: 'Segoe UI', 'Roboto', sans-serif;
             margin: 0;
@@ -199,15 +199,15 @@ extract($dashboard_stats);
         }
 
         .sidebar-nav a:hover {
-            background: rgba(102, 126, 234, 0.1);
-            color: #667eea;
+            background: rgba(0, 102, 204, 0.1);
+            color: #0066cc;
             transform: translateX(5px);
         }
 
         .sidebar-nav a.active {
             background: var(--primary-gradient);
             color: white;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
         }
 
         .sidebar-nav a i {
@@ -368,13 +368,13 @@ extract($dashboard_stats);
         .btn-primary {
             background: var(--primary-gradient);
             border: none;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
         }
 
         .btn-primary:hover {
             background: var(--primary-gradient);
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
         }
 
         .alert {
@@ -415,7 +415,7 @@ extract($dashboard_stats);
         }
 
         .loading-overlay .spinner-border {
-            color: #667eea;
+            color: #0066cc;
             width: 3rem;
             height: 3rem;
         }

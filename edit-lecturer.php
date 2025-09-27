@@ -73,10 +73,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($stmt->fetchColumn() > 0) {
                 throw new Exception('Email or ID Number already exists.');
             }
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ? AND id != (SELECT user_id FROM lecturers WHERE id = ?)");
-            $stmt->execute([$email, $lecturer_id]);
+            // Check if email exists in users table for other users (not this lecturer)
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ?");
+            $stmt->execute([$email]);
             if ($stmt->fetchColumn() > 0) {
-                throw new Exception('Email already exists in the system.');
+                // Email exists, but check if it's the same lecturer's email
+                $stmt = $pdo->prepare("SELECT email FROM lecturers WHERE id = ?");
+                $stmt->execute([$lecturer_id]);
+                $current_email = $stmt->fetchColumn();
+                if ($email !== $current_email) {
+                    throw new Exception('Email already exists in the system.');
+                }
             }
 
             $pdo->beginTransaction();
@@ -88,9 +95,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
             // Update users table if email changed
+            // Note: Since there's no direct relationship between lecturers and users tables,
+            // we'll skip the users table update for now to avoid the column error.
+            // In a real implementation, you might want to establish this relationship properly.
             if ($email !== $lecturer['email']) {
-                $stmt = $pdo->prepare("UPDATE users SET email = ? WHERE id = (SELECT user_id FROM lecturers WHERE id = ?)");
-                $stmt->execute([$email, $lecturer_id]);
+                // For now, we'll just log this change instead of trying to update users table
+                error_log("Email changed for lecturer ID $lecturer_id from {$lecturer['email']} to $email - users table not updated due to missing user_id column");
             }
 
             $pdo->commit();
@@ -114,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body{font-family:'Segoe UI',sans-serif;background:#f4f6f9;margin:0;}
+body{font-family:'Segoe UI',sans-serif;background:linear-gradient(to right, #0066cc, #003366);margin:0;}
 .sidebar{position:fixed;top:0;left:0;width:250px;height:100vh;background:#003366;color:white;padding-top:20px;overflow:auto;}
 .sidebar .sidebar-header{text-align:center;margin-bottom:20px;}
 .sidebar a{display:block;padding:12px 20px;color:#fff;text-decoration:none;font-weight:500;}

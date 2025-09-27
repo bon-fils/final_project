@@ -1,21 +1,14 @@
 <?php
-/**
- * Test Manage Users Backend - No Session Required
- */
+require_once "config.php";
 
-header('Content-Type: application/json');
-
+echo "=== Testing database connection ===\n";
 try {
-    require_once "config.php";
+    $stmt = $pdo->query("SELECT COUNT(*) as count FROM users");
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    echo "Total users in database: " . $result['count'] . "\n";
 
-    // Test database connection
-    if (!$pdo) {
-        throw new Exception('Database connection failed');
-    }
-
-    // Test getAllUsers function
-    $users = [];
-    $stmt = $pdo->prepare("
+    echo "\n=== Testing users query ===\n";
+    $sql = "
         SELECT
             u.id,
             u.username,
@@ -42,57 +35,18 @@ try {
         LEFT JOIN lecturers l ON u.email = l.email AND u.role IN ('lecturer', 'hod')
         ORDER BY u.created_at DESC
         LIMIT 5
-    ");
+    ";
 
+    $stmt = $pdo->prepare($sql);
     $stmt->execute();
     $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Test getUserStats function
-    $stmt = $pdo->prepare("
-        SELECT
-            role,
-            status,
-            COUNT(*) as count
-        FROM users
-        GROUP BY role, status
-    ");
+    echo "Found " . count($users) . " users\n";
+    foreach ($users as $user) {
+        echo "User: {$user['username']} ({$user['role']}) - {$user['first_name']} {$user['last_name']}\n";
+    }
 
-    $stmt->execute();
-    $roleStats = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $total = array_sum(array_column($roleStats, 'count'));
-    $active = array_sum(array_column(array_filter($roleStats, fn($s) => $s['status'] === 'active'), 'count'));
-    $inactive = array_sum(array_column(array_filter($roleStats, fn($s) => $s['status'] === 'inactive'), 'count'));
-    $suspended = array_sum(array_column(array_filter($roleStats, fn($s) => $s['status'] === 'suspended'), 'count'));
-
-    $stats = [
-        'total' => $total,
-        'active' => $active,
-        'inactive' => $inactive,
-        'suspended' => $suspended
-    ];
-
-    echo json_encode([
-        'status' => 'success',
-        'message' => 'Backend test successful',
-        'data' => [
-            'users' => $users,
-            'stats' => $stats,
-            'user_count' => count($users),
-            'database_connected' => true,
-            'timestamp' => time()
-        ]
-    ]);
-
-} catch (Exception $e) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => $e->getMessage(),
-        'debug' => [
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'trace' => $e->getTraceAsString()
-        ]
-    ]);
+} catch (PDOException $e) {
+    echo "Database error: " . $e->getMessage() . "\n";
 }
 ?>

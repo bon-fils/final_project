@@ -75,20 +75,20 @@ if (isset($_GET['success'])) {
 <style>
 /* ===== CSS CUSTOM PROPERTIES ===== */
 :root {
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --primary-gradient-hover: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
-  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-  --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-  --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-  --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+  --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #0052a3 0%, #002b50 100%);
+  --secondary-gradient: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
+  --success-gradient: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  --warning-gradient: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+  --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  --info-gradient: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
   --light-gradient: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
   --glass-gradient: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
 
   --shadow-light: 0 4px 15px rgba(0, 0, 0, 0.08);
   --shadow-medium: 0 8px 25px rgba(0, 0, 0, 0.15);
   --shadow-heavy: 0 12px 35px rgba(0, 0, 0, 0.2);
-  --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.3);
+  --shadow-glow: 0 0 20px rgba(0, 102, 204, 0.3);
   --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.1);
 
   --border-radius: 16px;
@@ -105,7 +105,7 @@ if (isset($_GET['success'])) {
 
 /* ===== BODY & BASE STYLES ===== */
 body {
-  background: var(--light-gradient);
+  background: linear-gradient(to right, #0066cc, #003366);
   min-height: 100vh;
   font-family: var(--font-primary);
   margin: 0;
@@ -126,10 +126,10 @@ body::before {
   right: 0;
   bottom: 0;
   background:
-    radial-gradient(circle at 20% 80%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
-    radial-gradient(circle at 80% 20%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
-    radial-gradient(circle at 40% 40%, rgba(79, 172, 254, 0.1) 0%, transparent 50%),
-    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="40" cy="40" r="1" fill="rgba(102,126,234,0.08)"/><circle cx="160" cy="160" r="1" fill="rgba(102,126,234,0.08)"/><circle cx="120" cy="80" r="0.5" fill="rgba(102,126,234,0.08)"/><circle cx="80" cy="120" r="0.5" fill="rgba(102,126,234,0.08)"/></svg>');
+    radial-gradient(circle at 20% 80%, rgba(0, 102, 204, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(0, 51, 102, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(23, 162, 184, 0.1) 0%, transparent 50%),
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="40" cy="40" r="1" fill="rgba(0,102,204,0.08)"/><circle cx="160" cy="160" r="1" fill="rgba(0,102,204,0.08)"/><circle cx="120" cy="80" r="0.5" fill="rgba(0,102,204,0.08)"/><circle cx="80" cy="120" r="0.5" fill="rgba(0,102,204,0.08)"/></svg>');
   pointer-events: none;
   z-index: -1;
   animation: backgroundFloat 20s ease-in-out infinite;
@@ -308,7 +308,7 @@ body::before {
   text-align: center;
   margin-bottom: 40px;
   padding-bottom: 25px;
-  border-bottom: 2px solid rgba(102, 126, 234, 0.1);
+  border-bottom: 2px solid rgba(0, 102, 204, 0.1);
   position: relative;
 }
 
@@ -362,8 +362,8 @@ body::before {
 
 /* ===== FORM SECTIONS ===== */
 .form-section {
-  background: rgba(102, 126, 234, 0.02);
-  border: 1px solid rgba(102, 126, 234, 0.1);
+  background: rgba(0, 102, 204, 0.02);
+  border: 1px solid rgba(0, 102, 204, 0.1);
   border-radius: var(--border-radius-sm);
   padding: 25px;
   margin-bottom: 25px;
@@ -372,8 +372,8 @@ body::before {
 }
 
 .form-section:hover {
-  background: rgba(102, 126, 234, 0.05);
-  border-color: rgba(102, 126, 234, 0.2);
+  background: rgba(0, 102, 204, 0.05);
+  border-color: rgba(0, 102, 204, 0.2);
   transform: translateY(-1px);
 }
 
@@ -400,7 +400,7 @@ body::before {
 }
 
 .form-section-title i {
-  color: #667eea;
+  color: #0066cc;
   margin-right: 10px;
 }
 
@@ -415,7 +415,7 @@ body::before {
 }
 
 .form-label:hover {
-  color: #667eea;
+  color: #0066cc;
 }
 
 .form-control, .form-select {
@@ -430,13 +430,13 @@ body::before {
 }
 
 .form-control:hover, .form-select:hover {
-  border-color: #667eea;
+  border-color: #0066cc;
   transform: translateY(-1px);
 }
 
 .form-control:focus, .form-select:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.15), var(--shadow-light);
+  border-color: #0066cc;
+  box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.15), var(--shadow-light);
   background: white;
   transform: translateY(-1px);
 }
@@ -489,8 +489,8 @@ textarea.form-control {
 }
 
 .btn-outline-primary {
-  border: 2px solid #667eea;
-  color: #667eea;
+  border: 2px solid #0066cc;
+  color: #0066cc;
   background: transparent;
   transition: var(--transition);
 }
@@ -590,7 +590,7 @@ textarea.form-control {
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(45deg, transparent 48%, rgba(102, 126, 234, 0.02) 50%, transparent 52%);
+  background: linear-gradient(45deg, transparent 48%, rgba(0, 102, 204, 0.02) 50%, transparent 52%);
   pointer-events: none;
 }
 
@@ -630,7 +630,7 @@ textarea.form-control {
 .table tbody td {
   padding: 18px 15px;
   border: none;
-  border-bottom: 1px solid rgba(102, 126, 234, 0.06);
+  border-bottom: 1px solid rgba(0, 102, 204, 0.06);
   vertical-align: middle;
   transition: var(--transition-fast);
   position: relative;
@@ -661,10 +661,10 @@ textarea.form-control {
 }
 
 .table tbody tr:hover {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.06) 0%, rgba(118, 75, 162, 0.04) 100%);
+  background: linear-gradient(135deg, rgba(0, 102, 204, 0.06) 0%, rgba(0, 51, 102, 0.04) 100%);
   transform: translateY(-1px) translateX(2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
-  border-left: 3px solid #667eea;
+  box-shadow: 0 4px 12px rgba(0, 102, 204, 0.15);
+  border-left: 3px solid #0066cc;
 }
 
 .table tbody tr:hover td {
@@ -680,7 +680,7 @@ textarea.form-control {
 /* ===== TABLE CELL SPECIFIC STYLING ===== */
 .table tbody td:first-child {
   font-weight: 700;
-  color: #667eea;
+  color: #0066cc;
   text-align: center;
   width: 50px;
   min-width: 50px;
@@ -742,14 +742,14 @@ textarea.form-control {
 }
 
 .reason-text:hover {
-  color: #667eea;
+  color: #0066cc;
   -webkit-line-clamp: 4;
 }
 
 /* ===== DATE BADGE STYLING ===== */
 .date-badge {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.06) 100%);
-  color: #667eea;
+  background: linear-gradient(135deg, rgba(0, 102, 204, 0.08) 0%, rgba(0, 51, 102, 0.06) 100%);
+  color: #0066cc;
   padding: 6px 12px;
   border-radius: 8px;
   font-size: 0.75rem;
@@ -758,11 +758,11 @@ textarea.form-control {
   min-width: 95px;
   max-width: 115px;
   text-align: center;
-  border: 1px solid rgba(102, 126, 234, 0.15);
+  border: 1px solid rgba(0, 102, 204, 0.15);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.08);
+  box-shadow: 0 2px 4px rgba(0, 102, 204, 0.08);
   transition: var(--transition-fast);
   position: relative;
 }
@@ -781,8 +781,8 @@ textarea.form-control {
 
 .date-badge:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.15);
-  border-color: rgba(102, 126, 234, 0.25);
+  box-shadow: 0 4px 8px rgba(0, 102, 204, 0.15);
+  border-color: rgba(0, 102, 204, 0.25);
 }
 
 /* ===== STATUS BADGE IMPROVEMENTS ===== */
@@ -873,7 +873,7 @@ textarea.form-control {
 
 .request-time:hover .request-time-detail {
   opacity: 1;
-  color: #667eea;
+  color: #0066cc;
 }
 
 /* ===== DOCUMENT PLACEHOLDER ===== */
@@ -926,7 +926,7 @@ textarea.form-control {
   overflow-x: auto;
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
-  border: 1px solid rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(0, 102, 204, 0.1);
   position: relative;
 }
 
@@ -946,7 +946,7 @@ textarea.form-control {
 }
 
 .table-responsive::-webkit-scrollbar-track {
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(0, 102, 204, 0.1);
   border-radius: 4px;
   margin: 0 2px;
 }
@@ -981,13 +981,13 @@ textarea.form-control {
 
 /* ===== DATE BADGE ENHANCEMENTS ===== */
 .date-badge {
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 102, 204, 0.1);
   transition: var(--transition-fast);
 }
 
 .date-badge:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.2);
+  box-shadow: 0 4px 8px rgba(0, 102, 204, 0.2);
 }
 
 /* ===== TABLE ENHANCEMENTS ===== */
@@ -1009,8 +1009,8 @@ textarea.form-control {
 }
 
 .date-badge {
-  background: rgba(102, 126, 234, 0.1);
-  color: #667eea;
+  background: rgba(0, 102, 204, 0.1);
+  color: #0066cc;
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 0.85rem;
@@ -1142,7 +1142,7 @@ textarea.form-control {
 .progress {
   border-radius: 2px;
   overflow: hidden;
-  background-color: rgba(102, 126, 234, 0.1);
+  background-color: rgba(0, 102, 204, 0.1);
 }
 
 .progress-bar {
@@ -1210,13 +1210,13 @@ textarea.form-control {
 
 @keyframes focusPulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4);
+    box-shadow: 0 0 0 0 rgba(0, 102, 204, 0.4);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(102, 126, 234, 0);
+    box-shadow: 0 0 0 10px rgba(0, 102, 204, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0);
+    box-shadow: 0 0 0 0 rgba(0, 102, 204, 0);
   }
 }
 
@@ -1642,12 +1642,12 @@ textarea.form-control {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+  background: linear-gradient(135deg, #0052a3 0%, #002b50 100%);
 }
 
 /* ===== FORM ENHANCEMENTS ===== */
 .course-select-wrapper {
-  background: rgba(102, 126, 234, 0.05);
+  background: rgba(0, 102, 204, 0.05);
   border-radius: 8px;
   padding: 20px;
   margin: 15px 0;
@@ -1656,8 +1656,8 @@ textarea.form-control {
 }
 
 .course-select-wrapper.show {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.08);
+  border-color: #0066cc;
+  background: rgba(0, 102, 204, 0.08);
 }
 
 .file-upload-area {
@@ -1666,7 +1666,7 @@ textarea.form-control {
   padding: 30px 20px;
   text-align: center;
   transition: var(--transition);
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.02) 0%, rgba(118, 75, 162, 0.02) 100%);
+  background: linear-gradient(135deg, rgba(0, 102, 204, 0.02) 0%, rgba(0, 51, 102, 0.02) 100%);
   position: relative;
   overflow: hidden;
 }
@@ -1678,7 +1678,7 @@ textarea.form-control {
   left: -50%;
   width: 200%;
   height: 200%;
-  background: conic-gradient(from 0deg, transparent, rgba(102, 126, 234, 0.05), transparent);
+  background: conic-gradient(from 0deg, transparent, rgba(0, 102, 204, 0.05), transparent);
   transition: var(--transition-slow);
   opacity: 0;
 }
@@ -1694,15 +1694,15 @@ textarea.form-control {
 }
 
 .file-upload-area:hover {
-  border-color: #667eea;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.05) 100%);
+  border-color: #0066cc;
+  background: linear-gradient(135deg, rgba(0, 102, 204, 0.08) 0%, rgba(0, 51, 102, 0.05) 100%);
   transform: translateY(-2px);
   box-shadow: var(--shadow-light);
 }
 
 .file-upload-area.dragover {
-  border-color: #667eea;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-color: #0066cc;
+  background: linear-gradient(135deg, rgba(0, 102, 204, 0.15) 0%, rgba(0, 51, 102, 0.1) 100%);
   transform: scale(1.02);
   box-shadow: var(--shadow-medium);
 }
@@ -1718,7 +1718,7 @@ textarea.form-control {
 
 .file-upload-area:hover .file-upload-content i {
   transform: scale(1.1);
-  color: #667eea !important;
+  color: #0066cc !important;
 }
 </style>
 </head>

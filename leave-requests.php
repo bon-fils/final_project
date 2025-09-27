@@ -40,7 +40,7 @@ if ($userRole === 'student' && $user_id) {
   <style>
     body {
       font-family: 'Segoe UI', sans-serif;
-      background-color: #f5f7fa;
+      background: linear-gradient(to right, #0066cc, #003366);
       margin: 0;
     }
     .sidebar {

@@ -67,7 +67,7 @@ if (!check_rate_limit($login_attempts_key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_TIM
                     $storedPassword = (string)($user['password'] ?? '');
 
                     // If stored is a hash, verify securely; otherwise fall back to plain and upgrade to hash-on-login
-                    $looksHashed = str_starts_with($storedPassword, '$2y$') || str_starts_with($storedPassword, '$argon2');
+                    $looksHashed = (strpos($storedPassword, '$2y$') === 0) || (strpos($storedPassword, '$argon2') === 0);
 
                     if ($looksHashed) {
                         $isAuthenticated = password_verify($password, $storedPassword);

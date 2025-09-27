@@ -1,41 +1,118 @@
 <?php
-session_start();
-require_once "config.php"; // PDO connection
-require_once "session_check.php";
-require_role(['hod']);
+require_once "config.php"; // PDO connection - must be first
+require_once "session_check.php"; // Session management - requires config.php constants
+session_start(); // Start session after config and session_check
 
-// Get HoD department info
-$deptStmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
-$deptStmt->execute([$user_id]);
-$department = $deptStmt->fetch();
-if (!$department) die("Department not found.");
-
-// Handle approve/reject actions via POST
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['action'])) {
-    $leave_id = intval($_POST['leave_id']);
-    $action = $_POST['action'] === 'approve' ? 'approved' : 'rejected';
-
-    $updStmt = $pdo->prepare("UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?");
-    $success = $updStmt->execute([$action, $user_id, $leave_id]);
-
-    header('Content-Type: application/json');
-    echo json_encode(['success'=>$success, 'status'=>$action]);
+// Check if user is logged in and has HOD role
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'hod') {
+    header("Location: login.php?error=unauthorized");
     exit;
 }
 
+require_role(['hod']);
+
+// Get HoD department info
+$hod_id = $_SESSION['user_id'];
+try {
+    $deptStmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
+    $deptStmt->execute([$hod_id]);
+    $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Database error in hod-leave-management.php: " . $e->getMessage());
+    echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
+    echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Database Error</h3>";
+    echo "<p>There was an error connecting to the database. Please try again later.</p>";
+    echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
+    echo "</div>";
+    exit;
+}
+
+if (!$department) {
+    // Debug information
+    error_log("Department not found for HoD ID: $hod_id in leave management");
+    error_log("Session data: " . print_r($_SESSION, true));
+
+    // Check if departments table exists and has data
+    $checkStmt = $pdo->prepare("SELECT COUNT(*) as count FROM departments");
+    $checkStmt->execute();
+    $deptCount = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+    error_log("Total departments in database: " . $deptCount['count']);
+
+    if ($deptCount['count'] > 0) {
+        $deptListStmt = $pdo->prepare("SELECT id, name, hod_id FROM departments");
+        $deptListStmt->execute();
+        $departments = $deptListStmt->fetchAll(PDO::FETCH_ASSOC);
+        error_log("Available departments: " . print_r($departments, true));
+    }
+
+    echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
+    echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Department Not Found</h3>";
+    echo "<p>It appears you are not properly assigned as Head of Department for any department.</p>";
+    echo "<p><strong>Debug Information:</strong></p>";
+    echo "<ul>";
+    echo "<li>Your User ID: <strong>$hod_id</strong></li>";
+    echo "<li>Your Role: <strong>" . ($_SESSION['role'] ?? 'Not set') . "</strong></li>";
+    echo "<li>Total Departments: <strong>" . $deptCount['count'] . "</strong></li>";
+    echo "</ul>";
+
+    if ($deptCount['count'] > 0) {
+        echo "<p><strong>Available Departments:</strong></p>";
+        echo "<ul>";
+        foreach ($departments as $dept) {
+            echo "<li>{$dept['name']} (ID: {$dept['id']}, HoD ID: {$dept['hod_id']})</li>";
+        }
+        echo "</ul>";
+        echo "<p><strong>Solution:</strong> Please contact your administrator to assign you as HoD for a department.</p>";
+    } else {
+        echo "<p><strong>Solution:</strong> No departments exist in the system. Please contact your administrator to create departments first.</p>";
+    }
+
+    echo "<hr style='margin: 20px 0;'>";
+    echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
+    echo "</div>";
+
+    exit;
+}
+
+// Handle approve/reject actions via POST
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['action'])) {
+    try {
+        $leave_id = intval($_POST['leave_id']);
+        $action = $_POST['action'] === 'approve' ? 'approved' : 'rejected';
+
+        $updStmt = $pdo->prepare("UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?");
+        $success = $updStmt->execute([$action, $hod_id, $leave_id]);
+
+        header('Content-Type: application/json');
+        echo json_encode(['success' => $success, 'status' => $action]);
+        exit;
+    } catch (PDOException $e) {
+        error_log("Error updating leave request in hod-leave-management.php: " . $e->getMessage());
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Database error']);
+        exit;
+    }
+}
+
 // Fetch leave requests for this department
-$leaveStmt = $pdo->prepare("
-    SELECT lr.id, lr.student_id, lr.reason, lr.supporting_file, lr.status,
-           lr.from_date, lr.to_date, lr.requested_at,
-           s.first_name, s.last_name, s.year_level, d.name as department_name
-    FROM leave_requests lr
-    INNER JOIN students s ON lr.student_id = s.id
-    INNER JOIN departments d ON s.department_id = d.id
-    WHERE s.department_id = ?
-    ORDER BY lr.requested_at DESC
-");
-$leaveStmt->execute([$department['id']]);
-$leaveRequests = $leaveStmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $leaveStmt = $pdo->prepare("
+        SELECT lr.id, lr.student_id, lr.reason, lr.supporting_file, lr.status,
+               lr.from_date, lr.to_date, lr.requested_at,
+               s.first_name, s.last_name, s.year_level, d.name as department_name
+        FROM leave_requests lr
+        INNER JOIN students s ON lr.student_id = s.id
+        INNER JOIN departments d ON s.department_id = d.id
+        WHERE s.department_id = ?
+        ORDER BY lr.requested_at DESC
+    ");
+    $leaveStmt->execute([$department['id']]);
+    $leaveRequests = $leaveStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Error fetching leave requests in hod-leave-management.php: " . $e->getMessage());
+    $leaveRequests = [];
+}
 
 // If AJAX request to refresh table only
 if(isset($_GET['ajax'])){
@@ -73,7 +150,7 @@ if(isset($_GET['ajax'])){
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
+body { font-family:'Segoe UI',sans-serif; background:linear-gradient(to right, #0066cc, #003366); margin:0; }
 .sidebar { position:fixed; top:0; left:0; width:250px; height:100vh; background:#003366; color:white; padding-top:20px; }
 .sidebar a { display:block; padding:12px 20px; color:#fff; text-decoration:none; }
 .sidebar a:hover, .sidebar a.active { background:#0059b3; }
@@ -193,16 +270,16 @@ function handleAction(e){
 
 tableBody.addEventListener('click', handleAction);
 
-// Auto-refresh every 30 seconds
-function refreshTable(){
-  fetch('hod-leave-management.php?ajax=1')
-    .then(res=>res.text())
-    .then(html=>{
-      if(html) tableBody.innerHTML = html;
-    }).catch(err=>console.log('Refresh error:', err));
-}
-setInterval(refreshTable, 30000);
-</script>
+    // Auto-refresh every 30 seconds
+    function refreshTable(){
+      fetch('hod-leave-management.php?ajax=1')
+        .then(res=>res.text())
+        .then(html=>{
+          if(html) tableBody.innerHTML = html;
+        }).catch(err=>console.log('Refresh error:', err));
+    }
+    setInterval(refreshTable, 30000);
+  </script>
 
 </body>
 </html>

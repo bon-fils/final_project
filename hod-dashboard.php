@@ -1,6 +1,6 @@
 <?php
+require_once "config.php"; // PDO connection - must be first
 session_start();
-require_once "config.php";
 require_once "session_check.php";
 
 // Ensure user is logged in and is HoD
@@ -48,8 +48,9 @@ try {
 $stats = [];
 try {
     // Get department ID for this HoD
+    $hod_id = $_SESSION['user_id'];
     $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
-    $stmt->execute([$user_id]);
+    $stmt->execute([$hod_id]);
     $department = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($department) {
@@ -125,6 +126,7 @@ try {
         'total_lecturers' => 0
     ];
 }
+
 ?>
 
 <!DOCTYPE html>
@@ -143,7 +145,7 @@ try {
   <style>
     body {
       font-family: 'Segoe UI', sans-serif;
-      background-color: #f5f7fa;
+      background: linear-gradient(to right, #0066cc, #003366);
       margin: 0;
     }
 
@@ -311,6 +313,8 @@ try {
     <a href="hod-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
     <a href="hod-department-reports.php"><i class="fas fa-chart-bar me-2"></i> Department Reports</a>
     <a href="hod-leave-management.php"><i class="fas fa-envelope-open-text me-2"></i> Manage Leave Requests</a>
+    <a href="#" onclick="showCourseAssignmentModal()"><i class="fas fa-book me-2"></i> Assign Courses</a>
+    <a href="hod-manage-lecturers.php"><i class="fas fa-user-plus me-2"></i> Manage Lecturers</a>
     <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
   </div>
 
@@ -421,6 +425,9 @@ try {
           <a href="hod-manage-lecturers.php" class="btn btn-primary mb-2 w-100">
             <i class="fas fa-user-plus me-2"></i> Manage Lecturers
           </a>
+          <button type="button" class="btn btn-primary mb-2 w-100" onclick="showCourseAssignmentModal()">
+            <i class="fas fa-book me-2"></i> Assign Courses
+          </button>
           <a href="manage-departments.php" class="btn btn-outline-primary w-100">
             <i class="fas fa-cog me-2"></i> Department Settings
           </a>
@@ -436,7 +443,7 @@ try {
             try {
                 // Get department ID first
                 $dept_stmt = $pdo->prepare("SELECT id FROM departments WHERE hod_id = ?");
-                $dept_stmt->execute([$user_id]);
+                $dept_stmt->execute([$hod_id]);
                 $department = $dept_stmt->fetch(PDO::FETCH_ASSOC);
 
                 if ($department) {
@@ -474,6 +481,35 @@ try {
                 echo "<p class='text-muted mb-0'><i class='fas fa-exclamation-triangle me-1'></i> Unable to load activity</p>";
             }
             ?>
+          </div>
+        </div>
+      </div>
+
+      <!-- Course Assignment Section -->
+      <div class="col-12">
+        <div class="card p-4 mt-3">
+          <h6 class="mb-3"><i class="fas fa-book me-2"></i>Course Assignment Overview</h6>
+          <div class="table-responsive">
+            <table class="table table-striped">
+              <thead>
+                <tr>
+                  <th>Lecturer</th>
+                  <th>Email</th>
+                  <th>Assigned Courses</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <div id="assignmentTableContent">
+                  <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                      <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading course assignments...</p>
+                  </div>
+                </div>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -536,6 +572,34 @@ try {
     </div>
   </div>
 
+  <!-- Course Assignment Modal -->
+  <div class="modal fade" id="courseAssignmentModal" tabindex="-1" aria-labelledby="courseAssignmentModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="courseAssignmentModalLabel"><i class="fas fa-book me-2"></i>Assign Courses</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="assignmentContent">
+            <div class="text-center">
+              <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+              </div>
+              <p class="mt-2">Loading course assignment...</p>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" onclick="saveCourseAssignments()">
+            <i class="fas fa-save me-2"></i>Save Assignments
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Footer -->
   <div class="footer">
     &copy; 2025 Rwanda Polytechnic | HoD Panel
@@ -543,6 +607,222 @@ try {
 
   <!-- JavaScript -->
   <script>
+    // Global variables for course assignment
+    let currentLecturerId = null;
+    let currentLecturerName = '';
+    let availableCourses = [];
+    let assignedCourses = [];
+
+    function showCourseAssignmentModal() {
+      const modal = new bootstrap.Modal(document.getElementById('courseAssignmentModal'));
+      modal.show();
+      loadCourseAssignmentData();
+    }
+
+    function assignCourses(lecturerId, lecturerName) {
+      currentLecturerId = lecturerId;
+      currentLecturerName = lecturerName;
+      showCourseAssignmentModal();
+    }
+
+    function loadCourseAssignmentData() {
+      const content = document.getElementById('assignmentContent');
+      content.innerHTML = `
+        <div class="text-center">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p class="mt-2">Loading course assignment data...</p>
+        </div>
+      `;
+
+      // Load available courses and current assignments
+      Promise.all([
+        fetch('api/assign-courses-api.php?action=get_courses'),
+        fetch('api/assign-courses-api.php?action=get_assigned_courses', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ lecturer_id: currentLecturerId })
+        })
+      ])
+      .then(responses => Promise.all(responses.map(r => r.json())))
+      .then(data => {
+        availableCourses = data[0];
+        assignedCourses = data[1];
+        renderCourseAssignmentInterface();
+      })
+      .catch(error => {
+        console.error('Error loading course data:', error);
+        content.innerHTML = `
+          <div class="alert alert-danger">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            Error loading course assignment data. Please try again.
+          </div>
+        `;
+      });
+    }
+
+    function renderCourseAssignmentInterface() {
+      const content = document.getElementById('assignmentContent');
+      const modalTitle = document.getElementById('courseAssignmentModalLabel');
+      modalTitle.innerHTML = `<i class="fas fa-book me-2"></i>Assign Courses to ${currentLecturerName}`;
+
+      content.innerHTML = `
+        <div class="row">
+          <div class="col-md-6">
+            <h6><i class="fas fa-list me-2"></i>Available Courses</h6>
+            <div class="border rounded p-3" style="max-height: 300px; overflow-y: auto;">
+              ${availableCourses.map(course => `
+                <div class="form-check mb-2">
+                  <input class="form-check-input" type="checkbox" value="${course.id}"
+                         id="course_${course.id}" ${assignedCourses.some(ac => ac.id === course.id) ? 'checked' : ''}>
+                  <label class="form-check-label" for="course_${course.id}">
+                    ${course.course_name} (${course.course_code})
+                  </label>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <div class="col-md-6">
+            <h6><i class="fas fa-check-circle me-2"></i>Currently Assigned</h6>
+            <div class="border rounded p-3" style="max-height: 300px; overflow-y: auto;">
+              <div id="assignedCoursesList">
+                ${assignedCourses.map(course => `
+                  <div class="badge bg-primary me-1 mb-1 p-2">
+                    ${course.course_name} (${course.course_code})
+                    <button type="button" class="btn-close btn-close-white ms-1" onclick="removeCourseAssignment(${course.id})"></button>
+                  </div>
+                `).join('')}
+              </div>
+              <div id="noAssignments" class="${assignedCourses.length === 0 ? '' : 'd-none'} text-muted">
+                No courses currently assigned
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function saveCourseAssignments() {
+      const selectedCourses = Array.from(document.querySelectorAll('#assignmentContent input[type="checkbox"]:checked'))
+        .map(cb => parseInt(cb.value));
+
+      if (!currentLecturerId) {
+        alert('No lecturer selected');
+        return;
+      }
+
+      const saveBtn = document.querySelector('#courseAssignmentModal .btn-primary');
+      const originalText = saveBtn.innerHTML;
+      saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
+      saveBtn.disabled = true;
+
+      fetch('api/assign-courses-api.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'save_course_assignments',
+          lecturer_id: currentLecturerId,
+          course_ids: selectedCourses
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Close modal and refresh page
+          bootstrap.Modal.getInstance(document.getElementById('courseAssignmentModal')).hide();
+          location.reload();
+        } else {
+          alert('Error saving course assignments: ' + data.message);
+        }
+      })
+      .catch(error => {
+        console.error('Error saving assignments:', error);
+        alert('Error saving course assignments. Please try again.');
+      })
+      .finally(() => {
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
+      });
+    }
+
+    function removeCourseAssignment(courseId) {
+      const checkbox = document.getElementById('course_' + courseId);
+      if (checkbox) {
+        checkbox.checked = false;
+        updateAssignedCoursesDisplay();
+      }
+    }
+
+    function updateAssignedCoursesDisplay() {
+      const assignedList = document.getElementById('assignedCoursesList');
+      const noAssignments = document.getElementById('noAssignments');
+      const checkedBoxes = document.querySelectorAll('#assignmentContent input[type="checkbox"]:checked');
+
+      assignedList.innerHTML = Array.from(checkedBoxes).map(cb => {
+        const course = availableCourses.find(c => c.id == cb.value);
+        return `
+          <div class="badge bg-primary me-1 mb-1 p-2">
+            ${course.course_name} (${course.course_code})
+            <button type="button" class="btn-close btn-close-white ms-1" onclick="removeCourseAssignment(${course.id})"></button>
+          </div>
+        `;
+      }).join('');
+
+      if (checkedBoxes.length === 0) {
+        noAssignments.classList.remove('d-none');
+      } else {
+        noAssignments.classList.add('d-none');
+      }
+    }
+
+    // Add event listeners for checkboxes
+    document.addEventListener('change', function(e) {
+      if (e.target.type === 'checkbox' && e.target.id.startsWith('course_')) {
+        updateAssignedCoursesDisplay();
+      }
+    });
+
+    // Load course assignment overview table
+    function loadCourseAssignmentOverview() {
+      fetch('api/assign-courses-api.php?action=get_course_assignment_overview')
+        .then(response => response.json())
+        .then(data => {
+          const content = document.getElementById('assignmentTableContent');
+
+          if (data && data.length > 0) {
+            content.innerHTML = data.map(lecturer => `
+              <tr>
+                <td>${lecturer.first_name} ${lecturer.last_name}</td>
+                <td>${lecturer.email}</td>
+                <td>${lecturer.courses || '<span class="text-muted">No courses assigned</span>'}</td>
+                <td>
+                  <button class='btn btn-sm btn-primary' onclick='assignCourses(${lecturer.id}, "${lecturer.first_name} ${lecturer.last_name}")'>
+                    <i class='fas fa-plus me-1'></i>Assign
+                  </button>
+                </td>
+              </tr>
+            `).join('');
+          } else {
+            content.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No lecturers found in your department</td></tr>';
+          }
+        })
+        .catch(error => {
+          console.error('Error loading course assignments:', error);
+          document.getElementById('assignmentTableContent').innerHTML =
+            '<tr><td colspan="4" class="text-center text-danger">Error loading course assignments</td></tr>';
+        });
+    }
+
+    // Load course assignment overview on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      loadCourseAssignmentOverview();
+    });
+
     function updateEducationLevel() {
       const userType = document.getElementById("userType").value;
       const eduLabel = document.getElementById("eduLabel");

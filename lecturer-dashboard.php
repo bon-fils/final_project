@@ -3,6 +3,10 @@ session_start();
 require_once "config.php"; // $pdo connection
 require_once "session_check.php";
 require_once "dashboard_utils.php"; // Dashboard utility functions
+
+// Get user_id from session
+$user_id = $_SESSION['user_id'] ?? null;
+
 require_role(['lecturer']);
 
 // Debug logging
@@ -39,6 +43,66 @@ if (!$user_id) {
     session_destroy();
     header("Location: index.php?error=invalid_session");
     exit();
+}
+
+// Get lecturer's department_id first - join on email instead of ID
+$dept_stmt = $pdo->prepare("
+    SELECT l.department_id, l.id as lecturer_id, d.name as department_name
+    FROM lecturers l
+    INNER JOIN users u ON l.email = u.email
+    LEFT JOIN departments d ON l.department_id = d.id
+    WHERE u.id = :user_id AND u.role = 'lecturer'
+");
+$dept_stmt->execute(['user_id' => $user_id]);
+$lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+    // Try to create a lecturer record if it doesn't exist - but don't assign a default department
+    $create_lecturer_stmt = $pdo->prepare("
+        INSERT INTO lecturers (first_name, last_name, email, role, password)
+        SELECT
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
+            email, 'lecturer', '12345'
+        FROM users
+        WHERE id = :user_id AND role = 'lecturer'
+        ON DUPLICATE KEY UPDATE email = email
+    ");
+    $create_lecturer_stmt->execute(['user_id' => $user_id]);
+
+    // Try again to get the department
+    $dept_stmt->execute(['user_id' => $user_id]);
+    $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+        // If still not found, redirect with error
+        header("Location: index.php?error=lecturer_setup_required");
+        exit;
+    }
+}
+
+// Store lecturer_id and department info in session for other pages to use
+$_SESSION['lecturer_id'] = $lecturer_dept['lecturer_id'];
+$_SESSION['department_id'] = $lecturer_dept['department_id'];
+$_SESSION['department_name'] = $lecturer_dept['department_name'] ?? 'Not Assigned';
+
+// Handle error parameter
+if (isset($_GET['error'])) {
+    $error_message = '';
+    switch ($_GET['error']) {
+        case 'lecturer_not_found':
+            $error_message = 'Lecturer record not found. Please contact administrator.';
+            break;
+        case 'lecturer_setup_required':
+            $error_message = 'Lecturer setup required. Please contact administrator.';
+            break;
+        default:
+            $error_message = 'An error occurred. Please try again.';
+    }
+
+    echo '<div class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>' . htmlspecialchars($error_message) . '
+          </div>';
 }
 
 // Handle AJAX request
@@ -107,7 +171,7 @@ try {
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background: linear-gradient(to right, #0066cc, #003366);
     margin: 0;
     min-height: 100vh;
 }
@@ -116,7 +180,7 @@ body {
     position: fixed; top: 0; left: 0; width: 250px; height: 100vh;
     background: linear-gradient(180deg, var(--primary-color) 0%, var(--secondary-color) 100%);
     color: white; padding-top: 20px; box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-    z-index: 1000;
+    z-index: 1000; overflow-y: auto;
 }
 
 .sidebar a {
@@ -240,7 +304,17 @@ body {
     .sidebar, .topbar, .main-content, .footer {
         margin-left: 0 !important; width: 100%;
     }
-    .sidebar { display: none; }
+    .sidebar {
+        position: relative;
+        width: 100%;
+        height: auto;
+        display: block;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .sidebar a {
+        padding: 10px 15px;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
     .widget p { font-size: 2rem; }
 }
 
@@ -382,7 +456,21 @@ body {
 <div class="sidebar">
     <div class="text-center mb-4">
         <h4>👨‍🏫 Lecturer</h4>
-        <p class="small"><?= htmlspecialchars($lecturer_email) ?></p>
+        <p class="small mb-1">
+            <i class="fas fa-envelope me-1"></i>
+            <?= htmlspecialchars($lecturer_email) ?>
+        </p>
+        <?php if ($lecturer_dept['department_name']): ?>
+            <p class="small mb-2">
+                <i class="fas fa-building me-1"></i>
+                <strong><?= htmlspecialchars($lecturer_dept['department_name']) ?></strong>
+            </p>
+        <?php else: ?>
+            <p class="small mb-2 text-warning">
+                <i class="fas fa-exclamation-triangle me-1"></i>
+                <strong>Department Not Assigned</strong>
+            </p>
+        <?php endif; ?>
         <hr style="border-color: #ffffff66;">
     </div>
     <a href="lecturer-dashboard.php" class="active"><i class="fas fa-home me-2"></i> Dashboard</a>
@@ -404,7 +492,20 @@ body {
     <div class="row align-items-center">
         <div class="col-md-8">
             <h2 class="mb-2">Welcome back, <?= htmlspecialchars($lecturer_name) ?>! 👨‍🏫</h2>
-            <p class="text-muted mb-0">Here's your attendance management overview for today.</p>
+            <p class="text-muted mb-2">Here's your attendance management overview for today.</p>
+            <?php if ($lecturer_dept['department_name']): ?>
+                <p class="mb-0">
+                    <span class="badge bg-info">
+                        <i class="fas fa-building me-1"></i>
+                        Department: <?= htmlspecialchars($lecturer_dept['department_name']) ?>
+                    </span>
+                </p>
+            <?php else: ?>
+                <div class="alert alert-warning py-2 mb-0" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    <strong>Department Not Assigned:</strong> Please contact your administrator to assign you to a department.
+                </div>
+            <?php endif; ?>
         </div>
         <div class="col-md-4 text-end">
             <span class="badge bg-primary fs-6 p-2">
@@ -550,11 +651,20 @@ body {
     </div>
 </div>
 
-    <div class="nav-links mb-3">
-        <a href="my-courses.php" class="active">My Courses</a>
-        <a href="attendance-session.php">Start/Stop Session</a>
-        <a href="attendance-reports.php">Attendance Reports</a>
-        <a href="leave-requests.php">Leave Requests</a>
+    <div class="nav-links mb-4 p-3" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 10px; border-left: 4px solid var(--primary-color);">
+        <h6 class="mb-3 text-primary"><i class="fas fa-link me-2"></i>Quick Access</h6>
+        <a href="my-courses.php" class="btn btn-outline-primary me-2 mb-2">
+            <i class="fas fa-book me-1"></i>My Courses
+        </a>
+        <a href="attendance-session.php" class="btn btn-outline-success me-2 mb-2">
+            <i class="fas fa-video me-1"></i>Start/Stop Session
+        </a>
+        <a href="attendance-reports.php" class="btn btn-outline-info me-2 mb-2">
+            <i class="fas fa-chart-line me-1"></i>Attendance Reports
+        </a>
+        <a href="leave-requests.php" class="btn btn-outline-warning me-2 mb-2">
+            <i class="fas fa-envelope me-1"></i>Leave Requests
+        </a>
     </div>
 
     <!-- Charts and Analytics Section -->
@@ -612,23 +722,20 @@ body {
     <?php endif; ?>
 
     <!-- Navigation Links -->
-    <div class="card p-4 mb-4">
+    <div class="card p-4 mb-4" style="border-left: 4px solid var(--primary-color);">
         <h6 class="mb-3"><i class="fas fa-compass me-2"></i>Quick Navigation</h6>
         <div class="nav-links">
-            <a href="my-courses.php" class="me-3">
+            <a href="my-courses.php" class="btn btn-outline-primary me-2 mb-2">
                 <i class="fas fa-book me-1"></i>My Courses
             </a>
-            <a href="attendance-session.php" class="me-3">
+            <a href="attendance-session.php" class="btn btn-outline-success me-2 mb-2">
                 <i class="fas fa-video me-1"></i>Start/Stop Session
             </a>
-            <a href="attendance-reports.php" class="me-3">
+            <a href="attendance-reports.php" class="btn btn-outline-info me-2 mb-2">
                 <i class="fas fa-chart-line me-1"></i>Attendance Reports
             </a>
-            <a href="leave-requests.php" class="me-3">
+            <a href="leave-requests.php" class="btn btn-outline-warning me-2 mb-2">
                 <i class="fas fa-envelope me-1"></i>Leave Requests
-            </a>
-            <a href="system-logs.php">
-                <i class="fas fa-history me-1"></i>System Logs
             </a>
         </div>
     </div>

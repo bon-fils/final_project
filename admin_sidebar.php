@@ -100,7 +100,7 @@ if (isset($_SESSION['first_name']) && isset($_SESSION['last_name'])) {
     left: 0;
     width: 280px;
     height: 100vh;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
     padding: 0;
     box-shadow: 0 8px 25px rgba(0,0,0,0.15);
     z-index: 1000;
@@ -213,8 +213,8 @@ if (isset($_SESSION['first_name']) && isset($_SESSION['last_name'])) {
 }
 
 .logout-link:hover {
-    color: #ff6b6b !important;
-    background: rgba(255,107,107,0.1) !important;
+    color: #dc3545 !important;
+    background: rgba(220,53,69,0.1) !important;
 }
 
 @media (max-width: 768px) {

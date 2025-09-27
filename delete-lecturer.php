@@ -35,8 +35,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_delete'])) {
         $stmt = $pdo->prepare("DELETE FROM lecturers WHERE id = ?");
         $stmt->execute([$lecturer_id]);
 
-        // Delete from users
-        $stmt = $pdo->prepare("DELETE FROM users WHERE id = (SELECT user_id FROM lecturers WHERE id = ?)");
+        // Delete from users (join on email since lecturers table doesn't have user_id column)
+        $stmt = $pdo->prepare("DELETE FROM users WHERE email = (SELECT email FROM lecturers WHERE id = ?)");
         $stmt->execute([$lecturer_id]);
 
         // Delete photo if exists
@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_delete'])) {
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body{font-family:'Segoe UI',sans-serif;background:#f4f6f9;margin:0;}
+body{font-family:'Segoe UI',sans-serif;background:linear-gradient(to right, #0066cc, #003366);margin:0;}
 .sidebar{position:fixed;top:0;left:0;width:250px;height:100vh;background:#003366;color:white;padding-top:20px;overflow:auto;}
 .sidebar .sidebar-header{text-align:center;margin-bottom:20px;}
 .sidebar a{display:block;padding:12px 20px;color:#fff;text-decoration:none;font-weight:500;}

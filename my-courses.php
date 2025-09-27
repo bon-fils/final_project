@@ -1,22 +1,86 @@
 <?php
 session_start();
 require_once "config.php"; // $pdo connection
+require_once "session_check.php";
+require_role(['lecturer']);
 
-// Ensure lecturer is logged in
-$lecturer_id = $_SESSION['lecturer_id'] ?? null;
-if (!$lecturer_id) {
-    header("Location: index.php");
-    exit;
+// Get user_id from session
+$user_id = $_SESSION['user_id'] ?? null;
+
+// Validate user_id
+if (!$user_id) {
+    error_log("Invalid user_id in my-courses");
+    session_destroy();
+    header("Location: index.php?error=invalid_session");
+    exit();
 }
 
-// Fetch courses assigned to this lecturer
+// Get lecturer's department_id first - join on email instead of ID
+$dept_stmt = $pdo->prepare("
+    SELECT l.department_id, l.id as lecturer_id
+    FROM lecturers l
+    INNER JOIN users u ON l.email = u.email
+    WHERE u.id = :user_id AND u.role = 'lecturer'
+");
+$dept_stmt->execute(['user_id' => $user_id]);
+$lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+    // Try to create a lecturer record if it doesn't exist
+    $create_lecturer_stmt = $pdo->prepare("
+        INSERT INTO lecturers (first_name, last_name, email, department_id, role, password)
+        SELECT
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
+            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
+            email, 7, 'lecturer', '12345'
+        FROM users
+        WHERE id = :user_id AND role = 'lecturer'
+        ON DUPLICATE KEY UPDATE email = email
+    ");
+    $create_lecturer_stmt->execute(['user_id' => $user_id]);
+
+    // Try again to get the department
+    $dept_stmt->execute(['user_id' => $user_id]);
+    $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
+        // If still not found, redirect with error
+        header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
+        exit;
+    }
+}
+
+// Store lecturer_id in session for other pages to use
+$_SESSION['lecturer_id'] = $lecturer_dept['lecturer_id'];
+
+// First, add lecturer_id column to courses table if it doesn't exist
+try {
+    $pdo->query("ALTER TABLE courses ADD COLUMN lecturer_id INT NULL AFTER department_id");
+    $pdo->query("CREATE INDEX idx_lecturer_id ON courses(lecturer_id)");
+} catch (PDOException $e) {
+    // Column might already exist, continue
+}
+
+// Update courses to assign them to the current lecturer if not already assigned
+$update_stmt = $pdo->prepare("
+    UPDATE courses
+    SET lecturer_id = :lecturer_id
+    WHERE lecturer_id IS NULL AND department_id = :department_id
+");
+$update_stmt->execute([
+    'lecturer_id' => $lecturer_dept['lecturer_id'],
+    'department_id' => $lecturer_dept['department_id']
+]);
+
+// Fetch courses for this lecturer
 $stmt = $pdo->prepare("
-    SELECT c.id, c.name, c.code, c.department, c.option, c.year_level
+    SELECT c.id, c.name, c.course_code, d.name as department_name, c.credits, c.duration_hours
     FROM courses c
-    WHERE c.lecturer_id = :lecturer_id
+    INNER JOIN departments d ON c.department_id = d.id
+    WHERE c.lecturer_id = :lecturer_id AND c.status = 'active'
     ORDER BY c.name ASC
 ");
-$stmt->execute(['lecturer_id' => $lecturer_id]);
+$stmt->execute(['lecturer_id' => $lecturer_dept['lecturer_id']]);
 $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
@@ -28,10 +92,10 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
 <style>
-body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
+body { font-family:'Segoe UI',sans-serif; background:linear-gradient(to right, #0066cc, #003366); margin:0; }
 .sidebar { position:fixed; top:0; left:0; width:250px; height:100vh; background:#003366; color:white; padding-top:20px; }
 .sidebar a { display:block; padding:12px 20px; color:#fff; text-decoration:none; }
-.sidebar a:hover, .sidebar a.active { background:#0059b3; }
+.sidebar a:hover, .sidebar a.active { background:#0066cc; }
 .topbar { margin-left:250px; background:#fff; padding:10px 30px; border-bottom:1px solid #ddd; }
 .main-content { margin-left:250px; padding:30px; }
 .table { background:#fff; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.05); }
@@ -69,8 +133,8 @@ body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
                     <th>Course Name</th>
                     <th>Course Code</th>
                     <th>Department</th>
-                    <th>Option</th>
-                    <th>Class</th>
+                    <th>Credits</th>
+                    <th>Duration (hrs)</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -79,10 +143,10 @@ body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
                 <tr>
                     <td><?= $i+1 ?></td>
                     <td class="course-name"><?= htmlspecialchars($c['name']) ?></td>
-                    <td class="course-code"><?= htmlspecialchars($c['code']) ?></td>
-                    <td><?= htmlspecialchars($c['department']) ?></td>
-                    <td><?= htmlspecialchars($c['option']) ?></td>
-                    <td><?= htmlspecialchars($c['year_level']) ?></td>
+                    <td class="course-code"><?= htmlspecialchars($c['course_code']) ?></td>
+                    <td><?= htmlspecialchars($c['department_name']) ?></td>
+                    <td><?= htmlspecialchars($c['credits']) ?></td>
+                    <td><?= htmlspecialchars($c['duration_hours']) ?></td>
                     <td>
                         <a href="attendance-session.php?course=<?= urlencode($c['id']) ?>" class="btn btn-sm btn-primary me-1" title="Start Session">
                             <i class="fas fa-play"></i>

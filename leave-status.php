@@ -37,7 +37,7 @@ $leave_requests = $stmt->fetchAll();
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body { font-family:'Segoe UI',sans-serif; background:#f5f7fa; margin:0; }
+body { font-family:'Segoe UI',sans-serif; background:linear-gradient(to right, #0066cc, #003366); margin:0; }
 .sidebar { position:fixed; top:0; left:0; width:250px; height:100vh; background:#003366; color:white; padding-top:20px; overflow-y:auto; }
 .sidebar a { display:block; padding:12px 20px; color:#fff; text-decoration:none; }
 .sidebar a:hover, .sidebar a.active { background:#0059b3; }

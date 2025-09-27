@@ -11,6 +11,7 @@ require_once "session_check.php";
 require_role(['admin']);
 
 
+
 /**
  * Validate email format
  */
@@ -524,11 +525,11 @@ $stats = getUserStats();
 
     <style>
         :root {
-            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --warning-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-            --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-            --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+            --success-gradient: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            --warning-gradient: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+            --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            --info-gradient: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
             --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
             --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
             --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
@@ -537,7 +538,7 @@ $stats = getUserStats();
         }
 
         body {
-            background: var(--primary-gradient);
+            background: linear-gradient(to right, #0066cc, #003366);
             min-height: 100vh;
             font-family: 'Segoe UI', 'Roboto', sans-serif;
             margin: 0;
@@ -600,15 +601,15 @@ $stats = getUserStats();
         }
 
         .sidebar-nav a:hover {
-            background: rgba(102, 126, 234, 0.1);
-            color: #667eea;
+            background: rgba(0, 102, 204, 0.1);
+            color: #0066cc;
             transform: translateX(5px);
         }
 
         .sidebar-nav a.active {
             background: var(--primary-gradient);
             color: white;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
         }
 
         .sidebar-nav a i {
@@ -647,13 +648,13 @@ $stats = getUserStats();
         .btn-primary {
             background: var(--primary-gradient);
             border: none;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
         }
 
         .btn-primary:hover {
             background: var(--primary-gradient);
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
         }
 
         .table {
@@ -690,8 +691,8 @@ $stats = getUserStats();
         }
 
         .form-control:focus, .form-select:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+            border-color: #0066cc;
+            box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
         }
 
         .modal-content {
@@ -722,7 +723,7 @@ $stats = getUserStats();
         }
 
         .loading-overlay .spinner-border {
-            color: #667eea;
+            color: #0066cc;
             width: 3rem;
             height: 3rem;
         }
@@ -839,7 +840,7 @@ $stats = getUserStats();
     <div class="main-content">
         <div class="d-flex align-items-center justify-content-between mb-4">
             <div>
-                <h2 class="mb-1" style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
+                <h2 class="mb-1 text-primary">
                     <i class="fas fa-users me-3"></i>User Management
                 </h2>
                 <p class="text-muted mb-0">Manage user accounts, roles, and permissions</p>
@@ -1221,13 +1222,13 @@ $stats = getUserStats();
                         filteredUsers = [...currentUsers];
                         updateStats(response.stats);
                         renderUsersTable();
-                        showAlert('success', 'Users loaded successfully');
                     } else {
-                        showAlert('danger', 'Failed to load users');
+                        showAlert('danger', 'Failed to load users: ' + response.message);
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
                     hideLoading();
+                    console.error('Error loading users:', error);
                     showAlert('danger', 'Failed to load users. Please try again.');
                 }
             });
@@ -1237,12 +1238,7 @@ $stats = getUserStats();
             $("#totalUsers").text(stats.total);
             $("#activeUsers").text(stats.active);
             $("#inactiveUsers").text(stats.inactive);
-            $("#activePercentage").text(stats.total > 0 ? Math.round((stats.active / stats.total) * 100) : 0);
-
-            // Update suspended count if available
-            if (stats.suspended !== undefined) {
-                $("#suspendedUsers").text(stats.suspended);
-            }
+            $("#activePercentage").text(stats.total > 0 ? Math.round((stats.active / stats.total) * 100) + '%' : '0%');
         }
 
         function renderUsersTable() {
@@ -1270,8 +1266,8 @@ $stats = getUserStats();
                                 ${user.first_name ? user.first_name.charAt(0).toUpperCase() : 'U'}
                             </div>
                             <div>
-                                <h6 class="mb-0">${user.first_name || ''} ${user.last_name || ''}</h6>
-                                <small class="text-muted">@${user.username}</small>
+                                <h6 class="mb-0">${escapeHtml(user.first_name || '')} ${escapeHtml(user.last_name || '')}</h6>
+                                <small class="text-muted">@${escapeHtml(user.username)}</small>
                             </div>
                         </div>
                     </td>
@@ -1280,13 +1276,13 @@ $stats = getUserStats();
                     </td>
                     <td>
                         <div>
-                            <i class="fas fa-envelope text-muted me-1"></i>${user.email}
-                            ${user.phone ? `<br><i class="fas fa-phone text-muted me-1"></i>${user.phone}` : ''}
+                            <i class="fas fa-envelope text-muted me-1"></i>${escapeHtml(user.email)}
+                            ${user.phone ? `<br><i class="fas fa-phone text-muted me-1"></i>${escapeHtml(user.phone)}` : ''}
                         </div>
                     </td>
                     <td>
                         <span class="status-indicator status-${user.status || 'active'}"></span>
-                        <span class="badge bg-${user.status === 'active' ? 'success' : user.status === 'inactive' ? 'warning' : 'danger'}">
+                        <span class="badge bg-${getStatusBadgeColor(user.status)}">
                             ${user.status || 'active'}
                         </span>
                     </td>
@@ -1304,10 +1300,10 @@ $stats = getUserStats();
                             <button class="btn btn-sm btn-outline-warning" onclick="resetPassword(${user.id})" title="Reset Password">
                                 <i class="fas fa-key"></i>
                             </button>
-                            <button class="btn btn-sm btn-outline-${user.status === 'active' ? 'warning' : user.status === 'inactive' ? 'success' : 'primary'}"
+                            <button class="btn btn-sm btn-${getStatusButtonClass(user.status)}"
                                     onclick="toggleUserStatus(${user.id}, '${user.status || 'active'}')"
-                                    title="${user.status === 'active' ? 'Deactivate' : user.status === 'inactive' ? 'Activate' : 'Activate'} User">
-                                <i class="fas fa-${user.status === 'active' ? 'times' : user.status === 'inactive' ? 'check' : 'check'}"></i>
+                                    title="${getStatusButtonTitle(user.status)}">
+                                <i class="fas fa-${getStatusButtonIcon(user.status)}"></i>
                             </button>
                         </div>
                     </td>
@@ -1317,10 +1313,57 @@ $stats = getUserStats();
             info.text(`Showing ${filteredUsers.length} user${filteredUsers.length !== 1 ? 's' : ''}`);
         }
 
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function getStatusBadgeColor(status) {
+            switch (status) {
+                case 'active': return 'success';
+                case 'inactive': return 'warning';
+                case 'suspended': return 'danger';
+                default: return 'secondary';
+            }
+        }
+
+        function getStatusButtonClass(status) {
+            switch (status) {
+                case 'active': return 'outline-warning';
+                case 'inactive': return 'outline-success';
+                case 'suspended': return 'outline-primary';
+                default: return 'outline-secondary';
+            }
+        }
+
+        function getStatusButtonTitle(status) {
+            switch (status) {
+                case 'active': return 'Deactivate User';
+                case 'inactive': return 'Activate User';
+                case 'suspended': return 'Activate User';
+                default: return 'Change Status';
+            }
+        }
+
+        function getStatusButtonIcon(status) {
+            switch (status) {
+                case 'active': return 'times';
+                case 'inactive': return 'check';
+                case 'suspended': return 'check';
+                default: return 'cog';
+            }
+        }
+
         function formatDate(dateString) {
             if (!dateString) return 'N/A';
-            const date = new Date(dateString);
-            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return 'Invalid Date';
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } catch (e) {
+                return 'Invalid Date';
+            }
         }
 
         function applyFilters() {
@@ -1330,16 +1373,12 @@ $stats = getUserStats();
 
             filteredUsers = currentUsers.filter(user => {
                 const matchesSearch = !search ||
-                    user.username.toLowerCase().includes(search) ||
-                    user.email.toLowerCase().includes(search) ||
-                    `${user.first_name} ${user.last_name}`.toLowerCase().includes(search);
+                    (user.username && user.username.toLowerCase().includes(search)) ||
+                    (user.email && user.email.toLowerCase().includes(search)) ||
+                    `${user.first_name || ''} ${user.last_name || ''}`.toLowerCase().includes(search);
 
                 const matchesRole = !role || user.role === role;
-
-                let matchesStatus = true;
-                if (status) {
-                    matchesStatus = user.status === status;
-                }
+                const matchesStatus = !status || user.status === status;
 
                 return matchesSearch && matchesRole && matchesStatus;
             });
@@ -1349,13 +1388,16 @@ $stats = getUserStats();
 
         function editUser(userId) {
             const user = currentUsers.find(u => u.id === userId);
-            if (!user) return;
+            if (!user) {
+                showAlert('danger', 'User not found');
+                return;
+            }
 
             // Populate form
             $("#editUserForm [name='user_id']").val(user.id);
-            $("#editUserForm [name='username']").val(user.username);
-            $("#editUserForm [name='email']").val(user.email);
-            $("#editUserForm [name='role']").val(user.role);
+            $("#editUserForm [name='username']").val(user.username || '');
+            $("#editUserForm [name='email']").val(user.email || '');
+            $("#editUserForm [name='role']").val(user.role || '');
             $("#editUserForm [name='status']").val(user.status || 'active');
             $("#editUserForm [name='first_name']").val(user.first_name || '');
             $("#editUserForm [name='last_name']").val(user.last_name || '');
@@ -1376,9 +1418,9 @@ $stats = getUserStats();
             const nextStatus = statusOptions[(currentIndex + 1) % statusOptions.length];
 
             const statusLabels = {
-                'active': 'activate',
-                'inactive': 'deactivate',
-                'suspended': 'suspend'
+                'active': 'deactivate',
+                'inactive': 'activate', 
+                'suspended': 'activate'
             };
 
             if (!confirm(`Are you sure you want to ${statusLabels[nextStatus]} this user?`)) {
@@ -1398,12 +1440,13 @@ $stats = getUserStats();
                 success: function(response) {
                     if (response.status === 'success') {
                         showAlert('success', response.message);
-                        loadUsers(); // Reload to get updated data
+                        loadUsers();
                     } else {
                         showAlert('danger', response.message);
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
+                    console.error('Error toggling status:', error);
                     showAlert('danger', 'Failed to update user status');
                 }
             });
@@ -1411,6 +1454,7 @@ $stats = getUserStats();
 
         // Event handlers
         $(document).ready(function() {
+            // Load users immediately
             loadUsers();
 
             // Search and filter events
@@ -1433,8 +1477,8 @@ $stats = getUserStats();
             // Create user form
             $("#createUserForm").submit(function(e) {
                 e.preventDefault();
-
                 const formData = new FormData(this);
+                formData.append('ajax', '1');
                 formData.append('action', 'create_user');
 
                 $.ajax({
@@ -1453,7 +1497,8 @@ $stats = getUserStats();
                             showAlert('danger', response.message);
                         }
                     },
-                    error: function() {
+                    error: function(xhr, status, error) {
+                        console.error('Error creating user:', error);
                         showAlert('danger', 'Failed to create user');
                     }
                 });
@@ -1462,8 +1507,8 @@ $stats = getUserStats();
             // Edit user form
             $("#editUserForm").submit(function(e) {
                 e.preventDefault();
-
                 const formData = new FormData(this);
+                formData.append('ajax', '1');
                 formData.append('action', 'update_user');
 
                 $.ajax({
@@ -1481,7 +1526,8 @@ $stats = getUserStats();
                             showAlert('danger', response.message);
                         }
                     },
-                    error: function() {
+                    error: function(xhr, status, error) {
+                        console.error('Error updating user:', error);
                         showAlert('danger', 'Failed to update user');
                     }
                 });
@@ -1490,7 +1536,6 @@ $stats = getUserStats();
             // Reset password form
             $("#resetPasswordForm").submit(function(e) {
                 e.preventDefault();
-
                 const newPassword = $(this).find('[name="new_password"]').val();
                 const confirmPassword = $(this).find('[name="confirm_password"]').val();
 
@@ -1500,6 +1545,7 @@ $stats = getUserStats();
                 }
 
                 const formData = new FormData(this);
+                formData.append('ajax', '1');
                 formData.append('action', 'reset_password');
 
                 $.ajax({
@@ -1517,7 +1563,8 @@ $stats = getUserStats();
                             showAlert('danger', response.message);
                         }
                     },
-                    error: function() {
+                    error: function(xhr, status, error) {
+                        console.error('Error resetting password:', error);
                         showAlert('danger', 'Failed to reset password');
                     }
                 });

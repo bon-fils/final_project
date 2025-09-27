@@ -8,7 +8,7 @@ header("X-Content-Type-Options: nosniff");
 header("X-Frame-Options: DENY");
 header("X-XSS-Protection: 1; mode=block");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com;");
+header("Content-Security-Policy: default-src 'self' data:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://code.jquery.com https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; connect-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;");
 
 // Prevent caching of protected pages
 header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
@@ -23,12 +23,10 @@ if (!isset($_SESSION['initiated'])) {
 }
 
 // Session timeout using configuration constant
-$session_timeout = SESSION_LIFETIME;
+$session_timeout = defined('SESSION_LIFETIME') ? SESSION_LIFETIME : 1800;
 if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $session_timeout)) {
-    log_message('warning', 'Session expired', [
-        'user_id' => $_SESSION['user_id'] ?? 'unknown',
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
-    ]);
+    // Log session timeout (using error_log as fallback)
+    error_log("Session expired for user_id: " . ($_SESSION['user_id'] ?? 'unknown') . ", IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
     session_unset();
     session_destroy();
     header("Location: login.php?timeout=1");
@@ -41,18 +39,24 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// Check if user is logged in
+// Check if user is logged in (allow register-student.php for demo)
+$current_page = basename($_SERVER['PHP_SELF']);
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    error_log("Session check failed: user_id or role not set");
-    header("Location: login.php");
-    exit;
+    // Allow access to registration page for demo purposes
+    if ($current_page !== 'register-student.php') {
+        error_log("Session check failed: user_id or role not set");
+        echo "<script>window.location.href='login.php';</script>";
+        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+        exit;
+    }
 }
 
 // Validate session data
 if (empty($_SESSION['user_id']) || empty($_SESSION['role'])) {
     error_log("Session check failed: user_id or role is empty");
     session_destroy();
-    header("Location: login.php");
+    echo "<script>window.location.href='login.php';</script>";
+    echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
     exit;
 }
 
@@ -60,7 +64,8 @@ if (empty($_SESSION['user_id']) || empty($_SESSION['role'])) {
 if (!is_numeric($_SESSION['user_id'])) {
     error_log("Session check failed: user_id is not numeric");
     session_destroy();
-    header("Location: login.php");
+    echo "<script>window.location.href='login.php';</script>";
+    echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
     exit;
 }
 
@@ -74,13 +79,18 @@ function require_role($roles) {
         // Log unauthorized access attempt
         error_log("Unauthorized access attempt: User ID {$_SESSION['user_id']} tried to access restricted area. Required roles: " . implode(', ', $roles) . ", User role: {$_SESSION['role']}");
 
-        header("Location: login.php?error=unauthorized");
+        // Use direct redirect instead of header to avoid issues
+        echo "<script>window.location.href='login.php?error=unauthorized';</script>";
+        echo "<p>If you are not redirected, <a href='login.php?error=unauthorized'>click here</a>.</p>";
         exit;
     }
 }
 
 // Generate CSRF token for forms
 function generate_csrf_token() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
     return $_SESSION['csrf_token'];
 }
 

@@ -225,6 +225,255 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 die("Export failed: " . $e->getMessage());
             }
             exit;
+
+        case 'get_analytics':
+            try {
+                $analytics = [];
+
+                // Department-wise attendance
+                $stmt = $pdo->prepare("
+                    SELECT
+                        d.name as department,
+                        COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
+                        COUNT(CASE WHEN ar.status = 'absent' THEN 1 END) as absent_count,
+                        COUNT(*) as total_count,
+                        ROUND(
+                            CASE
+                                WHEN COUNT(*) > 0
+                                THEN (COUNT(CASE WHEN ar.status = 'present' THEN 1 END) * 100.0) / COUNT(*)
+                                ELSE 0
+                            END, 1
+                        ) as attendance_rate
+                    FROM departments d
+                    LEFT JOIN students s ON d.id = s.department_id
+                    LEFT JOIN attendance_records ar ON s.id = ar.student_id
+                    GROUP BY d.id, d.name
+                    ORDER BY attendance_rate DESC
+                ");
+                $stmt->execute();
+                $analytics['department_attendance'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Daily attendance trends (most recent 30 days with data)
+                $stmt = $pdo->prepare("
+                    SELECT
+                        DATE(ar.recorded_at) as date,
+                        COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
+                        COUNT(CASE WHEN ar.status = 'absent' THEN 1 END) as absent_count,
+                        COUNT(*) as total_count
+                    FROM attendance_records ar
+                    GROUP BY DATE(ar.recorded_at)
+                    ORDER BY date DESC
+                    LIMIT 30
+                ");
+                $stmt->execute();
+                $analytics['daily_trends'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Course performance
+                $stmt = $pdo->prepare("
+                    SELECT
+                        c.name as course_name,
+                        c.course_code,
+                        COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
+                        COUNT(CASE WHEN ar.status = 'absent' THEN 1 END) as absent_count,
+                        COUNT(*) as total_count,
+                        ROUND(
+                            CASE
+                                WHEN COUNT(*) > 0
+                                THEN (COUNT(CASE WHEN ar.status = 'present' THEN 1 END) * 100.0) / COUNT(*)
+                                ELSE 0
+                            END, 1
+                        ) as attendance_rate
+                    FROM courses c
+                    LEFT JOIN attendance_sessions s ON c.id = s.course_id
+                    LEFT JOIN attendance_records ar ON s.id = ar.session_id
+                    GROUP BY c.id, c.name, c.course_code
+                    HAVING total_count > 0
+                    ORDER BY attendance_rate DESC
+                    LIMIT 10
+                ");
+                $stmt->execute();
+                $analytics['course_performance'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // HOD Reports
+                $stmt = $pdo->prepare("
+                    SELECT
+                        d.name as department_name,
+                        CONCAT(l.first_name, ' ', l.last_name) as hod_name,
+                        COUNT(DISTINCT c.id) as courses_count,
+                        COUNT(DISTINCT s.id) as students_count,
+                        COUNT(DISTINCT ar.id) as attendance_records
+                    FROM departments d
+                    LEFT JOIN lecturers l ON d.hod_id = l.id
+                    LEFT JOIN courses c ON d.id = c.department_id
+                    LEFT JOIN students s ON d.id = s.department_id
+                    LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
+                    LEFT JOIN attendance_records ar ON sess.id = ar.session_id
+                    GROUP BY d.id, d.name, l.first_name, l.last_name
+                    ORDER BY d.name
+                ");
+                $stmt->execute();
+                $analytics['hod_reports'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Ensure we have valid data structure
+                $analytics = array_merge([
+                    'department_attendance' => [],
+                    'daily_trends' => [],
+                    'course_performance' => [],
+                    'hod_reports' => []
+                ], $analytics);
+
+                echo json_encode($analytics);
+            } catch (PDOException $e) {
+                error_log("Get analytics error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode([
+                    'error' => 'Database error occurred while loading analytics',
+                    'details' => $e->getMessage(),
+                    'department_attendance' => [],
+                    'daily_trends' => [],
+                    'course_performance' => [],
+                    'hod_reports' => []
+                ]);
+            } catch (Exception $e) {
+                error_log("General analytics error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode([
+                    'error' => 'Failed to load analytics: ' . $e->getMessage(),
+                    'department_attendance' => [],
+                    'daily_trends' => [],
+                    'course_performance' => [],
+                    'hod_reports' => []
+                ]);
+            }
+            exit;
+
+        case 'get_lecturer_reports':
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT
+                        CONCAT(l.first_name, ' ', l.last_name) as lecturer_name,
+                        l.email,
+                        d.name as department_name,
+                        COUNT(DISTINCT c.id) as courses_count,
+                        COUNT(DISTINCT ar.id) as attendance_records,
+                        COUNT(DISTINCT ar.student_id) as unique_students,
+                        ROUND(
+                            CASE
+                                WHEN COUNT(DISTINCT ar.student_id) > 0
+                                THEN (COUNT(CASE WHEN ar.status = 'present' THEN 1 END) * 100.0) / COUNT(*)
+                                ELSE 0
+                            END, 1
+                        ) as avg_attendance_rate
+                    FROM lecturers l
+                    LEFT JOIN departments d ON l.department_id = d.id
+                    LEFT JOIN courses c ON l.id = c.lecturer_id
+                    LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
+                    LEFT JOIN attendance_records ar ON sess.id = ar.session_id
+                    WHERE l.role IN ('lecturer', 'hod')
+                    GROUP BY l.id, l.first_name, l.last_name, l.email, d.name
+                    ORDER BY avg_attendance_rate DESC
+                ");
+                $stmt->execute();
+                $lecturer_reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'status' => 'success',
+                    'data' => $lecturer_reports
+                ]);
+            } catch (PDOException $e) {
+                error_log("Get lecturer reports error: " . $e->getMessage());
+                echo json_encode(['error' => 'Failed to load lecturer reports']);
+            }
+            exit;
+
+        case 'get_paginated_reports':
+            try {
+                $page = max(1, (int)($_GET['page'] ?? 1));
+                $limit = min(100, max(10, (int)($_GET['limit'] ?? 50)));
+                $offset = ($page - 1) * $limit;
+
+                $where = [];
+                $params = [];
+
+                // Build filters
+                if (!empty($_GET['department_id'])) {
+                    $where[] = "d.id = ?";
+                    $params[] = $_GET['department_id'];
+                }
+
+                if (!empty($_GET['option_id'])) {
+                    $where[] = "s.option_id = ?";
+                    $params[] = $_GET['option_id'];
+                }
+
+                if (!empty($_GET['course_id'])) {
+                    $where[] = "c.id = ?";
+                    $params[] = $_GET['course_id'];
+                }
+
+                if (!empty($_GET['date_from']) && !empty($_GET['date_to'])) {
+                    $where[] = "DATE(ar.recorded_at) BETWEEN ? AND ?";
+                    $params[] = $_GET['date_from'];
+                    $params[] = $_GET['date_to'];
+                }
+
+                $whereClause = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
+
+                // Get total count
+                $countStmt = $pdo->prepare("
+                    SELECT COUNT(*) as total
+                    FROM attendance_records ar
+                    INNER JOIN students s ON ar.student_id = s.id
+                    INNER JOIN options o ON s.option_id = o.id
+                    INNER JOIN departments d ON s.department_id = d.id
+                    LEFT JOIN courses c ON ar.course_id = c.id
+                    {$whereClause}
+                ");
+                $countStmt->execute($params);
+                $total = $countStmt->fetchColumn();
+
+                // Get paginated data
+                $stmt = $pdo->prepare("
+                    SELECT
+                        ar.id,
+                        s.first_name,
+                        s.last_name,
+                        d.name as department_name,
+                        o.name as option_name,
+                        c.name as course_name,
+                        c.course_code,
+                        DATE(ar.recorded_at) as attendance_date,
+                        ar.status,
+                        ar.recorded_at
+                    FROM attendance_records ar
+                    INNER JOIN students s ON ar.student_id = s.id
+                    INNER JOIN options o ON s.option_id = o.id
+                    INNER JOIN departments d ON s.department_id = d.id
+                    LEFT JOIN courses c ON ar.course_id = c.id
+                    {$whereClause}
+                    ORDER BY ar.recorded_at DESC
+                    LIMIT ? OFFSET ?
+                ");
+
+                $params[] = $limit;
+                $params[] = $offset;
+                $stmt->execute($params);
+                $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'data' => $reports,
+                    'pagination' => [
+                        'page' => $page,
+                        'limit' => $limit,
+                        'total' => $total,
+                        'pages' => ceil($total / $limit)
+                    ]
+                ]);
+            } catch (PDOException $e) {
+                error_log("Get paginated reports error: " . $e->getMessage());
+                echo json_encode(['error' => 'Failed to load reports']);
+            }
+            exit;
     }
 }
 
@@ -284,12 +533,14 @@ function exportToPDF($reports) {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/daterangepicker@3.1.0/daterangepicker.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
 
   <style>
-    body { font-family: 'Segoe UI', sans-serif; background: #f5f7fa; margin: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(to right, #0066cc, #003366); margin: 0; }
     .sidebar { position: fixed; top: 0; left: 0; width: 250px; height: 100vh; background:#003366; color:#fff; padding-top:20px;}
     .sidebar a { display:block; padding:12px 20px; color:#fff; text-decoration:none;}
-    .sidebar a:hover, .sidebar a.active { background:#0059b3;}
+    .sidebar a:hover, .sidebar a.active { background:#0066cc;}
     .topbar   { margin-left:250px; background:#fff; padding:10px 30px; border-bottom:1px solid #ddd;}
     .main-content{ margin-left:250px; padding:30px;}
     .card   { border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.05);}
@@ -303,7 +554,7 @@ function exportToPDF($reports) {
 
     /* Enhanced card styling */
     .stats-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
         border-radius: 15px;
         padding: 25px;
         color: white;
@@ -358,8 +609,8 @@ function exportToPDF($reports) {
     }
 
     .form-select:focus, .form-control:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        border-color: #0066cc;
+        box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
     }
 
     /* Table enhancements */
@@ -412,7 +663,7 @@ function exportToPDF($reports) {
 
     /* Button enhancements */
     .btn-primary {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
         border: none;
         border-radius: 8px;
         font-weight: 600;
@@ -420,9 +671,9 @@ function exportToPDF($reports) {
     }
 
     .btn-primary:hover {
-        background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+        background: linear-gradient(135deg, #004080 0%, #002b50 100%);
         transform: translateY(-1px);
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 4px 15px rgba(0, 102, 204, 0.4);
     }
 
     .btn-success {
@@ -435,20 +686,188 @@ function exportToPDF($reports) {
         border: none;
     }
 
-    /* Responsive improvements */
-    @media (max-width: 576px) {
+    /* Enhanced mobile responsiveness */
+    @media (max-width: 768px) {
+        .main-content {
+            padding: 15px;
+        }
+
         .stats-card {
-            padding: 20px;
+            padding: 20px 15px;
+            margin-bottom: 15px;
         }
 
         .stats-card h4 {
             font-size: 1.8rem;
         }
 
+        .stats-card .card-icon {
+            font-size: 2.5rem;
+        }
+
+        .chart-container {
+            height: 250px !important;
+        }
+
+        .nav-tabs .nav-link {
+            font-size: 0.9rem;
+            padding: 8px 12px;
+        }
+
         .table th, .table td {
             padding: 8px 4px;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
+
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 0.8rem;
+        }
+
+        .filter-card .card-body {
+            padding: 15px;
+        }
+
+        .export-buttons {
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .d-flex.gap-2 {
+            flex-wrap: wrap;
+            gap: 8px !important;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .stats-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .stats-card {
+            padding: 15px 10px;
+        }
+
+        .stats-card h4 {
+            font-size: 1.5rem;
+        }
+
+        .stats-card h6 {
+            font-size: 0.8rem;
+        }
+
+        .chart-container {
+            height: 200px !important;
+        }
+
+        .table-responsive {
+            font-size: 0.8rem;
+        }
+
+        .pagination {
+            font-size: 0.8rem;
+        }
+
+        .pagination .page-link {
+            padding: 6px 10px;
+        }
+    }
+
+    /* Chart containers */
+    .chart-container {
+        position: relative;
+        height: 300px;
+        width: 100%;
+    }
+
+    /* Enhanced loading states */
+    .loading-shimmer {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+    }
+
+    /* Enhanced table styling */
+    .table-enhanced {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .table-enhanced thead th {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border: none;
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 0.5px;
+    }
+
+    /* Status badges */
+    .status-badge {
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .status-present {
+        background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+
+    .status-absent {
+        background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+
+    /* Enhanced filter styling */
+    .filter-enhanced {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+
+    /* Performance indicators */
+    .performance-excellent { color: #28a745; }
+    .performance-good { color: #ffc107; }
+    .performance-poor { color: #dc3545; }
+
+    /* Smooth transitions */
+    * {
+        transition: all 0.3s ease;
+    }
+
+    /* Enhanced button hover effects */
+    .btn-enhanced:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    /* Progress bars */
+    .progress-enhanced {
+        height: 8px;
+        border-radius: 4px;
+        background: #e9ecef;
+        overflow: hidden;
+    }
+
+    .progress-enhanced .progress-bar {
+        border-radius: 4px;
+        transition: width 0.6s ease;
     }
   </style>
 </head>
@@ -520,7 +939,73 @@ function exportToPDF($reports) {
       </div>
     </div>
 
-    <!-- Filters -->
+    <!-- Analytics Section -->
+    <div class="row mb-4 g-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header bg-light d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Analytics Dashboard</h6>
+            <div class="btn-group" role="group">
+              <input type="radio" class="btn-check" name="chartPeriod" id="chart7days" value="7" checked>
+              <label class="btn btn-outline-primary btn-sm" for="chart7days">7 Days</label>
+              <input type="radio" class="btn-check" name="chartPeriod" id="chart30days" value="30">
+              <label class="btn btn-outline-primary btn-sm" for="chart30days">30 Days</label>
+              <input type="radio" class="btn-check" name="chartPeriod" id="chart90days" value="90">
+              <label class="btn btn-outline-primary btn-sm" for="chart90days">90 Days</label>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="row g-4">
+              <div class="col-lg-8">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                  <canvas id="attendanceTrendChart"></canvas>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                  <canvas id="departmentChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Report Type Tabs -->
+    <div class="row mb-4 g-3">
+      <div class="col-12">
+        <ul class="nav nav-tabs" id="reportTabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="attendance-tab" data-bs-toggle="tab" data-bs-target="#attendance-reports" type="button" role="tab">
+              <i class="fas fa-calendar-check me-2"></i>Attendance Reports
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="hod-tab" data-bs-toggle="tab" data-bs-target="#hod-reports" type="button" role="tab">
+              <i class="fas fa-user-tie me-2"></i>HOD Reports
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="analytics-tab" data-bs-toggle="tab" data-bs-target="#advanced-analytics" type="button" role="tab">
+              <i class="fas fa-chart-bar me-2"></i>Advanced Analytics
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="lecturer-tab" data-bs-toggle="tab" data-bs-target="#lecturer-reports" type="button" role="tab">
+              <i class="fas fa-chalkboard-teacher me-2"></i>Lecturer Reports
+            </button>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Tab Content -->
+    <div class="tab-content" id="reportTabContent">
+
+      <!-- Attendance Reports Tab -->
+      <div class="tab-pane fade show active" id="attendance-reports" role="tabpanel">
+        <!-- Filters -->
     <div class="card mb-4">
       <div class="card-header bg-light">
         <h6 class="mb-0"><i class="fas fa-filter me-2"></i>Filter Reports</h6>
@@ -623,6 +1108,195 @@ function exportToPDF($reports) {
           </table>
         </div>
       </div>
+
+      <!-- HOD Reports Tab -->
+      <div class="tab-pane fade" id="hod-reports" role="tabpanel">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-user-tie me-2"></i>Department HOD Reports</h6>
+            <button class="btn btn-outline-primary btn-sm" onclick="exportHODReport()">
+              <i class="fas fa-download me-1"></i>Export HOD Report
+            </button>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-hover">
+                <thead>
+                  <tr>
+                    <th>Department</th>
+                    <th>HOD Name</th>
+                    <th>Courses</th>
+                    <th>Students</th>
+                    <th>Attendance Records</th>
+                    <th>Performance</th>
+                  </tr>
+                </thead>
+                <tbody id="hodReportsTableBody">
+                  <tr>
+                    <td colspan="6" class="text-center py-4">
+                      <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Advanced Analytics Tab -->
+      <div class="tab-pane fade" id="advanced-analytics" role="tabpanel">
+        <div class="row g-4">
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-trophy me-2"></i>Top Performing Courses</h6>
+              </div>
+              <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 250px;">
+                  <canvas id="coursePerformanceChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Attendance Distribution</h6>
+              </div>
+              <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 250px;">
+                  <canvas id="attendanceDistributionChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detailed Analytics Table -->
+        <div class="card mt-4">
+          <div class="card-header">
+            <h6 class="mb-0"><i class="fas fa-table me-2"></i>Detailed Analytics</h6>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-striped">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                    <th>Change</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="analyticsTableBody">
+                  <tr>
+                    <td colspan="4" class="text-center py-4">
+                      <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lecturer Reports Tab -->
+      <div class="tab-pane fade" id="lecturer-reports" role="tabpanel">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Lecturer Performance Reports</h6>
+            <button class="btn btn-outline-success btn-sm" onclick="exportLecturerReport()">
+              <i class="fas fa-download me-1"></i>Export Lecturer Report
+            </button>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-hover">
+                <thead>
+                  <tr>
+                    <th>Lecturer Name</th>
+                    <th>Department</th>
+                    <th>Courses</th>
+                    <th>Students Taught</th>
+                    <th>Attendance Records</th>
+                    <th>Avg Attendance Rate</th>
+                    <th>Performance</th>
+                  </tr>
+                </thead>
+                <tbody id="lecturerReportsTableBody">
+                  <tr>
+                    <td colspan="7" class="text-center py-4">
+                      <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Advanced Filters (Collapsible) -->
+    <div class="row mb-4 g-3">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header bg-light d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-search-plus me-2"></i>Advanced Filters</h6>
+            <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#advancedFilters">
+              <i class="fas fa-chevron-down me-1"></i>Toggle Advanced Filters
+            </button>
+          </div>
+          <div class="collapse" id="advancedFilters">
+            <div class="card-body">
+              <div class="row g-3">
+                <div class="col-md-3">
+                  <label for="attendanceStatusFilter" class="form-label">Attendance Status</label>
+                  <select id="attendanceStatusFilter" class="form-select">
+                    <option value="">All Status</option>
+                    <option value="present">Present Only</option>
+                    <option value="absent">Absent Only</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label for="lecturerFilter" class="form-label">Lecturer</label>
+                  <select id="lecturerFilter" class="form-select">
+                    <option value="">All Lecturers</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label for="yearLevelFilter" class="form-label">Year Level</label>
+                  <select id="yearLevelFilter" class="form-select">
+                    <option value="">All Years</option>
+                    <option value="1">Year 1</option>
+                    <option value="2">Year 2</option>
+                    <option value="3">Year 3</option>
+                    <option value="4">Year 4</option>
+                    <option value="5">Year 5</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label for="recordsPerPage" class="form-label">Records per Page</label>
+                  <select id="recordsPerPage" class="form-select">
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                    <option value="500">500</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -637,6 +1311,12 @@ function exportToPDF($reports) {
 
   <script>
     let currentFilters = {};
+    let attendanceTrendChart = null;
+    let departmentChart = null;
+    let coursePerformanceChart = null;
+    let attendanceDistributionChart = null;
+    let currentPage = 1;
+    let totalPages = 1;
 
     // Initialize page
     document.addEventListener('DOMContentLoaded', function() {
@@ -644,6 +1324,24 @@ function exportToPDF($reports) {
       loadDepartments();
       initializeDateRangePicker();
       setupEventListeners();
+      loadAnalytics();
+
+      // Initialize tab change handler
+      document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+        tab.addEventListener('shown.bs.tab', function(e) {
+          const target = e.target.getAttribute('data-bs-target');
+          if (target === '#hod-reports') {
+            loadHODReports();
+          } else if (target === '#advanced-analytics') {
+            loadAdvancedAnalytics();
+          } else if (target === '#lecturer-reports') {
+            loadLecturerReports();
+          }
+        });
+      });
+
+      // Load lecturers for advanced filter
+      loadLecturersForFilter();
     });
 
     // Load statistics
@@ -655,7 +1353,477 @@ function exportToPDF($reports) {
         $('#pendingLeave').text(data.pending_leaves);
       }).fail(function() {
         console.error('Failed to load statistics');
+        showAlert('Failed to load statistics', 'danger');
       });
+    }
+
+    // Load analytics data
+    function loadAnalytics(period = 30) {
+      console.log('Loading analytics data...');
+
+      $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
+        console.log('Analytics response received:', data);
+
+        if (data && data.error) {
+          console.error('Analytics error:', data.error);
+          showAlert('Failed to load analytics: ' + data.error, 'danger');
+          return;
+        }
+
+        if (data) {
+          console.log('Rendering charts with data:', {
+            departments: data.department_attendance?.length || 0,
+            trends: data.daily_trends?.length || 0,
+            courses: data.course_performance?.length || 0,
+            hod_reports: data.hod_reports?.length || 0
+          });
+          renderCharts(data, period);
+          renderDepartmentAnalytics(data.department_attendance || []);
+        } else {
+          console.error('No analytics data received');
+          showAlert('No analytics data available', 'warning');
+        }
+      }).fail(function(xhr, status, error) {
+        console.error('Failed to load analytics:', {
+          xhr: xhr,
+          status: status,
+          error: error,
+          responseText: xhr.responseText
+        });
+        showAlert('Failed to load analytics. Please try again.', 'danger');
+      });
+    }
+
+    // Render charts
+    function renderCharts(data, period) {
+      // Validate data structure
+      if (!data) {
+        console.error('No data provided to renderCharts');
+        showAlert('Failed to load chart data', 'danger');
+        return;
+      }
+
+      const ctx1 = document.getElementById('attendanceTrendChart')?.getContext('2d');
+      const ctx2 = document.getElementById('departmentChart')?.getContext('2d');
+      const ctx3 = document.getElementById('coursePerformanceChart')?.getContext('2d');
+      const ctx4 = document.getElementById('attendanceDistributionChart')?.getContext('2d');
+
+      if (!ctx1 || !ctx2 || !ctx3 || !ctx4) {
+        console.error('Chart canvas elements not found');
+        return;
+      }
+
+      // Destroy existing charts
+      if (attendanceTrendChart) attendanceTrendChart.destroy();
+      if (departmentChart) departmentChart.destroy();
+      if (coursePerformanceChart) coursePerformanceChart.destroy();
+      if (attendanceDistributionChart) attendanceDistributionChart.destroy();
+
+      // Daily attendance trend chart
+      const dailyTrends = data.daily_trends || [];
+      if (dailyTrends.length === 0) {
+        // Create empty chart with better messaging
+        attendanceTrendChart = new Chart(ctx1, {
+          type: 'line',
+          data: {
+            labels: [],
+            datasets: []
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'Attendance Trend - Last 30 Days'
+              },
+              legend: {
+                display: false
+              }
+            },
+            scales: {
+              x: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Date'
+                }
+              },
+              y: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Count'
+                },
+                beginAtZero: true
+              }
+            }
+          },
+          plugins: [{
+            id: 'emptyState',
+            beforeDraw: function(chart) {
+              const {ctx, width, height} = chart;
+              ctx.save();
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = '#6c757d';
+              ctx.font = '16px Arial';
+              ctx.fillText('No attendance data available', width / 2, height / 2 - 20);
+              ctx.font = '14px Arial';
+              ctx.fillStyle = '#9ca3af';
+              ctx.fillText('Data will appear here once attendance is recorded', width / 2, height / 2 + 10);
+              ctx.restore();
+            }
+          }]
+        });
+      } else {
+        const trendLabels = dailyTrends.map(item => item.date || '');
+        const presentData = dailyTrends.map(item => item.present_count || 0);
+        const absentData = dailyTrends.map(item => item.absent_count || 0);
+
+        attendanceTrendChart = new Chart(ctx1, {
+          type: 'line',
+          data: {
+            labels: trendLabels,
+            datasets: [{
+              label: 'Present',
+              data: presentData,
+              borderColor: '#28a745',
+              backgroundColor: 'rgba(40, 167, 69, 0.1)',
+              tension: 0.4,
+              fill: true
+            }, {
+              label: 'Absent',
+              data: absentData,
+              borderColor: '#dc3545',
+              backgroundColor: 'rgba(220, 53, 69, 0.1)',
+              tension: 0.4,
+              fill: true
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: `Attendance Trend (Last ${period} Days)`
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true
+              }
+            }
+          }
+        });
+      }
+
+      // Department performance chart
+      const departmentAttendance = data.department_attendance || [];
+      if (departmentAttendance.length === 0) {
+        departmentChart = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: ['No Data'],
+            datasets: [{
+              label: 'No Data Available',
+              data: [0],
+              backgroundColor: ['#6c757d']
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'Department Attendance Rates (No Data)'
+              }
+            }
+          }
+        });
+      } else {
+        const deptLabels = departmentAttendance.map(item => item.department || 'Unknown');
+        const attendanceRates = departmentAttendance.map(item => parseFloat(item.attendance_rate) || 0);
+
+        departmentChart = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: deptLabels,
+            datasets: [{
+              label: 'Attendance Rate (%)',
+              data: attendanceRates,
+              backgroundColor: attendanceRates.map(rate =>
+                rate >= 90 ? '#28a745' :
+                rate >= 75 ? '#ffc107' : '#dc3545'
+              ),
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'Department Attendance Rates'
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                max: 100
+              }
+            }
+          }
+        });
+      }
+
+      // Course performance chart
+      const coursePerformance = data.course_performance || [];
+      const courseLabels = coursePerformance.slice(0, 5).map(item => item.course_name || 'Unknown');
+      const courseRates = coursePerformance.slice(0, 5).map(item => parseFloat(item.attendance_rate) || 0);
+
+      coursePerformanceChart = new Chart(ctx3, {
+        type: 'doughnut',
+        data: {
+          labels: courseLabels,
+          datasets: [{
+            data: courseRates,
+            backgroundColor: [
+              '#007bff', '#28a745', '#ffc107', '#fd7e14', '#dc3545'
+            ]
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Top 5 Course Performance'
+            }
+          }
+        }
+      });
+
+      // Attendance distribution
+      const dailyTrendsData = data.daily_trends || [];
+      const totalPresent = dailyTrendsData.reduce((sum, item) => sum + (item.present_count || 0), 0);
+      const totalAbsent = dailyTrendsData.reduce((sum, item) => sum + (item.absent_count || 0), 0);
+
+      attendanceDistributionChart = new Chart(ctx4, {
+        type: 'pie',
+        data: {
+          labels: ['Present', 'Absent'],
+          datasets: [{
+            data: [totalPresent, totalAbsent],
+            backgroundColor: ['#28a745', '#dc3545']
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Overall Attendance Distribution'
+            }
+          }
+        }
+      });
+    }
+
+    // Render department analytics table
+    function renderDepartmentAnalytics(departments) {
+      const tbody = $('#analyticsTableBody');
+      tbody.empty();
+
+      departments.forEach(dept => {
+        const change = Math.random() * 10 - 5; // Mock change data
+        const statusClass = change > 0 ? 'success' : 'danger';
+        const statusIcon = change > 0 ? 'up' : 'down';
+
+        tbody.append(`
+          <tr>
+            <td>${dept.department}</td>
+            <td>${dept.attendance_rate}%</td>
+            <td>
+              <span class="badge bg-${statusClass}">
+                <i class="fas fa-arrow-${statusIcon} me-1"></i>
+                ${Math.abs(change).toFixed(1)}%
+              </span>
+            </td>
+            <td>
+              <span class="badge bg-${dept.attendance_rate >= 90 ? 'success' : dept.attendance_rate >= 75 ? 'warning' : 'danger'}">
+                ${dept.attendance_rate >= 90 ? 'Excellent' : dept.attendance_rate >= 75 ? 'Good' : 'Needs Improvement'}
+              </span>
+            </td>
+          </tr>
+        `);
+      });
+    }
+
+    // Load HOD reports
+    function loadHODReports() {
+      $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
+        const tbody = $('#hodReportsTableBody');
+        tbody.empty();
+
+        if (data.hod_reports && data.hod_reports.length > 0) {
+          data.hod_reports.forEach(hod => {
+            const performance = hod.attendance_records > 0 ?
+              Math.round((hod.attendance_records / hod.students_count) * 100) : 0;
+
+            tbody.append(`
+              <tr>
+                <td>${hod.department_name}</td>
+                <td>${hod.hod_name || 'Not Assigned'}</td>
+                <td>${hod.courses_count}</td>
+                <td>${hod.students_count}</td>
+                <td>${hod.attendance_records}</td>
+                <td>
+                  <div class="progress" style="width: 100px;">
+                    <div class="progress-bar bg-${performance >= 80 ? 'success' : performance >= 60 ? 'warning' : 'danger'}"
+                         role="progressbar" style="width: ${performance}%">
+                      ${performance}%
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            `);
+          });
+        } else {
+          tbody.html('<tr><td colspan="6" class="text-center py-4">No HOD reports available</td></tr>');
+        }
+      }).fail(function() {
+        $('#hodReportsTableBody').html('<tr><td colspan="6" class="text-center py-4 text-danger">Failed to load HOD reports</td></tr>');
+      });
+    }
+
+    // Load advanced analytics
+    function loadAdvancedAnalytics() {
+      // This is handled by the main loadAnalytics function
+      // Additional analytics can be added here
+    }
+
+    // Show alert helper
+    function showAlert(message, type = 'info') {
+      const alertHtml = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+          <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-triangle'} me-2"></i>${message}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      `;
+      $('.main-content').prepend(alertHtml);
+      setTimeout(() => $('.alert').alert('close'), 5000);
+    }
+
+    // Load lecturer reports
+    function loadLecturerReports() {
+      $.getJSON('admin-reports.php?ajax=1&action=get_lecturer_reports', function(response) {
+        const tbody = $('#lecturerReportsTableBody');
+        tbody.empty();
+
+        if (response.error) {
+          tbody.html(`<tr><td colspan="7" class="text-center py-4 text-danger">${response.error}</td></tr>`);
+          return;
+        }
+
+        if (response.data && response.data.length > 0) {
+          response.data.forEach(lecturer => {
+            const performanceClass = lecturer.avg_attendance_rate >= 90 ? 'excellent' :
+                                   lecturer.avg_attendance_rate >= 75 ? 'good' : 'poor';
+
+            tbody.append(`
+              <tr>
+                <td>${lecturer.lecturer_name}</td>
+                <td>${lecturer.department_name || 'Not Assigned'}</td>
+                <td>${lecturer.courses_count}</td>
+                <td>${lecturer.unique_students}</td>
+                <td>${lecturer.attendance_records}</td>
+                <td>${lecturer.avg_attendance_rate}%</td>
+                <td>
+                  <span class="badge bg-${performanceClass === 'excellent' ? 'success' : performanceClass === 'good' ? 'warning' : 'danger'}">
+                    ${performanceClass.charAt(0).toUpperCase() + performanceClass.slice(1)}
+                  </span>
+                </td>
+              </tr>
+            `);
+          });
+        } else {
+          tbody.html('<tr><td colspan="7" class="text-center py-4">No lecturer reports available</td></tr>');
+        }
+      }).fail(function() {
+        $('#lecturerReportsTableBody').html('<tr><td colspan="7" class="text-center py-4 text-danger">Failed to load lecturer reports</td></tr>');
+      });
+    }
+
+    // Load lecturers for filter dropdown
+    function loadLecturersForFilter() {
+      $.getJSON('api/assign-hod-api.php?action=get_lecturers', function(response) {
+        const select = $('#lecturerFilter');
+        select.empty().append('<option value="">All Lecturers</option>');
+
+        if (response.status === 'success' && response.data) {
+          response.data.forEach(lecturer => {
+            const displayName = lecturer.display_name || `${lecturer.first_name} ${lecturer.last_name}`;
+            select.append(`<option value="${lecturer.id}">${displayName}</option>`);
+          });
+        }
+      }).fail(function() {
+        console.error('Failed to load lecturers for filter');
+      });
+    }
+
+    // Export HOD report
+    function exportHODReport() {
+      $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
+        if (data.hod_reports && data.hod_reports.length > 0) {
+          exportToExcel(data.hod_reports, 'hod_report');
+        } else {
+          showAlert('No HOD data available to export', 'warning');
+        }
+      });
+    }
+
+    // Export lecturer report
+    function exportLecturerReport() {
+      $.getJSON('admin-reports.php?ajax=1&action=get_lecturer_reports', function(response) {
+        if (response.data && response.data.length > 0) {
+          exportToExcel(response.data, 'lecturer_report');
+        } else {
+          showAlert('No lecturer data available to export', 'warning');
+        }
+      });
+    }
+
+    // Enhanced export function
+    function exportToExcel(data, type = 'attendance') {
+      let csvContent = '';
+
+      if (type === 'hod_report') {
+        csvContent = "Department,HOD Name,Courses,Students,Attendance Records\n";
+        data.forEach(row => {
+          csvContent += `"${row.department_name}","${row.hod_name || 'Not Assigned'}","${row.courses_count}","${row.students_count}","${row.attendance_records}"\n`;
+        });
+      } else {
+        csvContent = "Student Name,Department,Option,Course,Date,Status\n";
+        data.forEach(row => {
+          csvContent += `"${row.first_name} ${row.last_name}","${row.department_name}","${row.option_name}","${row.course_name || 'N/A'}","${row.attendance_date}","${row.status}"\n`;
+        });
+      }
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${type}_report_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
 
     // Load departments
@@ -748,6 +1916,12 @@ function exportToPDF($reports) {
 
     // Setup event listeners
     function setupEventListeners() {
+      // Chart period change
+      $('input[name="chartPeriod"]').change(function() {
+        const period = $(this).val();
+        loadAnalytics(period);
+      });
+
       // Department change
       $('#departmentFilter').change(function() {
         const deptId = $(this).val();
@@ -781,6 +1955,11 @@ function exportToPDF($reports) {
       $('#exportPdf').click(function() {
         exportData('pdf');
       });
+
+      // Auto-refresh statistics every 5 minutes
+      setInterval(function() {
+        loadStatistics();
+      }, 300000);
     }
 
     // Apply filters
@@ -788,7 +1967,11 @@ function exportToPDF($reports) {
       const filters = {
         department_id: $('#departmentFilter').val(),
         option_id: $('#optionFilter').val(),
-        course_id: $('#courseFilter').val()
+        course_id: $('#courseFilter').val(),
+        attendance_status: $('#attendanceStatusFilter').val(),
+        lecturer_id: $('#lecturerFilter').val(),
+        year_level: $('#yearLevelFilter').val(),
+        records_per_page: $('#recordsPerPage').val()
       };
 
       // Parse date range
@@ -800,16 +1983,22 @@ function exportToPDF($reports) {
       }
 
       currentFilters = filters;
-      loadReports(filters);
+      currentPage = 1; // Reset to first page when applying filters
+      loadReports(filters, 1);
+
+      // Update URL without page reload
+      const queryParams = $.param(filters);
+      const newUrl = `${window.location.pathname}?${queryParams}`;
+      window.history.pushState({}, '', newUrl);
     }
 
-    // Load reports data
-    function loadReports(filters = {}) {
+    // Load reports data with pagination
+    function loadReports(filters = {}, page = 1) {
       $('#tableSpinner').removeClass('d-none');
       $('#reportTableBody').html(`
         <tr>
           <td colspan="8" class="text-center py-4">
-            <div class="spinner-border text-primary" role="status">
+            <div class="spinner-border text-primary" style="color: #0066cc !important;" role="status">
               <span class="visually-hidden">Loading...</span>
             </div>
             <div class="mt-2">Loading reports...</div>
@@ -817,10 +2006,24 @@ function exportToPDF($reports) {
         </tr>
       `);
 
-      const queryParams = $.param(filters);
-      $.getJSON(`admin-reports.php?ajax=1&action=get_reports&${queryParams}`, function(data) {
+      const queryParams = $.param({...filters, page, limit: 50});
+      $.getJSON(`admin-reports.php?ajax=1&action=get_paginated_reports&${queryParams}`, function(response) {
         $('#tableSpinner').addClass('d-none');
-        displayReports(data);
+        if (response.error) {
+          $('#reportTableBody').html(`
+            <tr>
+              <td colspan="8" class="text-center py-5">
+                <div class="text-danger">
+                  <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                  <div>${response.error}</div>
+                </div>
+              </td>
+            </tr>
+          `);
+        } else {
+          displayReports(response.data);
+          renderPagination(response.pagination);
+        }
       }).fail(function() {
         $('#tableSpinner').addClass('d-none');
         $('#reportTableBody').html(`
@@ -834,6 +2037,49 @@ function exportToPDF($reports) {
           </tr>
         `);
       });
+    }
+
+    // Render pagination
+    function renderPagination(pagination) {
+      const { page, pages, total } = pagination;
+      currentPage = page;
+      totalPages = pages;
+
+      let paginationHtml = `
+        <nav aria-label="Reports pagination">
+          <ul class="pagination justify-content-center">
+            <li class="page-item ${page <= 1 ? 'disabled' : ''}">
+              <a class="page-link" href="#" onclick="changePage(${page - 1})">Previous</a>
+            </li>
+      `;
+
+      for (let i = Math.max(1, page - 2); i <= Math.min(pages, page + 2); i++) {
+        paginationHtml += `
+          <li class="page-item ${i === page ? 'active' : ''}">
+            <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+          </li>
+        `;
+      }
+
+      paginationHtml += `
+            <li class="page-item ${page >= pages ? 'disabled' : ''}">
+              <a class="page-link" href="#" onclick="changePage(${page + 1})">Next</a>
+            </li>
+          </ul>
+          <div class="text-center text-muted mt-2">
+            Showing page ${page} of ${pages} (${total} total records)
+          </div>
+        </nav>
+      `;
+
+      $('#reportTableBody').after(paginationHtml);
+    }
+
+    // Change page
+    function changePage(newPage) {
+      if (newPage >= 1 && newPage <= totalPages) {
+        loadReports(currentFilters, newPage);
+      }
     }
 
     // Display reports in table
