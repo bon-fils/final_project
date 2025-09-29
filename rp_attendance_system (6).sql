@@ -177,7 +177,7 @@ CREATE TABLE `lecturers` (
   `education_level` varchar(100) DEFAULT NULL,
   `role` enum('lecturer','hod') NOT NULL DEFAULT 'lecturer',
   `photo` varchar(255) DEFAULT NULL,
-  `password` varchar(255) NOT NULL DEFAULT '12345',
+  `password` varchar(255) NOT NULL DEFAULT '$2y$10$CbatfO4ksgVZgtgqCFq8POz0Lb8alMQe.sX9SxqCJXIatkGtxQ2KG', -- 'Welcome123!' hashed
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -187,8 +187,8 @@ CREATE TABLE `lecturers` (
 --
 
 INSERT INTO `lecturers` (`id`, `first_name`, `last_name`, `gender`, `dob`, `id_number`, `email`, `phone`, `department_id`, `education_level`, `role`, `photo`, `password`, `created_at`, `updated_at`) VALUES
-(1, 'Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'phd', 'lecturer', NULL, '12345', '2025-09-23 09:43:25', '2025-09-23 09:43:25'),
-(2, 'scott', 'adkin', 'Male', '2008-06-25', '12345678900987654', 'scott@gmail.com', '078789234', 3, 'PhD', 'lecturer', 'lec_68d59ce7579f3.jpg', '$2y$10$/AznslTTSRmADosusuUnX.VdoAeZdVRV4uq649pxAnUCWdCP8tqVa', '2025-09-25 19:49:59', '2025-09-25 20:46:24');
+(1, 'Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'phd', 'lecturer', NULL, '$2y$10$CbatfO4ksgVZgtgqCFq8POz0Lb8alMQe.sX9SxqCJXIatkGtxQ2KG', '2025-09-23 09:43:25', '2025-09-23 09:43:25'),
+(2, 'scott', 'adkin', 'Male', '2008-06-25', '12345678900987654', 'scott@gmail.com', '078789234', 3, 'PhD', 'lecturer', 'lec_68d59ce7579f3.jpg', '$2y$10$CbatfO4ksgVZgtgqCFq8POz0Lb8alMQe.sX9SxqCJXIatkGtxQ2KG', '2025-09-25 19:49:59', '2025-09-25 20:46:24');
 
 -- --------------------------------------------------------
 

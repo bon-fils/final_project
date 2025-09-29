@@ -1894,9 +1894,26 @@ class StudentRegistration {
             this.showLoading(true);
             this.disableForm(true);
 
-            const formData = new FormData(e.target);
-            // Ensure CSRF token is included
-            formData.append('csrf_token', this.csrfToken);
+            const formData = new FormData();
+
+            // Manually collect form data to ensure all fields are included
+            const form = e.target;
+            const formElements = form.querySelectorAll('input, select, textarea');
+            formElements.forEach(element => {
+                if (element.name) {
+                    if (element.type === 'file') {
+                        if (element.files.length > 0) {
+                            formData.append(element.name, element.files[0]);
+                        }
+                    } else if (element.type === 'checkbox' || element.type === 'radio') {
+                        if (element.checked) {
+                            formData.append(element.name, element.value);
+                        }
+                    } else {
+                        formData.append(element.name, element.value);
+                    }
+                }
+            });
 
             // Include fingerprint data if captured
             if (this.fingerprintCaptured && this.fingerprintData) {
@@ -2007,14 +2024,6 @@ class StudentRegistration {
         }
     });
 
-    // Registration number length validation
-    const regNo = $('#reg_no').val();
-    if (regNo && regNo.length < 5) {
-        this.showFieldError($('#reg_no')[0], 'Registration number must be at least 5 characters');
-        isValid = false;
-        errors.push('Registration number too short');
-    }
-
     // Department-program dependency validation
     const departmentId = $('#department').val();
     const optionId = $('#option').val();
@@ -2065,21 +2074,13 @@ class StudentRegistration {
         errors.push('Invalid parent phone number format');
     }
 
-    // Registration number length validation
-    const regNo = $('#reg_no').val();
-    if (regNo && regNo.length < 5) {
-        this.showFieldError($('#reg_no')[0], 'Registration number must be at least 5 characters');
-        isValid = false;
-        errors.push('Registration number too short');
-    }
-
     // Date of birth validation
     const dob = $('#dob').val();
     if (dob) {
         const birthDate = new Date(dob);
         const today = new Date();
         const age = today.getFullYear() - birthDate.getFullYear();
-        
+
         if (age < 16) {
             this.showFieldError($('#dob')[0], 'Student must be at least 16 years old');
             isValid = false;
@@ -2097,11 +2098,9 @@ class StudentRegistration {
         errors.push('Location information is incomplete');
     }
 
-    // Fingerprint validation with user feedback
+    // Fingerprint is optional - no validation required
     if (!this.fingerprintCaptured) {
-        console.warn('No fingerprint captured - proceeding without biometric data');
-        // Show a non-blocking warning
-        this.showAlert('⚠️ No fingerprint captured. Consider enrolling fingerprint for better security.', 'warning');
+        console.log('Fingerprint not captured - proceeding without biometric data (optional)');
     }
 
     // Log validation results for debugging
@@ -2258,6 +2257,16 @@ class StudentRegistration {
             errorMessage = 'Unable to connect to server. Please check if the server is running.';
         } else if (error.status === 403) {
             errorMessage = 'Access denied. Please refresh the page and try again.';
+        } else if (error.status === 422) {
+            // Handle validation errors for 422
+            if (error.responseJSON && error.responseJSON.errors) {
+                const errors = Object.values(error.responseJSON.errors).flat();
+                errorMessage = 'Validation failed: ' + errors.join('; ');
+            } else if (error.responseJSON && error.responseJSON.message) {
+                errorMessage = error.responseJSON.message;
+            } else {
+                errorMessage = 'Validation failed. Please check all required fields.';
+            }
         } else if (error.status === 500) {
             errorMessage = 'Server error occurred. Please try again later.';
         } else if (error.status >= 400) {

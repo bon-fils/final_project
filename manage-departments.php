@@ -4,55 +4,185 @@ require_once "config.php";
 require_once "session_check.php";
 require_role(['admin']);
 
-// Enhanced JSON response function
-function jsonResponse($status, $message, $extra = []) {
-    http_response_code($status === 'success' ? 200 : 400);
+// Enhanced JSON response function with improved error handling
+function jsonResponse($status, $message, $extra = [], $httpCode = null) {
+    $httpCode = $httpCode ?? ($status === 'success' ? 200 : 400);
+    http_response_code($httpCode);
     header('Content-Type: application/json');
-    echo json_encode(array_merge(['status' => $status, 'message' => $message], $extra));
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('X-XSS-Protection: 1; mode=block');
+
+    $response = array_merge(['status' => $status, 'message' => $message], $extra);
+
+    // Log errors for debugging
+    if ($status === 'error') {
+        error_log("API Error: $message | Extra: " . json_encode($extra));
+    }
+
+    echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
-// Input validation function
-function validateInput($data, $field, $minLength = 1, $maxLength = 255) {
+// Enhanced input validation and sanitization function
+function validateInput($data, $field, $minLength = 1, $maxLength = 255, $pattern = null) {
+    // Sanitize input
     $data = trim($data ?? '');
-    if (empty($data)) {
-        return "Field '$field' is required";
+
+    // Remove potential XSS vectors
+    $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
+    $data = strip_tags($data);
+
+    // Check for required field
+    if (empty($data) && $minLength > 0) {
+        return "Field '$field' is required and cannot be empty";
     }
+
+    // Check minimum length
     if (strlen($data) < $minLength) {
-        return "Field '$field' must be at least $minLength characters";
+        return "Field '$field' must be at least $minLength characters long";
     }
+
+    // Check maximum length
     if (strlen($data) > $maxLength) {
         return "Field '$field' must not exceed $maxLength characters";
+    }
+
+    // Check pattern if provided
+    if ($pattern && !preg_match($pattern, $data)) {
+        return "Field '$field' contains invalid characters. Only letters, numbers, spaces, hyphens, dots, and parentheses are allowed";
+    }
+
+    return null;
+}
+
+// Additional validation functions
+function validateId($id, $field = 'ID') {
+    $id = filter_var($id, FILTER_VALIDATE_INT);
+    if ($id === false || $id <= 0) {
+        return "Invalid $field provided";
     }
     return null;
 }
 
-// AJAX Request Handler
+function validateStatus($status, $allowedStatuses = ['active', 'inactive']) {
+    if (!in_array($status, $allowedStatuses, true)) {
+        return "Invalid status value";
+    }
+    return null;
+}
+
+function sanitizeArray($array, $field) {
+    if (!is_array($array)) {
+        return [$field => "Invalid array format"];
+    }
+
+    $sanitized = [];
+    $errors = [];
+
+    foreach ($array as $key => $value) {
+        $sanitized[$key] = trim(htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        if (empty($sanitized[$key])) {
+            $errors[] = "Item " . ($key + 1) . " in $field cannot be empty";
+        }
+    }
+
+    return $errors ? $errors : $sanitized;
+}
+
+// Additional validation functions
+function validateDepartmentUniqueness($name, $excludeId = null) {
+    global $pdo;
+
+    $query = "SELECT COUNT(*) FROM departments WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))";
+    $params = [$name];
+
+    if ($excludeId) {
+        $query .= " AND id != ?";
+        $params[] = $excludeId;
+    }
+
+    $stmt = $pdo->prepare($query);
+    $stmt->execute($params);
+
+    return $stmt->fetchColumn() == 0;
+}
+
+function validateProgramUniqueness($name, $departmentId, $excludeId = null) {
+    global $pdo;
+
+    $query = "SELECT COUNT(*) FROM options WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND department_id = ?";
+    $params = [$name, $departmentId];
+
+    if ($excludeId) {
+        $query .= " AND id != ?";
+        $params[] = $excludeId;
+    }
+
+    $stmt = $pdo->prepare($query);
+    $stmt->execute($params);
+
+    return $stmt->fetchColumn() == 0;
+}
+
+// Enhanced AJAX Request Handler with security and validation
 if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
-    $action = $_GET['action'];
-    
+    // Sanitize action parameter
+    $action = trim(htmlspecialchars($_GET['action'], ENT_QUOTES, 'UTF-8'));
+
+    // Validate action against whitelist
+    $allowedActions = [
+        'list_departments', 'add_department', 'edit_department', 'add_program',
+        'delete_department', 'delete_program', 'get_statistics', 'export_csv',
+        'export_pdf', 'bulk_delete', 'bulk_assign_hod', 'get_department_hierarchy',
+        'list_options', 'edit_program', 'update_program_status', 'bulk_update_program_status',
+        'bulk_delete_programs'
+    ];
+
+    if (!in_array($action, $allowedActions, true)) {
+        error_log("Invalid action attempted: $action from IP: " . $_SERVER['REMOTE_ADDR']);
+        jsonResponse('error', 'Invalid action requested', [], 400);
+    }
+
+    // Basic rate limiting (simplified)
+    $clientIP = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $rateLimitKey = 'api_requests_' . md5($clientIP . date('Y-m-d-H-i'));
+
+    if (!isset($_SESSION[$rateLimitKey])) {
+        $_SESSION[$rateLimitKey] = 0;
+    }
+
+    if ($_SESSION[$rateLimitKey] > 50) { // 50 requests per minute
+        jsonResponse('error', 'Rate limit exceeded. Please try again later.', [], 429);
+    }
+
+    $_SESSION[$rateLimitKey]++;
+
     try {
+        // Log API access for auditing
+        error_log("API Access: Action=$action, User=" . ($_SESSION['username'] ?? 'unknown') . ", IP=$clientIP");
+
         switch ($action) {
             case 'list_departments':
                 handleListDepartments();
                 break;
-                
+
             case 'add_department':
                 handleAddDepartment();
                 break;
-                
+
             case 'edit_department':
                 handleEditDepartment();
                 break;
-                
+
             case 'add_program':
                 handleAddProgram();
                 break;
-                
+
             case 'delete_department':
                 handleDeleteDepartment();
                 break;
-                
+
             case 'delete_program':
                 handleDeleteProgram();
                 break;
@@ -80,7 +210,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
             case 'get_department_hierarchy':
                 handleGetDepartmentHierarchy();
                 break;
-                
+
             case 'list_options':
                 handleListOptions();
                 break;
@@ -93,12 +223,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 handleUpdateProgramStatus();
                 break;
 
+            case 'bulk_update_program_status':
+                handleBulkUpdateProgramStatus();
+                break;
+
+            case 'bulk_delete_programs':
+                handleBulkDeletePrograms();
+                break;
+
             default:
-                jsonResponse('error', 'Invalid action');
+                jsonResponse('error', 'Action not implemented', [], 501);
         }
+    } catch (PDOException $e) {
+        error_log("Database error in action '$action': " . $e->getMessage());
+        jsonResponse('error', 'Database error occurred', [], 500);
     } catch (Exception $e) {
-        error_log("Action '$action' failed: " . $e->getMessage());
-        jsonResponse('error', 'Operation failed: ' . $e->getMessage());
+        error_log("Unexpected error in action '$action': " . $e->getMessage());
+        jsonResponse('error', 'An unexpected error occurred', [], 500);
     }
 }
 
@@ -144,9 +285,7 @@ function handleListOptions() {
         }
     }
 
-    header('Content-Type: application/json');
-    echo json_encode($options);
-    exit;
+    jsonResponse('success', 'Programs loaded successfully', ['programs' => $options]);
 }
 
 function handleEditProgram() {
@@ -181,10 +320,17 @@ function handleEditProgram() {
         }
 
         // Check for duplicate name (excluding current program)
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE name = ? AND id != ?");
-        $stmt->execute([$name, $progId]);
-        if ($stmt->fetchColumn() > 0) {
-            jsonResponse('error', 'Program name already exists');
+        // First get the department_id of the current program
+        $stmt = $pdo->prepare("SELECT department_id FROM options WHERE id = ?");
+        $stmt->execute([$progId]);
+        $currentDept = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$currentDept) {
+            jsonResponse('error', 'Program not found');
+        }
+
+        if (!validateProgramUniqueness($name, $currentDept['department_id'], $progId)) {
+            jsonResponse('error', 'A program with this name already exists in this department. Please choose a different name.');
         }
 
         $stmt = $pdo->prepare("UPDATE options SET name = ?, status = ? WHERE id = ?");
@@ -236,131 +382,224 @@ function handleUpdateProgramStatus() {
 
 function handleListDepartments() {
     global $pdo;
-    
-    $stmt = $pdo->query("
-        SELECT d.id AS dept_id, d.name AS dept_name, d.hod_id, u.username AS hod_name
-        FROM departments d
-        LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
-        ORDER BY d.name
-    ");
-    $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    foreach ($departments as $key => $dept) {
-        $departments[$key]['programs'] = getDepartmentPrograms($dept['dept_id']);
-        $departments[$key]['hod_name'] = $dept['hod_name'] ?: 'Not Assigned';
+    try {
+        // Optimized query with JOIN for HOD information
+        $stmt = $pdo->query("
+            SELECT
+                d.id AS dept_id,
+                d.name AS dept_name,
+                d.hod_id,
+                COALESCE(u.username, 'Not Assigned') AS hod_name
+            FROM departments d
+            LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
+            ORDER BY d.name ASC
+        ");
+        $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Get programs for each department
+        foreach ($departments as &$dept) {
+            $dept['programs'] = getDepartmentPrograms($dept['dept_id']);
+        }
+
+        // Add metadata
+        $response = [
+            'departments' => $departments,
+            'total_count' => count($departments),
+            'timestamp' => date('c')
+        ];
+
+        jsonResponse('success', 'Departments retrieved successfully', $response);
+
+    } catch (PDOException $e) {
+        error_log("Database error in handleListDepartments: " . $e->getMessage());
+        jsonResponse('error', 'Failed to retrieve departments: ' . $e->getMessage(), [], 500);
+    } catch (Exception $e) {
+        error_log("Unexpected error in handleListDepartments: " . $e->getMessage());
+        jsonResponse('error', 'An unexpected error occurred: ' . $e->getMessage(), [], 500);
     }
-
-    header('Content-Type: application/json');
-    echo json_encode($departments);
-    exit;
 }
 
 function getDepartmentPrograms($deptId) {
     global $pdo;
 
+    // Validate department ID
+    if (!is_numeric($deptId) || $deptId <= 0) {
+        error_log("Invalid department ID provided to getDepartmentPrograms: $deptId");
+        return [];
+    }
+
     try {
-        // Try to select with status and created_at columns
-        $stmt = $pdo->prepare("SELECT id, name, status, created_at FROM options WHERE department_id = ? ORDER BY name");
+        // Single optimized query with proper defaults
+        $stmt = $pdo->prepare("
+            SELECT
+                id,
+                name,
+                COALESCE(status, 'active') AS status,
+                COALESCE(created_at, NOW()) AS created_at
+            FROM options
+            WHERE department_id = ?
+            ORDER BY name ASC
+        ");
+
         $stmt->execute([$deptId]);
         $programs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Add status indicators for display
+        // Add display indicators
         foreach ($programs as &$program) {
-            $program['status'] = $program['status'] ?? 'active';
             $program['status_label'] = $program['status'] === 'active' ? 'Active' : 'Inactive';
             $program['status_badge'] = $program['status'] === 'active' ? 'success' : 'warning';
+            $program['created_at_formatted'] = date('M j, Y', strtotime($program['created_at']));
         }
 
-        return $programs ?: [];
+        return $programs;
+
+    } catch (PDOException $e) {
+        error_log("Database error in getDepartmentPrograms for dept $deptId: " . $e->getMessage());
+        return [];
     } catch (Exception $e) {
-        // Fallback query without status and created_at columns
-        try {
-            $stmt = $pdo->prepare("SELECT id, name FROM options WHERE department_id = ? ORDER BY name");
-            $stmt->execute([$deptId]);
-            $programs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            // Add default status indicators
-            foreach ($programs as &$program) {
-                $program['status'] = 'active';
-                $program['status_label'] = 'Active';
-                $program['status_badge'] = 'success';
-                $program['created_at'] = date('Y-m-d H:i:s');
-            }
-
-            return $programs ?: [];
-        } catch (Exception $e2) {
-            error_log("Error loading programs for department $deptId: " . $e->getMessage());
-            return [];
-        }
+        error_log("Unexpected error in getDepartmentPrograms for dept $deptId: " . $e->getMessage());
+        return [];
     }
 }
 
 function handleAddDepartment() {
     global $pdo;
-    
+
+    // Validate request method
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        jsonResponse('error', 'Invalid request method');
+        jsonResponse('error', 'Invalid request method', [], 405);
     }
 
-    $name = trim($_POST['department_name'] ?? '');
-    $hodId = !empty($_POST['hod_id']) ? (int)$_POST['hod_id'] : null;
+    // Sanitize and validate inputs
+    $name = $_POST['department_name'] ?? '';
+    $hodId = $_POST['hod_id'] ?? null;
     $programs = $_POST['programs'] ?? [];
 
-    // Validation
-    if ($error = validateInput($name, 'Department name', 2, 100)) {
+    // Validate department name
+    if ($error = validateInput($name, 'Department name', 2, 100, '/^[a-zA-Z0-9\s\-\.\(\)]+$/')) {
         jsonResponse('error', $error);
     }
 
-    // Check for duplicate department name
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM departments WHERE name = ?");
-    $stmt->execute([$name]);
-    if ($stmt->fetchColumn() > 0) {
-        jsonResponse('error', 'Department already exists');
+    // Validate HoD ID if provided
+    if ($hodId && ($error = validateId($hodId, 'Head of Department ID'))) {
+        jsonResponse('error', $error);
     }
 
-    // Validate HoD exists and has correct role
-    if ($hodId) {
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ? AND role = 'hod'");
-        $stmt->execute([$hodId]);
-        if ($stmt->fetchColumn() === 0) {
-            jsonResponse('error', 'Invalid Head of Department selected');
+    // Validate programs array
+    if (!empty($programs)) {
+        $validatedPrograms = sanitizeArray($programs, 'Programs');
+        if (is_array($validatedPrograms) && isset($validatedPrograms['Programs'])) {
+            jsonResponse('error', implode(', ', $validatedPrograms));
         }
+        $programs = $validatedPrograms;
     }
 
-    $pdo->beginTransaction();
     try {
-        $stmt = $pdo->prepare("INSERT INTO departments (name, hod_id) VALUES (?, ?)");
-        $stmt->execute([$name, $hodId]);
-        $deptId = $pdo->lastInsertId();
-
-        // Add programs
-        if (!empty($programs)) {
-            addProgramsToDepartment($deptId, $programs);
+        // Check for duplicate department name
+        if (!validateDepartmentUniqueness($name)) {
+            jsonResponse('error', 'A department with this name already exists. Please choose a different name.');
         }
 
-        $pdo->commit();
-        jsonResponse('success', 'Department added successfully', ['dept_id' => $deptId]);
-    } catch (Exception $e) {
-        $pdo->rollBack();
-        throw $e;
+        // Validate HoD exists and has correct role
+        if ($hodId) {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ? AND role = 'hod' AND status = 'active'");
+            $stmt->execute([$hodId]);
+            if ($stmt->fetchColumn() === 0) {
+                jsonResponse('error', 'Invalid or inactive Head of Department selected');
+            }
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            // Insert department
+            $stmt = $pdo->prepare("INSERT INTO departments (name, hod_id, created_at) VALUES (?, ?, NOW())");
+            $stmt->execute([$name, $hodId]);
+            $deptId = $pdo->lastInsertId();
+
+            // Add programs if provided
+            if (!empty($programs)) {
+                addProgramsToDepartment($deptId, $programs);
+            }
+
+            $pdo->commit();
+
+            // Log successful operation
+            error_log("Department created: ID=$deptId, Name=$name, HOD=$hodId, Programs=" . count($programs));
+
+            $message = 'Department added successfully';
+            if ($hodId) {
+                $message .= '. Head of Department assigned.';
+            }
+            jsonResponse('success', $message, [
+                'dept_id' => $deptId,
+                'dept_name' => $name,
+                'hod_id' => $hodId,
+                'programs_count' => count($programs)
+            ]);
+
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            error_log("Failed to create department '$name': " . $e->getMessage());
+            throw $e;
+        }
+
+    } catch (PDOException $e) {
+        error_log("Database error in handleAddDepartment: " . $e->getMessage());
+        jsonResponse('error', 'A database error occurred while creating the department. Please try again or contact support if the problem persists.', [], 500);
     }
 }
 
 function addProgramsToDepartment($deptId, $programs) {
     global $pdo;
-    
-    $stmt = $pdo->prepare("INSERT INTO options (name, department_id) VALUES (?, ?)");
-    
+
+    if (!is_array($programs) || empty($programs)) {
+        return;
+    }
+
+    $stmt = $pdo->prepare("INSERT INTO options (name, department_id, status, created_at) VALUES (?, ?, 'active', NOW())");
+    $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE LOWER(name) = LOWER(?) AND department_id = ?");
+
+    $addedPrograms = [];
+    $skippedPrograms = [];
+
     foreach ($programs as $program) {
         $program = trim($program);
-        if (!empty($program)) {
-            // Check for duplicate program name in department
-            $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE name = ? AND department_id = ?");
-            $checkStmt->execute([$program, $deptId]);
-            if ($checkStmt->fetchColumn() === 0) {
-                $stmt->execute([$program, $deptId]);
-            }
+
+        // Skip empty programs
+        if (empty($program)) {
+            continue;
         }
+
+        // Validate program name
+        if (strlen($program) < 2 || strlen($program) > 100) {
+            $skippedPrograms[] = $program . ' (invalid length)';
+            continue;
+        }
+
+        // Check for duplicates (case-insensitive)
+        $checkStmt->execute([$program, $deptId]);
+        if ($checkStmt->fetchColumn() > 0) {
+            $skippedPrograms[] = $program . ' (already exists)';
+            continue;
+        }
+
+        try {
+            $stmt->execute([$program, $deptId]);
+            $addedPrograms[] = $program;
+        } catch (PDOException $e) {
+            error_log("Failed to add program '$program' to department $deptId: " . $e->getMessage());
+            $skippedPrograms[] = $program . ' (database error)';
+        }
+    }
+
+    // Log results
+    if (!empty($addedPrograms)) {
+        error_log("Added programs to department $deptId: " . implode(', ', $addedPrograms));
+    }
+    if (!empty($skippedPrograms)) {
+        error_log("Skipped programs for department $deptId: " . implode(', ', $skippedPrograms));
     }
 }
 
@@ -391,10 +630,8 @@ function handleEditDepartment() {
     }
 
     // Check for duplicate name (excluding current department)
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM departments WHERE name = ? AND id != ?");
-    $stmt->execute([$name, $deptId]);
-    if ($stmt->fetchColumn() > 0) {
-        jsonResponse('error', 'Department name already exists');
+    if (!validateDepartmentUniqueness($name, $deptId)) {
+        jsonResponse('error', 'A department with this name already exists. Please choose a different name.');
     }
 
     // Validate HoD
@@ -408,8 +645,12 @@ function handleEditDepartment() {
 
     $stmt = $pdo->prepare("UPDATE departments SET name = ?, hod_id = ? WHERE id = ?");
     $stmt->execute([$name, $hodId, $deptId]);
-    
-    jsonResponse('success', 'Department updated successfully');
+
+    $message = 'Department updated successfully';
+    if ($hodId) {
+        $message .= '. Head of Department assigned.';
+    }
+    jsonResponse('success', $message);
 }
 
 function handleAddProgram() {
@@ -444,10 +685,8 @@ function handleAddProgram() {
     }
 
     // Check for duplicate program name in department
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE name = ? AND department_id = ?");
-    $stmt->execute([$programName, $deptId]);
-    if ($stmt->fetchColumn() > 0) {
-        jsonResponse('error', 'Program already exists in this department');
+    if (!validateProgramUniqueness($programName, $deptId)) {
+        jsonResponse('error', 'A program with this name already exists in the selected department. Please choose a different name.');
     }
 
     $stmt = $pdo->prepare("INSERT INTO options (name, department_id, status) VALUES (?, ?, ?)");
@@ -464,86 +703,241 @@ function handleAddProgram() {
 
 function handleDeleteDepartment() {
     global $pdo;
-    
+
+    // Validate request method
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        jsonResponse('error', 'Invalid request method');
+        jsonResponse('error', 'Invalid request method', [], 405);
     }
 
-    $deptId = (int)($_POST['department_id'] ?? 0);
-    
-    if ($deptId <= 0) {
-        jsonResponse('error', 'Invalid department ID');
+    // Validate and sanitize department ID
+    $deptId = $_POST['department_id'] ?? '';
+    if ($error = validateId($deptId, 'Department ID')) {
+        jsonResponse('error', $error);
     }
 
-    $pdo->beginTransaction();
     try {
-        // Check if department has any dependencies
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE department_id = ?");
+        // Check if department exists and get details
+        $stmt = $pdo->prepare("SELECT name FROM departments WHERE id = ?");
         $stmt->execute([$deptId]);
-        $programCount = $stmt->fetchColumn();
+        $deptName = $stmt->fetchColumn();
 
-        // Delete programs first
-        $pdo->prepare("DELETE FROM options WHERE department_id = ?")->execute([$deptId]);
-        
-        // Delete department
-        $stmt = $pdo->prepare("DELETE FROM departments WHERE id = ?");
-        $stmt->execute([$deptId]);
-        
-        if ($stmt->rowCount() === 0) {
-            throw new Exception("Department not found or already deleted");
+        if (!$deptName) {
+            jsonResponse('error', 'Department not found');
         }
 
-        $pdo->commit();
-        jsonResponse('success', "Department deleted successfully (removed $programCount programs)");
-    } catch (Exception $e) {
-        $pdo->rollBack();
-        throw $e;
+        // Check for dependencies (students, etc.)
+        $dependencyChecks = [
+            'students' => "SELECT COUNT(*) FROM students WHERE department_id = ?",
+            'courses' => "SELECT COUNT(*) FROM courses WHERE department_id = ?",
+            'lecturers' => "SELECT COUNT(*) FROM lecturers WHERE department_id = ?"
+        ];
+
+        $dependencies = [];
+        foreach ($dependencyChecks as $type => $query) {
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$deptId]);
+            $count = $stmt->fetchColumn();
+            if ($count > 0) {
+                $dependencies[] = "$count $type";
+            }
+        }
+
+        if (!empty($dependencies)) {
+            jsonResponse('error', 'Cannot delete department. It has dependencies: ' . implode(', ', $dependencies));
+        }
+
+        $pdo->beginTransaction();
+
+        try {
+            // Get program count before deletion
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE department_id = ?");
+            $stmt->execute([$deptId]);
+            $programCount = $stmt->fetchColumn();
+
+            // Delete programs first (cascade delete)
+            $pdo->prepare("DELETE FROM options WHERE department_id = ?")->execute([$deptId]);
+
+            // Delete department
+            $stmt = $pdo->prepare("DELETE FROM departments WHERE id = ?");
+            $stmt->execute([$deptId]);
+
+            if ($stmt->rowCount() === 0) {
+                throw new Exception("Department not found or already deleted");
+            }
+
+            $pdo->commit();
+
+            // Log successful deletion
+            error_log("Department deleted: ID=$deptId, Name=$deptName, Programs removed=$programCount");
+
+            jsonResponse('success', "Department '$deptName' deleted successfully", [
+                'dept_id' => $deptId,
+                'dept_name' => $deptName,
+                'programs_removed' => $programCount
+            ]);
+
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            error_log("Failed to delete department $deptId: " . $e->getMessage());
+            throw $e;
+        }
+
+    } catch (PDOException $e) {
+        error_log("Database error in handleDeleteDepartment: " . $e->getMessage());
+        jsonResponse('error', 'Database error occurred while deleting department', [], 500);
     }
 }
 
 function handleDeleteProgram() {
     global $pdo;
-    
+
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         jsonResponse('error', 'Invalid request method');
     }
 
     $progId = (int)($_POST['program_id'] ?? 0);
-    
+
     if ($progId <= 0) {
         jsonResponse('error', 'Invalid program ID');
     }
 
     $stmt = $pdo->prepare("DELETE FROM options WHERE id = ?");
     $stmt->execute([$progId]);
-    
+
     if ($stmt->rowCount() === 0) {
         jsonResponse('error', 'Program not found or already deleted');
     }
-    
+
     jsonResponse('success', 'Program deleted successfully');
+}
+
+function handleBulkUpdateProgramStatus() {
+    global $pdo;
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        jsonResponse('error', 'Invalid request method', [], 405);
+    }
+
+    $programIds = $_POST['program_ids'] ?? [];
+    $status = $_POST['status'] ?? '';
+
+    if (empty($programIds)) {
+        jsonResponse('error', 'No programs selected');
+    }
+
+    if (!in_array($status, ['active', 'inactive'])) {
+        jsonResponse('error', 'Invalid status value');
+    }
+
+    // Ensure program_ids is an array
+    if (!is_array($programIds)) {
+        $programIds = [$programIds];
+    }
+
+    $programIds = array_map('intval', array_filter($programIds, function($id) {
+        return is_numeric($id) && $id > 0;
+    }));
+
+    if (empty($programIds)) {
+        jsonResponse('error', 'No valid program IDs provided');
+    }
+
+    try {
+        $placeholders = str_repeat('?,', count($programIds) - 1) . '?';
+        $stmt = $pdo->prepare("UPDATE options SET status = ? WHERE id IN ($placeholders)");
+        $stmt->execute(array_merge([$status], $programIds));
+
+        $updatedCount = $stmt->rowCount();
+
+        // Log successful operation
+        error_log("Bulk program status update: $updatedCount programs set to $status");
+
+        jsonResponse('success', "Successfully updated $updatedCount programs to $status status", [
+            'updated_count' => $updatedCount,
+            'new_status' => $status
+        ]);
+
+    } catch (PDOException $e) {
+        error_log("Database error in handleBulkUpdateProgramStatus: " . $e->getMessage());
+        jsonResponse('error', 'Database error occurred while updating programs', [], 500);
+    }
+}
+
+function handleBulkDeletePrograms() {
+    global $pdo;
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        jsonResponse('error', 'Invalid request method', [], 405);
+    }
+
+    $programIds = $_POST['program_ids'] ?? [];
+
+    if (empty($programIds)) {
+        jsonResponse('error', 'No programs selected');
+    }
+
+    // Ensure program_ids is an array
+    if (!is_array($programIds)) {
+        $programIds = [$programIds];
+    }
+
+    $programIds = array_map('intval', array_filter($programIds, function($id) {
+        return is_numeric($id) && $id > 0;
+    }));
+
+    if (empty($programIds)) {
+        jsonResponse('error', 'No valid program IDs provided');
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        // Get program names for logging
+        $placeholders = str_repeat('?,', count($programIds) - 1) . '?';
+        $stmt = $pdo->prepare("SELECT name FROM options WHERE id IN ($placeholders)");
+        $stmt->execute($programIds);
+        $programNames = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        // Delete programs
+        $stmt = $pdo->prepare("DELETE FROM options WHERE id IN ($placeholders)");
+        $stmt->execute($programIds);
+
+        $deletedCount = $stmt->rowCount();
+
+        $pdo->commit();
+
+        // Log successful operation
+        error_log("Bulk program deletion: $deletedCount programs deleted: " . implode(', ', $programNames));
+
+        jsonResponse('success', "Successfully deleted $deletedCount programs", [
+            'deleted_count' => $deletedCount,
+            'deleted_programs' => $programNames
+        ]);
+
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log("Database error in handleBulkDeletePrograms: " . $e->getMessage());
+        jsonResponse('error', 'Database error occurred while deleting programs', [], 500);
+    }
 }
 
 function handleGetStatistics() {
     global $pdo;
 
     try {
-        // Get department statistics
         $stats = [];
 
-        // Total departments
+        // Simple queries to get basic statistics
         $stmt = $pdo->query("SELECT COUNT(*) as total FROM departments");
         $stats['total_departments'] = $stmt->fetchColumn();
 
-        // Departments with HoDs
         $stmt = $pdo->query("SELECT COUNT(*) as assigned FROM departments WHERE hod_id IS NOT NULL");
         $stats['assigned_hods'] = $stmt->fetchColumn();
 
-        // Total programs
         $stmt = $pdo->query("SELECT COUNT(*) as total FROM options");
         $stats['total_programs'] = $stmt->fetchColumn();
 
-        // Programs per department average
+        // Calculate average programs per department
         if ($stats['total_departments'] > 0) {
             $stats['avg_programs_per_dept'] = round($stats['total_programs'] / $stats['total_departments'], 1);
         } else {
@@ -551,7 +945,7 @@ function handleGetStatistics() {
         }
 
         // Department with most programs
-        $stmt = $pdo->prepare("
+        $stmt = $pdo->query("
             SELECT d.name, COUNT(o.id) as program_count
             FROM departments d
             LEFT JOIN options o ON d.id = o.department_id
@@ -559,26 +953,20 @@ function handleGetStatistics() {
             ORDER BY program_count DESC
             LIMIT 1
         ");
-        $stmt->execute();
         $topDept = $stmt->fetch(PDO::FETCH_ASSOC);
         $stats['largest_department'] = $topDept ?: ['name' => 'None', 'program_count' => 0];
 
-        // Recent changes (last 30 days) - only if system_logs table exists
-        try {
-            $stmt = $pdo->query("
-                SELECT COUNT(*) as recent_changes
-                FROM system_logs
-                WHERE action LIKE '%department%' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-            ");
-            $stats['recent_changes'] = $stmt->fetchColumn();
-        } catch (PDOException $e) {
-            // system_logs table doesn't exist, skip this metric
-            $stats['recent_changes'] = 0;
-        }
+        // Add metadata
+        $stats['generated_at'] = date('c');
 
         jsonResponse('success', 'Statistics retrieved successfully', $stats);
+
+    } catch (PDOException $e) {
+        error_log("Database error in handleGetStatistics: " . $e->getMessage());
+        jsonResponse('error', 'Failed to retrieve statistics: ' . $e->getMessage(), [], 500);
     } catch (Exception $e) {
-        jsonResponse('error', 'Failed to retrieve statistics: ' . $e->getMessage());
+        error_log("Unexpected error in handleGetStatistics: " . $e->getMessage());
+        jsonResponse('error', 'An unexpected error occurred: ' . $e->getMessage(), [], 500);
     }
 }
 
@@ -719,7 +1107,7 @@ function handleBulkDelete() {
     global $pdo;
 
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        jsonResponse('error', 'Invalid request method');
+        jsonResponse('error', 'Invalid request method', [], 405);
     }
 
     $departmentIds = $_POST['department_ids'] ?? [];
@@ -728,13 +1116,58 @@ function handleBulkDelete() {
         jsonResponse('error', 'No departments selected for deletion');
     }
 
-    // Ensure department_ids is an array
+    // Ensure department_ids is an array and validate
     if (!is_array($departmentIds)) {
         $departmentIds = [$departmentIds];
     }
 
-    $departmentIds = array_map('intval', $departmentIds);
+    $departmentIds = array_map('intval', array_filter($departmentIds, function($id) {
+        return is_numeric($id) && $id > 0;
+    }));
+
+    if (empty($departmentIds)) {
+        jsonResponse('error', 'No valid department IDs provided');
+    }
+
+    // Validate that all departments exist
     $placeholders = str_repeat('?,', count($departmentIds) - 1) . '?';
+    $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id IN ($placeholders)");
+    $stmt->execute($departmentIds);
+    $existingDepts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (count($existingDepts) !== count($departmentIds)) {
+        $foundIds = array_column($existingDepts, 'id');
+        $missingIds = array_diff($departmentIds, $foundIds);
+        jsonResponse('error', 'Some departments not found: ' . implode(', ', $missingIds));
+    }
+
+    // Check for dependencies
+    $dependencyErrors = [];
+    foreach ($existingDepts as $dept) {
+        $dependencyChecks = [
+            'students' => "SELECT COUNT(*) FROM students WHERE department_id = ?",
+            'courses' => "SELECT COUNT(*) FROM courses WHERE department_id = ?",
+            'lecturers' => "SELECT COUNT(*) FROM lecturers WHERE department_id = ?"
+        ];
+
+        $deptDependencies = [];
+        foreach ($dependencyChecks as $type => $query) {
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$dept['id']]);
+            $count = $stmt->fetchColumn();
+            if ($count > 0) {
+                $deptDependencies[] = "$count $type";
+            }
+        }
+
+        if (!empty($deptDependencies)) {
+            $dependencyErrors[] = "{$dept['name']}: " . implode(', ', $deptDependencies);
+        }
+    }
+
+    if (!empty($dependencyErrors)) {
+        jsonResponse('error', 'Cannot delete departments with dependencies: ' . implode('; ', $dependencyErrors));
+    }
 
     $pdo->beginTransaction();
     try {
@@ -749,10 +1182,14 @@ function handleBulkDelete() {
         $deletedCount = $stmt->rowCount();
 
         $pdo->commit();
-        jsonResponse('success', "Successfully deleted $deletedCount departments");
+        jsonResponse('success', "Successfully deleted $deletedCount department(s) and their associated programs", [
+            'deleted_count' => $deletedCount,
+            'deleted_departments' => array_column($existingDepts, 'name')
+        ]);
     } catch (Exception $e) {
         $pdo->rollBack();
-        jsonResponse('error', 'Failed to delete departments: ' . $e->getMessage());
+        error_log("Bulk delete transaction failed: " . $e->getMessage());
+        jsonResponse('error', 'Failed to delete departments due to a database error. Please try again.', [], 500);
     }
 }
 
@@ -841,44 +1278,44 @@ function handleGetDepartmentHierarchy() {
     
     <style>
         :root {
-            /* Primary Brand Colors - RP Blue with Modern Palette */
-            --primary-color: #0066cc;
-            --primary-dark: #003366;
-            --primary-light: #e6f0ff;
-            --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+            /* Primary Brand Colors - Refined for Skyblue Background */
+            --primary-color: #1e40af;
+            --primary-dark: #1e3a8a;
+            --primary-light: #dbeafe;
+            --primary-gradient: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
 
-            /* Status Colors - Enhanced Contrast and Modern */
-            --success-color: #10b981;
-            --success-light: #d1fae5;
-            --success-dark: #047857;
-            --success-gradient: linear-gradient(135deg, #10b981 0%, #047857 100%);
+            /* Status Colors - Refined for Skyblue Theme */
+            --success-color: #059669;
+            --success-light: #ecfdf5;
+            --success-dark: #065f46;
+            --success-gradient: linear-gradient(135deg, #059669 0%, #065f46 100%);
 
-            --danger-color: #ef4444;
-            --danger-light: #fee2e2;
-            --danger-dark: #dc2626;
-            --danger-gradient: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            --danger-color: #dc2626;
+            --danger-light: #fef2f2;
+            --danger-dark: #991b1b;
+            --danger-gradient: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
 
-            --warning-color: #f59e0b;
-            --warning-light: #fef3c7;
-            --warning-dark: #d97706;
-            --warning-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            --warning-color: #d97706;
+            --warning-light: #fffbeb;
+            --warning-dark: #92400e;
+            --warning-gradient: linear-gradient(135deg, #d97706 0%, #92400e 100%);
 
-            --info-color: #06b6d4;
-            --info-light: #cffafe;
-            --info-dark: #0891b2;
-            --info-gradient: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+            --info-color: #0891b2;
+            --info-light: #ecfeff;
+            --info-dark: #0e7490;
+            --info-gradient: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);
 
-            /* Neutral Colors */
-            --gray-50: #f8f9fa;
-            --gray-100: #e9ecef;
-            --gray-200: #dee2e6;
-            --gray-300: #ced4da;
-            --gray-400: #adb5bd;
-            --gray-500: #6c757d;
-            --gray-600: #495057;
-            --gray-700: #343a40;
-            --gray-800: #212529;
-            --gray-900: #000000;
+            /* Neutral Colors - Refined Palette */
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
 
             /* Layout Variables */
             --sidebar-width: 280px;
@@ -921,17 +1358,44 @@ function handleGetDepartmentHierarchy() {
 
         body {
             font-family: 'Inter', sans-serif;
-            background: #0066cc;
+            background: skyblue;
             min-height: 100vh;
             overflow-x: hidden;
             font-size: var(--font-size-base);
             line-height: 1.6;
-            color: var(--gray-700);
+            color: var(--gray-800);
             font-weight: var(--font-weight-normal);
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
             margin: 0;
             position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(circle at 25% 25%, rgba(255,255,255,0.15) 0%, transparent 50%),
+                radial-gradient(circle at 75% 75%, rgba(255,255,255,0.1) 0%, transparent 50%),
+                linear-gradient(135deg, rgba(135,206,235,0.9) 0%, rgba(70,130,180,0.95) 100%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="subtle-pattern" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r="0.5" fill="rgba(255,255,255,0.03)"/></pattern></defs><rect width="100" height="100" fill="url(%23subtle-pattern)"/></svg>');
+            pointer-events: none;
+            z-index: -1;
         }
 
         .main-content {
@@ -941,6 +1405,8 @@ function handleGetDepartmentHierarchy() {
             min-height: calc(100vh - var(--header-height));
             transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(1px);
         }
 
         .main-content.expanded {
@@ -950,22 +1416,33 @@ function handleGetDepartmentHierarchy() {
         /* Typography */
         h1, h2, h3, h4, h5, h6 {
             font-weight: 600;
-            color: var(--primary-dark);
+            color: var(--gray-900);
+            margin-bottom: 0.5rem;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-dark), var(--primary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 0.5rem;
         }
 
         .text-muted {
-            color: #6c757d !important;
-            opacity: 0.8;
+            color: var(--gray-600) !important;
         }
 
-        /* Cards - Matching admin/index.php */
+        /* Cards */
         .card {
-            background: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
             border-radius: 16px;
             padding: 25px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            border: 1px solid rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -988,19 +1465,22 @@ function handleGetDepartmentHierarchy() {
         }
 
         .card-header {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(248,249,250,0.95) 100%);
             border: none;
-            padding: 0;
-            margin-bottom: 20px;
+            padding: var(--spacing-md);
+            margin-bottom: var(--spacing-lg);
+            border-radius: var(--border-radius) var(--border-radius) 0 0;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
         }
 
         .card-header h5 {
-            color: #003366;
+            color: var(--gray-900);
             font-weight: 600;
             font-size: 1.2rem;
             margin: 0;
             display: flex;
             align-items: center;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
 
         .card-header h5 i {
@@ -1013,7 +1493,18 @@ function handleGetDepartmentHierarchy() {
         }
 
         .card-header.bg-info {
-            background: var(--info-gradient) !important;
+            background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%) !important;
+            color: white !important;
+            border: none;
+        }
+
+        .card-header.bg-info h5 {
+            color: white !important;
+        }
+
+        .card-header.bg-info .form-check-label {
+            color: white !important;
+            font-weight: 500;
         }
 
         .card-header.bg-warning {
@@ -1031,7 +1522,7 @@ function handleGetDepartmentHierarchy() {
         .card-title {
             font-size: 1.2rem;
             font-weight: 600;
-            color: #003366;
+            color: var(--gray-900);
             margin-bottom: 20px;
             display: flex;
             align-items: center;
@@ -1043,7 +1534,7 @@ function handleGetDepartmentHierarchy() {
         }
 
         .card-text {
-            color: #6c757d;
+            color: var(--gray-700);
             line-height: 1.6;
         }
 
@@ -1186,6 +1677,7 @@ function handleGetDepartmentHierarchy() {
             padding: calc(var(--spacing-sm) + 0.25rem);
             transition: var(--transition);
             background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(5px);
             font-size: var(--font-size-sm);
         }
 
@@ -1195,8 +1687,8 @@ function handleGetDepartmentHierarchy() {
 
         .form-control:focus, .form-select:focus {
             border-color: var(--primary-color);
-            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
-            background: white;
+            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+            background: rgba(255, 255, 255, 0.95);
         }
 
         .form-control::placeholder {
@@ -1206,7 +1698,7 @@ function handleGetDepartmentHierarchy() {
 
         .form-label {
             font-weight: var(--font-weight-semibold);
-            color: var(--gray-700);
+            color: var(--gray-800);
             margin-bottom: var(--spacing-xs);
             font-size: var(--font-size-sm);
         }
@@ -1251,20 +1743,22 @@ function handleGetDepartmentHierarchy() {
             margin-top: var(--spacing-xs);
         }
 
-        /* Department Cards */
-        .department-card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
+        /* Department Directory Items */
+        .department-item {
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(15px);
             border-radius: var(--border-radius-lg);
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.12);
+            border: 1px solid rgba(0, 0, 0, 0.1);
             border-left: 4px solid var(--primary-color);
             transition: var(--transition);
             position: relative;
             overflow: hidden;
-            margin-bottom: var(--spacing-xl);
+            margin-bottom: var(--spacing-lg);
+            padding: var(--spacing-xl);
         }
 
-        .department-card::before {
+        .department-item::before {
             content: '';
             position: absolute;
             top: 0;
@@ -1276,60 +1770,111 @@ function handleGetDepartmentHierarchy() {
             transition: var(--transition);
         }
 
-        .department-card::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 0;
-            background: linear-gradient(135deg, rgba(0, 102, 204, 0.05), rgba(0, 102, 204, 0.02));
-            transition: var(--transition);
-        }
-
-        .department-card:hover::before {
+        .department-item:hover::before {
             transform: scaleX(1);
         }
 
-        .department-card:hover::after {
-            width: 100%;
-        }
-
-        .department-card:hover {
-            transform: translateY(-6px);
-            box-shadow: var(--shadow-lg);
+        .department-item:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 25px rgba(0, 102, 204, 0.15);
             border-left-color: var(--primary-dark);
         }
 
-        .department-card .card-body {
-            padding: var(--spacing-lg);
-        }
-
-        .department-card .card-title {
-            color: var(--primary-dark);
-            font-size: var(--font-size-lg);
-            font-weight: var(--font-weight-semibold);
-            margin-bottom: var(--spacing-sm);
-        }
-
-        .department-card .card-subtitle {
-            color: var(--gray-600);
-            font-size: var(--font-size-sm);
+        .department-item .department-header {
+            display: flex;
+            align-items: center;
             margin-bottom: var(--spacing-md);
+        }
+
+        .department-item .department-name {
+            font-size: var(--font-size-2xl);
+            font-weight: var(--font-weight-bold);
+            color: var(--gray-900);
+            margin: 0;
+            flex-grow: 1;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+
+        .department-item .department-checkbox {
+            margin-right: var(--spacing-md);
+        }
+
+        .department-item .department-info {
+            margin-bottom: var(--spacing-sm);
+            color: var(--gray-900);
+        }
+
+        .department-item .department-info strong {
+            color: var(--gray-700);
+            font-weight: var(--font-weight-bold);
+            text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+        }
+
+        .department-item .programs-list {
+            margin-bottom: var(--spacing-md);
+            padding: var(--spacing-md) var(--spacing-lg);
+            background: rgba(248, 249, 250, 0.9);
+            border-radius: var(--border-radius);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            color: var(--gray-900);
+        }
+
+        .department-item .programs-list em {
+            color: var(--gray-600);
+            font-style: italic;
+            text-shadow: 0 1px 1px rgba(255, 255, 255, 0.5);
+        }
+
+        .department-item .program-item {
+            padding: 3px 0;
+            color: var(--gray-900);
+            font-weight: var(--font-weight-medium);
+            line-height: 1.4;
+        }
+
+        .department-item .add-program-section {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            margin-top: var(--spacing-md);
+            padding: var(--spacing-sm);
+            background: rgba(240, 248, 255, 0.8);
+            border-radius: var(--border-radius);
+            border: 1px solid rgba(0, 102, 204, 0.2);
+        }
+
+        .department-item .add-program-input {
+            flex: 1;
+            max-width: 300px;
+            border: 2px solid rgba(0, 102, 204, 0.2);
+        }
+
+        .department-item .add-program-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+        }
+
+        .department-item .action-buttons {
+            display: flex;
+            gap: var(--spacing-sm);
+            margin-top: var(--spacing-md);
+            padding-top: var(--spacing-sm);
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
         }
 
         /* Program Badges */
         .program-badge {
             border-radius: 20px;
             padding: var(--spacing-xs) var(--spacing-md);
-            font-size: var(--font-size-xs);
-            font-weight: var(--font-weight-medium);
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-semibold);
             margin: var(--spacing-xs) calc(var(--spacing-xs) + 0.25rem) var(--spacing-xs) 0;
             display: inline-block;
             transition: var(--transition);
-            color: var(--primary-color);
-            background: var(--primary-light);
-            border: 1px solid rgba(0, 102, 204, 0.2);
+            color: var(--gray-800);
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid var(--primary-light);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             position: relative;
             overflow: hidden;
         }
@@ -1350,10 +1895,10 @@ function handleGetDepartmentHierarchy() {
         }
 
         .program-badge:hover {
-            transform: scale(1.05) translateY(-1px);
-            box-shadow: var(--shadow-md);
-            background: var(--primary-color);
-            color: white;
+            transform: scale(1.08) translateY(-1px);
+            box-shadow: 0 4px 12px rgba(44,62,80,0.13);
+            background: #e3f0ff;
+            color: var(--primary-dark);
         }
 
         .program-badge.success {
@@ -1392,17 +1937,18 @@ function handleGetDepartmentHierarchy() {
         .text-danger { color: var(--danger-color) !important; }
         .text-muted { color: var(--gray-500) !important; }
 
-        /* Statistics Cards - Matching admin/index.php */
+        /* Statistics Cards */
         .statistics-container .card {
             text-align: center;
             border: none;
-            background: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
             position: relative;
             overflow: hidden;
             border-radius: 16px;
             padding: 25px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            border: 1px solid rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             transition: all 0.3s ease;
         }
 
@@ -1442,12 +1988,12 @@ function handleGetDepartmentHierarchy() {
         .statistics-container h4 {
             font-size: 2rem;
             font-weight: 700;
-            color: #003366;
+            color: var(--gray-900);
             margin-bottom: 5px;
         }
 
         .statistics-container .card-title {
-            color: #6c757d;
+            color: var(--gray-700);
             font-size: 0.9rem;
             font-weight: 500;
             margin: 0;
@@ -1497,24 +2043,27 @@ function handleGetDepartmentHierarchy() {
             font-weight: 600;
         }
 
-        /* Tables - Matching admin/index.php */
+        /* Tables */
         .table {
             border-radius: 16px;
             overflow: hidden;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            background: white;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 0, 0, 0.05);
         }
 
         .table th {
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
             color: white;
             border: none;
-            padding: 15px;
+            padding: 15px 12px;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             position: relative;
+            box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1);
         }
 
         .table th::after {
@@ -1528,18 +2077,20 @@ function handleGetDepartmentHierarchy() {
         }
 
         .table td {
-            padding: 15px;
+            padding: 12px 15px;
             vertical-align: middle;
-            border-color: #e9ecef;
+            border-color: rgba(0, 0, 0, 0.08);
             font-size: 0.9rem;
+            color: var(--gray-900);
+            font-weight: 500;
         }
 
         .table-striped tbody tr:nth-of-type(odd) {
-            background-color: rgba(0, 102, 204, 0.02);
+            background-color: rgba(30, 64, 175, 0.04);
         }
 
         .table-striped tbody tr:nth-of-type(even) {
-            background-color: white;
+            background-color: rgba(255, 255, 255, 0.95);
         }
 
         .table-hover tbody tr {
@@ -1547,9 +2098,76 @@ function handleGetDepartmentHierarchy() {
         }
 
         .table-hover tbody tr:hover {
-            background-color: rgba(0, 102, 204, 0.05);
-            transform: scale(1.01);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            background-color: rgba(30, 64, 175, 0.08);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border-left: 3px solid var(--primary-color);
+        }
+
+        /* Special styling for programs table */
+        #programsTable {
+            background: white;
+            box-shadow: 0 6px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        #programsTable thead th {
+            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+            font-weight: 700;
+            font-size: 0.8rem;
+            padding: 16px 12px;
+        }
+
+        #programsTable tbody tr:nth-of-type(odd) {
+            background-color: #f8fafc;
+        }
+
+        #programsTable tbody tr:nth-of-type(even) {
+            background-color: #ffffff;
+        }
+
+        #programsTable tbody tr:hover {
+            background-color: #e0f2fe;
+            border-left: 4px solid #1e40af;
+        }
+
+        #programsTable td {
+            border-bottom: 1px solid #e2e8f0;
+            color: #1e293b;
+            font-weight: 500;
+        }
+
+        /* Checkbox styling in table */
+        .table .form-check-input {
+            border: 2px solid #cbd5e1;
+            background-color: white;
+        }
+
+        .table .form-check-input:checked {
+            background-color: #1e40af;
+            border-color: #1e40af;
+        }
+
+        .table .form-check-input:focus {
+            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+        }
+
+        /* Bulk actions button styling */
+        #bulkProgramsActions:not(:disabled) {
+            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+            color: white;
+            border-color: #1e40af;
+            box-shadow: 0 2px 8px rgba(30, 64, 175, 0.3);
+        }
+
+        #bulkProgramsActions:not(:disabled):hover {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(30, 64, 175, 0.4);
+        }
+
+        #bulkProgramsActions:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .table-responsive {
@@ -1562,6 +2180,33 @@ function handleGetDepartmentHierarchy() {
             font-size: 0.75rem;
             font-weight: 600;
             padding: 0.35em 0.65em;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .badge.bg-success {
+            background: linear-gradient(135deg, #059669 0%, #065f46 100%) !important;
+            color: white !important;
+            font-weight: 600;
+        }
+
+        .badge.bg-warning {
+            background: linear-gradient(135deg, #d97706 0%, #92400e 100%) !important;
+            color: white !important;
+            font-weight: 600;
+        }
+
+        .badge.bg-info {
+            background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%) !important;
+            color: white !important;
+            font-weight: 600;
+        }
+
+        .badge.bg-danger {
+            background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%) !important;
+            color: white !important;
+            font-weight: 600;
         }
 
         /* Alerts */
@@ -1574,28 +2219,29 @@ function handleGetDepartmentHierarchy() {
 
         .alert-success {
             background: var(--success-light);
-            color: #155724;
+            color: var(--gray-900);
             border-left: 4px solid var(--success-color);
         }
 
         .alert-danger {
             background: var(--danger-light);
-            color: #721c24;
+            color: var(--gray-900);
             border-left: 4px solid var(--danger-color);
         }
 
         .alert-warning {
             background: var(--warning-light);
-            color: #856404;
+            color: var(--gray-900);
             border-left: 4px solid var(--warning-color);
         }
 
-        /* Modals - Matching admin/index.php */
+        /* Modals */
         .modal-content {
             border-radius: 16px;
             border: none;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-            background: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
             position: relative;
             overflow: hidden;
         }
@@ -1609,7 +2255,7 @@ function handleGetDepartmentHierarchy() {
         .modal-title {
             font-size: 1.2rem;
             font-weight: 600;
-            color: #003366;
+            color: var(--gray-900);
         }
 
         .modal-body {
@@ -1635,7 +2281,7 @@ function handleGetDepartmentHierarchy() {
             transform: rotate(90deg);
         }
 
-        /* Loading Overlay - Matching admin/index.php */
+        /* Loading Overlay */
         .loading-overlay {
             position: fixed;
             top: 0;
@@ -1791,7 +2437,7 @@ function handleGetDepartmentHierarchy() {
             }
         }
 
-        /* Mobile Responsiveness - Matching admin/index.php */
+        /* Mobile Responsiveness */
         @media (max-width: 768px) {
             :root {
                 --sidebar-width: 0px;
@@ -1862,36 +2508,36 @@ function handleGetDepartmentHierarchy() {
         /* Dark Mode Support */
         @media (prefers-color-scheme: dark) {
             :root {
-                --gray-50: #1a1a1a;
-                --gray-100: #2d2d2d;
-                --gray-200: #404040;
-                --gray-300: #525252;
-                --gray-400: #737373;
-                --gray-500: #a3a3a3;
-                --gray-600: #d4d4d4;
-                --gray-700: #e5e5e5;
-                --gray-800: #f5f5f5;
+                --gray-50: #0f172a;
+                --gray-100: #1e293b;
+                --gray-200: #334155;
+                --gray-300: #475569;
+                --gray-400: #64748b;
+                --gray-500: #94a3b8;
+                --gray-600: #cbd5e1;
+                --gray-700: #e2e8f0;
+                --gray-800: #f1f5f9;
                 --gray-900: #ffffff;
             }
 
             body {
-                background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+                background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
                 color: var(--gray-700);
             }
 
             .card {
-                background: rgba(30, 30, 30, 0.95);
+                background: rgba(50, 70, 100, 0.95);
                 color: var(--gray-700);
             }
 
             .form-control {
-                background: rgba(45, 45, 45, 0.9);
+                background: rgba(70, 90, 120, 0.9);
                 border-color: var(--gray-300);
                 color: var(--gray-700);
             }
 
             .form-control:focus {
-                background: rgba(30, 30, 30, 0.95);
+                background: rgba(70, 90, 120, 0.95);
                 color: var(--gray-700);
             }
         }
@@ -2052,30 +2698,6 @@ function handleGetDepartmentHierarchy() {
         .p-4 { padding: var(--spacing-lg) !important; }
         .p-5 { padding: var(--spacing-xl) !important; }
 
-        /* Loading States */
-        .loading {
-            opacity: 0.6;
-            pointer-events: none;
-        }
-
-        .loading::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 20px;
-            height: 20px;
-            margin: -10px 0 0 -10px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid var(--primary-color);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
     </style>
 </head>
 <body>
@@ -2293,7 +2915,7 @@ function handleGetDepartmentHierarchy() {
                         </div>
                     </div>
                     <div class="card-body">
-                        <div id="departmentsContainer" class="row g-3">
+                        <div id="departmentsContainer">
                             <!-- Departments will be loaded here -->
                         </div>
                     </div>
@@ -2311,6 +2933,9 @@ function handleGetDepartmentHierarchy() {
                         <p class="text-muted mb-0">Manage all programs across departments</p>
                     </div>
                     <div class="d-flex gap-2">
+                        <button class="btn btn-success" onclick="showAddProgramModal()">
+                            <i class="fas fa-plus me-2"></i>Add Program
+                        </button>
                         <button class="btn btn-primary" onclick="loadPrograms()">
                             <i class="fas fa-sync-alt me-2"></i>Refresh
                         </button>
@@ -2319,19 +2944,47 @@ function handleGetDepartmentHierarchy() {
 
                 <!-- Programs Table -->
                 <div class="card">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-list me-2"></i>Programs Directory
-                        </h5>
+                    <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                            <h5 class="mb-0 me-3">
+                                <i class="fas fa-list me-2"></i>Programs Directory
+                            </h5>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="selectAllProgramsCheckbox" style="border: 2px solid rgba(255,255,255,0.8); background: rgba(255,255,255,0.1);">
+                                <label class="form-check-label text-white fw-bold" for="selectAllProgramsCheckbox">
+                                    <i class="fas fa-check-square me-1"></i>Select All
+                                </label>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2 align-items-center">
+                            <div class="dropdown">
+                                <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" id="bulkProgramsActions" disabled>
+                                    <i class="fas fa-cogs me-1"></i>With selected:
+                                </button>
+                                <ul class="dropdown-menu">
+                                    <li><a class="dropdown-item" href="#" onclick="showBulkProgramStatusModal('active')">
+                                        <i class="fas fa-toggle-on me-2 text-success"></i>Activate Selected
+                                    </a></li>
+                                    <li><a class="dropdown-item" href="#" onclick="showBulkProgramStatusModal('inactive')">
+                                        <i class="fas fa-toggle-off me-2 text-warning"></i>Deactivate Selected
+                                    </a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item text-danger" href="#" onclick="showBulkProgramDeleteModal()">
+                                        <i class="fas fa-trash me-2"></i>Delete Selected
+                                    </a></li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
                             <table class="table table-striped table-hover" id="programsTable">
                                 <thead>
                                     <tr>
-                                        <th>ID</th>
-                                        <th>Program Name</th>
-                                        <th>Department</th>
+                                        <th><input type="checkbox" class="form-check-input" id="headerProgramCheckbox" style="margin: 0;"></th>
+                                        <th>Full texts id</th>
+                                        <th>Full texts name</th>
+                                        <th>Full texts department_id</th>
                                         <th>Status</th>
                                         <th>Created</th>
                                         <th>Actions</th>
@@ -2409,6 +3062,82 @@ function handleGetDepartmentHierarchy() {
                 </div>
             </div>
         </div>
+
+        <!-- Add Program Modal -->
+        <div class="modal fade" id="addProgramModal" tabindex="-1" aria-labelledby="addProgramModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="addProgramModalLabel">
+                            <i class="fas fa-plus me-2"></i>Add New Program
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="addProgramForm">
+                            <div class="mb-3">
+                                <label for="addProgramName" class="form-label">Program Name *</label>
+                                <input type="text" class="form-control" id="addProgramName" required maxlength="100" placeholder="Enter program name">
+                                <div class="invalid-feedback">Program name is required and must be less than 100 characters.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="addProgramDepartment" class="form-label">Department *</label>
+                                <select class="form-select" id="addProgramDepartment" required>
+                                    <option value="">-- Select Department --</option>
+                                    <?php
+                                    $departments = $pdo->query("SELECT id, name FROM departments ORDER BY name")->fetchAll();
+                                    foreach ($departments as $dept) {
+                                        echo "<option value='{$dept['id']}'>{$dept['name']}</option>";
+                                    }
+                                    ?>
+                                </select>
+                                <div class="invalid-feedback">Please select a department.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="addProgramStatus" class="form-label">Status</label>
+                                <select class="form-select" id="addProgramStatus">
+                                    <option value="active" selected>Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-success" onclick="saveNewProgram()">
+                            <i class="fas fa-plus me-2"></i>Add Program
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delete Program Confirmation Modal -->
+        <div class="modal fade" id="deleteProgramModal" tabindex="-1" aria-labelledby="deleteProgramModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title text-danger" id="deleteProgramModalLabel">
+                            <i class="fas fa-trash me-2"></i>Delete Program
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Are you sure you want to delete the program <strong id="deleteProgramName"></strong>?</p>
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            This action cannot be undone. The program will be permanently removed.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-danger" onclick="confirmDeleteProgram()">
+                            <i class="fas fa-trash me-2"></i>Delete Program
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- JavaScript -->
@@ -2421,6 +3150,14 @@ function handleGetDepartmentHierarchy() {
         let currentEditId = null;
         let selectedDepartments = new Set();
         let currentSort = { field: 'name', direction: 'asc' };
+        let selectedPrograms = new Set();
+        let allPrograms = [];
+        let programToDelete = null;
+
+        // Initialize allDepartments as empty array to prevent undefined errors
+        if (!Array.isArray(allDepartments)) {
+            allDepartments = [];
+        }
 
         // DOM Ready
         $(document).ready(function() {
@@ -2511,6 +3248,34 @@ function handleGetDepartmentHierarchy() {
                 `);
                 cancelEdit();
             });
+
+            // Program bulk selection
+            $('#selectAllProgramsCheckbox, #headerProgramCheckbox').on('change', function() {
+                const isChecked = $(this).is(':checked');
+                $('.program-checkbox').prop('checked', isChecked);
+
+                if (isChecked) {
+                    $('.program-checkbox').each(function() {
+                        selectedPrograms.add(parseInt($(this).val()));
+                    });
+                } else {
+                    selectedPrograms.clear();
+                }
+                updateBulkProgramActionsVisibility();
+            });
+
+            // Individual program checkboxes
+            $(document).on('change', '.program-checkbox', function() {
+                const progId = parseInt($(this).val());
+                if ($(this).is(':checked')) {
+                    selectedPrograms.add(progId);
+                } else {
+                    selectedPrograms.delete(progId);
+                    $('#selectAllProgramsCheckbox').prop('checked', false);
+                    $('#headerProgramCheckbox').prop('checked', false);
+                }
+                updateBulkProgramActionsVisibility();
+            });
         }
 
         function showAlert(type, message) {
@@ -2535,92 +3300,133 @@ function handleGetDepartmentHierarchy() {
 
         function loadDepartments() {
             showLoading();
-            
-            $.get('?ajax=1&action=list_departments')
-                .done(function(data) {
-                    allDepartments = data;
-                    renderDepartments(data);
-                    updateStatistics(data);
-                })
-                .fail(function(xhr, status, error) {
-                    console.error('Error loading departments:', error);
-                    showAlert('danger', 'Failed to load departments. Please try again.');
-                })
-                .always(function() {
-                    hideLoading();
-                });
+
+            $.ajax({
+                url: '?ajax=1&action=list_departments',
+                method: 'GET',
+                timeout: 30000, // 30 second timeout
+                dataType: 'json'
+            })
+            .done(function(data) {
+                if (data && data.status === 'success' && Array.isArray(data.departments)) {
+                    allDepartments = data.departments;
+                    renderDepartments(data.departments);
+                    updateStatistics(data.departments);
+                    showAlert('success', data.message);
+                } else {
+                    console.error('Invalid response format:', data);
+                    showAlert('danger', 'Received invalid data from server. Please refresh the page and try again.');
+                    allDepartments = [];
+                    renderDepartments([]);
+                }
+            })
+            .fail(function(xhr, status, error) {
+                console.error('Error loading departments:', {xhr: xhr, status: status, error: error});
+
+                let errorMessage = 'Failed to load departments. ';
+                if (status === 'timeout') {
+                    errorMessage += 'Request timed out. Please check your connection and try again.';
+                } else if (xhr.status === 403) {
+                    errorMessage += 'Access denied. Please log in again.';
+                } else if (xhr.status === 500) {
+                    errorMessage += 'Server error occurred. Please try again later.';
+                } else if (xhr.status === 0) {
+                    errorMessage += 'Network error. Please check your internet connection.';
+                } else {
+                    errorMessage += 'Please try again or contact support if the problem persists.';
+                }
+
+                showAlert('danger', errorMessage);
+                allDepartments = [];
+                renderDepartments([]);
+            })
+            .always(function() {
+                hideLoading();
+            });
         }
 
         function renderDepartments(departments) {
             const container = $('#departmentsContainer');
+
+            // Ensure departments is an array
+            if (!Array.isArray(departments)) {
+                console.error('Invalid departments data:', departments);
+                container.html(`
+                    <div class="text-center py-5">
+                        <span class="text-danger">Error loading departments. Please try again.</span>
+                    </div>
+                `);
+                return;
+            }
+
             if (departments.length === 0) {
                 container.html(`
-                    <div class="col-12 text-center py-5">
+                    <div class="text-center py-5">
                         <span class="text-muted">No departments found.</span>
                     </div>
                 `);
                 return;
             }
-            
+
             let html = '';
             departments.forEach(dept => {
-                let programsHtml = '';
+                // Filter out duplicate program names
+                let uniquePrograms = [];
+                let seenNames = new Set();
                 if (Array.isArray(dept.programs) && dept.programs.length > 0) {
-                    programsHtml = dept.programs.map(prog => {
-                        const statusBadge = prog.status === 'active' ? 'success' : 'warning';
-                        return `
-                            <span class="program-badge d-inline-block me-2 mb-2 bg-${statusBadge}">
-                                ${prog.name}
-                            </span>
-                        `;
-                    }).join('');
-                } else {
-                    programsHtml = '<span class="text-muted">No programs</span>';
+                    dept.programs.forEach(prog => {
+                        if (!seenNames.has(prog.name)) {
+                            uniquePrograms.push(prog);
+                            seenNames.add(prog.name);
+                        }
+                    });
                 }
-                
+
+                let programsHtml = '<em class="text-muted">No programs</em>';
+                if (uniquePrograms.length > 0) {
+                    programsHtml = uniquePrograms.map(prog => `
+                        <div class="d-inline-flex align-items-center me-2 mb-1">
+                            <span class="program-badge ${prog.status_badge} me-1">${prog.name}</span>
+                            <button class="btn btn-sm btn-outline-danger delete-program-from-dept" data-prog-id="${prog.id}" data-prog-name="${prog.name}" title="Delete Program">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    `).join('');
+                }
+
                 html += `
-                    <div class="col-md-6 col-lg-4">
-                        <div class="card department-card mb-3">
-                            <div class="card-body">
-                                <div class="d-flex justify-content-between align-items-start mb-2">
-                                    <h5 class="card-title mb-0">${dept.dept_name}</h5>
-                                    <input type="checkbox" class="form-check-input department-checkbox" value="${dept.dept_id}">
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Head of Department:</strong> 
-                                    <span class="${dept.hod_name === 'Not Assigned' ? 'text-danger' : 'text-success'}">
-                                        ${dept.hod_name}
-                                    </span>
-                                </div>
-                                <div class="mb-3">
-                                    <strong>Programs (${dept.programs ? dept.programs.length : 0}):</strong> 
-                                    <div class="mt-1">${programsHtml}</div>
-                                </div>
-                                <div class="d-flex gap-1 flex-wrap">
-                                    <button class="btn btn-sm btn-outline-primary edit-department" 
-                                            data-dept-id="${dept.dept_id}" 
-                                            data-dept-name="${dept.dept_name}" 
-                                            data-hod-id="${dept.hod_id || ''}">
-                                        <i class="fas fa-edit me-1"></i>Edit
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-danger delete-department" 
-                                            data-dept-id="${dept.dept_id}" 
-                                            data-dept-name="${dept.dept_name}">
-                                        <i class="fas fa-trash me-1"></i>Delete
-                                    </button>
-                                    <div class="input-group input-group-sm" style="width: auto;">
-                                        <input type="text" class="form-control add-program-input" placeholder="New program">
-                                        <button class="btn btn-outline-success add-program-btn" data-dept-id="${dept.dept_id}">
-                                            <i class="fas fa-plus"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
+                    <div class="department-item bg-light border-left-info shadow-md rounded-lg p-3 mb-4">
+                        <div class="department-header d-flex align-items-center mb-2">
+                            <input type="checkbox" class="form-check-input department-checkbox me-2" value="${dept.dept_id}">
+                            <h5 class="department-name mb-0">${dept.dept_name}</h5>
+                        </div>
+                        <div class="department-info mb-1">
+                            <strong>Head of Department:</strong> <span>${dept.hod_name === 'Not Assigned' ? '<span class=\"text-danger\">Not Assigned</span>' : dept.hod_name}</span>
+                        </div>
+                        <div class="department-info mb-1">
+                            <strong>Programs (${uniquePrograms.length}):</strong>
+                        </div>
+                        <div class="programs-list mb-2">
+                            ${programsHtml}
+                        </div>
+                        <div class="add-program-section d-flex gap-2 mb-2">
+                            <input type="text" class="form-control form-control-sm add-program-input" placeholder="New program" data-dept-id="${dept.dept_id}">
+                            <button class="btn btn-sm btn-outline-success add-program-btn" data-dept-id="${dept.dept_id}">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                        <div class="action-buttons d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-primary edit-department" data-dept-id="${dept.dept_id}" data-dept-name="${dept.dept_name}" data-hod-id="${dept.hod_id || ''}">
+                                <i class="fas fa-edit me-1"></i>Edit
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger delete-department" data-dept-id="${dept.dept_id}" data-dept-name="${dept.dept_name}">
+                                <i class="fas fa-trash me-1"></i>Delete
+                            </button>
                         </div>
                     </div>
                 `;
             });
-            
+
             container.html(html);
             attachDepartmentEventHandlers();
         }
@@ -2665,6 +3471,14 @@ function handleGetDepartmentHierarchy() {
                     e.preventDefault();
                     $(this).siblings('.add-program-btn').click();
                 }
+            });
+
+            // Delete program from department view
+            $('.delete-program-from-dept').on('click', function(e) {
+                e.preventDefault();
+                const progId = $(this).data('prog-id');
+                const progName = $(this).data('prog-name');
+                showDeleteProgramModal(progId, progName);
             });
         }
 
@@ -2774,20 +3588,27 @@ function handleGetDepartmentHierarchy() {
 
         function filterDepartments() {
             const searchTerm = $('#searchInput').val().toLowerCase();
-            
+
             if (!searchTerm) {
                 renderDepartments(allDepartments);
                 return;
             }
-            
-            const filtered = allDepartments.filter(dept => 
+
+            // Ensure allDepartments is an array
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data for filtering:', allDepartments);
+                renderDepartments([]);
+                return;
+            }
+
+            const filtered = allDepartments.filter(dept =>
                 dept.dept_name.toLowerCase().includes(searchTerm) ||
                 dept.hod_name.toLowerCase().includes(searchTerm) ||
-                (dept.programs && dept.programs.some(prog => 
+                (dept.programs && dept.programs.some(prog =>
                     prog.name.toLowerCase().includes(searchTerm)
                 ))
             );
-            
+
             renderDepartments(filtered);
         }
 
@@ -2796,8 +3617,10 @@ function handleGetDepartmentHierarchy() {
                 .done(function(data) {
                     if (data && data.status === 'success') {
                         renderStatistics(data);
+                        showAlert('success', data.message);
                     } else {
                         console.error('Invalid statistics response:', data);
+                        showAlert('danger', 'Failed to load statistics.');
                         renderStatistics({
                             total_departments: 0,
                             assigned_hods: 0,
@@ -2808,6 +3631,7 @@ function handleGetDepartmentHierarchy() {
                 })
                 .fail(function(xhr, status, error) {
                     console.error('Failed to load statistics:', error);
+                    showAlert('danger', 'Failed to load statistics.');
                     renderStatistics({
                         total_departments: 0,
                         assigned_hods: 0,
@@ -2871,6 +3695,13 @@ function handleGetDepartmentHierarchy() {
                 return;
             }
 
+            // Ensure allDepartments is an array
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data for bulk delete:', allDepartments);
+                showAlert('danger', 'Error loading department data. Please refresh the page.');
+                return;
+            }
+
             const selectedDepts = allDepartments.filter(dept => selectedDepartments.has(dept.dept_id));
             const listHtml = selectedDepts.map(dept =>
                 `<div class="d-flex align-items-center mb-2">
@@ -2889,6 +3720,13 @@ function handleGetDepartmentHierarchy() {
                 return;
             }
 
+            // Ensure allDepartments is an array
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data for bulk assign:', allDepartments);
+                showAlert('danger', 'Error loading department data. Please refresh the page.');
+                return;
+            }
+
             const selectedDepts = allDepartments.filter(dept => selectedDepartments.has(dept.dept_id));
             const listHtml = selectedDepts.map(dept =>
                 `<div class="d-flex align-items-center mb-2">
@@ -2903,6 +3741,13 @@ function handleGetDepartmentHierarchy() {
 
         function confirmBulkDelete() {
             if (selectedDepartments.size === 0) return;
+
+            // Ensure allDepartments is an array before proceeding
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data during bulk delete:', allDepartments);
+                showAlert('danger', 'Error: Department data is not available. Please refresh the page.');
+                return;
+            }
 
             showLoading();
 
@@ -2938,6 +3783,13 @@ function handleGetDepartmentHierarchy() {
 
             if (selectedDepartments.size === 0) return;
 
+            // Ensure allDepartments is an array before proceeding
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data during bulk assign:', allDepartments);
+                showAlert('danger', 'Error: Department data is not available. Please refresh the page.');
+                return;
+            }
+
             showLoading();
 
             $.post('?ajax=1&action=bulk_assign_hod', {
@@ -2968,7 +3820,179 @@ function handleGetDepartmentHierarchy() {
             $('.dropdown-toggle').prop('disabled', !hasSelection);
         }
 
+        function updateBulkProgramActionsVisibility() {
+            const hasSelection = selectedPrograms.size > 0;
+            $('#bulkProgramsActions').prop('disabled', !hasSelection);
+        }
+
+        function showBulkProgramStatusModal(newStatus) {
+            if (selectedPrograms.size === 0) {
+                showAlert('warning', 'Please select programs to update');
+                return;
+            }
+
+            const actionText = newStatus === 'active' ? 'activate' : 'deactivate';
+            const selectedProgs = allPrograms.filter(prog => selectedPrograms.has(prog.id));
+            const listHtml = selectedProgs.map(prog =>
+                `<div class="d-flex align-items-center mb-2">
+                    <i class="fas fa-graduation-cap me-2 text-primary"></i>
+                    <span>${prog.name}</span>
+                </div>`
+            ).join('');
+
+            // Create modal
+            const modalHtml = `
+                <div class="modal fade" id="bulkProgramStatusModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title text-primary">
+                                    <i class="fas fa-toggle-${newStatus === 'active' ? 'on' : 'off'} me-2"></i>
+                                    Bulk ${actionText.charAt(0).toUpperCase() + actionText.slice(1)} Programs
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Are you sure you want to ${actionText} the selected programs?</p>
+                                <div id="selectedProgramsList" class="mb-3">${listHtml}</div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-${newStatus === 'active' ? 'success' : 'warning'}" onclick="confirmBulkProgramStatus('${newStatus}')">
+                                    <i class="fas fa-toggle-${newStatus === 'active' ? 'on' : 'off'} me-2"></i>${actionText.charAt(0).toUpperCase() + actionText.slice(1)} Selected
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            $('body').append(modalHtml);
+            const modal = new bootstrap.Modal(document.getElementById('bulkProgramStatusModal'));
+            modal.show();
+
+            document.getElementById('bulkProgramStatusModal').addEventListener('hidden.bs.modal', function () {
+                $('#bulkProgramStatusModal').remove();
+            });
+        }
+
+        function showBulkProgramDeleteModal() {
+            if (selectedPrograms.size === 0) {
+                showAlert('warning', 'Please select programs to delete');
+                return;
+            }
+
+            const selectedProgs = allPrograms.filter(prog => selectedPrograms.has(prog.id));
+            const listHtml = selectedProgs.map(prog =>
+                `<div class="d-flex align-items-center mb-2">
+                    <i class="fas fa-graduation-cap me-2 text-danger"></i>
+                    <span>${prog.name}</span>
+                </div>`
+            ).join('');
+
+            // Create modal
+            const modalHtml = `
+                <div class="modal fade" id="bulkProgramDeleteModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title text-danger">
+                                    <i class="fas fa-trash me-2"></i>Bulk Delete Programs
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Are you sure you want to delete the selected programs? This action cannot be undone.</p>
+                                <div id="selectedProgramsDeleteList" class="mb-3">${listHtml}</div>
+                                <div class="alert alert-warning">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>
+                                    This will permanently remove the selected programs.
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-danger" onclick="confirmBulkProgramDelete()">
+                                    <i class="fas fa-trash me-2"></i>Delete Selected
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            $('body').append(modalHtml);
+            const modal = new bootstrap.Modal(document.getElementById('bulkProgramDeleteModal'));
+            modal.show();
+
+            document.getElementById('bulkProgramDeleteModal').addEventListener('hidden.bs.modal', function () {
+                $('#bulkProgramDeleteModal').remove();
+            });
+        }
+
+        function confirmBulkProgramStatus(newStatus) {
+            if (selectedPrograms.size === 0) return;
+
+            showLoading();
+
+            $.post('?ajax=1&action=bulk_update_program_status', {
+                program_ids: Array.from(selectedPrograms),
+                status: newStatus
+            })
+            .done(function(data) {
+                if (data.status === 'success') {
+                    showAlert('success', data.message);
+                    bootstrap.Modal.getInstance(document.getElementById('bulkProgramStatusModal')).hide();
+                    selectedPrograms.clear();
+                    updateBulkProgramActionsVisibility();
+                    loadPrograms();
+                    loadDepartments(); // Refresh departments to show updated program status
+                } else {
+                    showAlert('danger', data.message);
+                }
+            })
+            .fail(function() {
+                showAlert('danger', 'Failed to update program status. Please try again.');
+            })
+            .always(function() {
+                hideLoading();
+            });
+        }
+
+        function confirmBulkProgramDelete() {
+            if (selectedPrograms.size === 0) return;
+
+            showLoading();
+
+            $.post('?ajax=1&action=bulk_delete_programs', {
+                program_ids: Array.from(selectedPrograms)
+            })
+            .done(function(data) {
+                if (data.status === 'success') {
+                    showAlert('success', data.message);
+                    bootstrap.Modal.getInstance(document.getElementById('bulkProgramDeleteModal')).hide();
+                    selectedPrograms.clear();
+                    updateBulkProgramActionsVisibility();
+                    loadPrograms();
+                    loadDepartments(); // Refresh departments to remove deleted programs
+                } else {
+                    showAlert('danger', data.message);
+                }
+            })
+            .fail(function() {
+                showAlert('danger', 'Failed to delete programs. Please try again.');
+            })
+            .always(function() {
+                hideLoading();
+            });
+        }
+
         function sortDepartments(field) {
+            // Ensure allDepartments is an array
+            if (!Array.isArray(allDepartments)) {
+                console.error('Invalid allDepartments data for sorting:', allDepartments);
+                return;
+            }
+
             let sortedDepartments = [...allDepartments];
 
             switch (field) {
@@ -3002,6 +4026,12 @@ function handleGetDepartmentHierarchy() {
         }
 
         function updateStatistics(departments) {
+            // Ensure departments is an array
+            if (!Array.isArray(departments)) {
+                console.error('Invalid departments data for statistics:', departments);
+                return;
+            }
+
             const totalDepts = departments.length;
             const totalPrograms = departments.reduce((sum, dept) => sum + (dept.programs ? dept.programs.length : 0), 0);
             const assignedHods = departments.filter(dept => dept.hod_id).length;
@@ -3036,12 +4066,12 @@ function handleGetDepartmentHierarchy() {
 
             $.get('?ajax=1&action=list_options')
                 .done(function(data) {
-                    if (data && typeof data === 'object' && data.status === 'error') {
-                        console.error('Server error loading programs:', data.message);
+                    if (data.status === 'success') {
+                        renderPrograms(data.programs);
+                        showAlert('success', data.message);
+                    } else {
                         showAlert('danger', data.message || 'Failed to load programs.');
                         renderPrograms([]);
-                    } else {
-                        renderPrograms(data);
                     }
                 })
                 .fail(function(xhr, status, error) {
@@ -3082,17 +4112,23 @@ function handleGetDepartmentHierarchy() {
 
             let html = '';
             programs.forEach(prog => {
+                // Ensure program object has required properties
+                if (!prog || typeof prog !== 'object') {
+                    console.warn('Invalid program object:', prog);
+                    return;
+                }
                 const statusBadge = prog.status === 'active' ? 'success' : 'warning';
                 const statusText = prog.status === 'active' ? 'Active' : 'Inactive';
                 const createdDate = new Date(prog.created_at).toLocaleDateString();
 
                 html += `
                     <tr>
+                        <td><input type="checkbox" class="form-check-input program-checkbox" value="${prog.id}" style="margin: 0;"></td>
                         <td>${prog.id}</td>
                         <td>
                             <span class="fw-bold">${prog.name}</span>
                         </td>
-                        <td>${prog.department_name || 'No Department'}</td>
+                        <td>${prog.department_id || 'N/A'}</td>
                         <td>
                             <span class="badge bg-${statusBadge}" id="status-${prog.id}">${statusText}</span>
                         </td>
@@ -3114,6 +4150,7 @@ function handleGetDepartmentHierarchy() {
                 `;
             });
             tbody.html(html);
+            allPrograms = programs; // Store programs data for bulk operations
             attachProgramEventHandlers();
         }
 
@@ -3141,9 +4178,7 @@ function handleGetDepartmentHierarchy() {
                 const progId = $(this).data('program-id');
                 const progName = $(this).data('program-name');
 
-                if (confirm(`Are you sure you want to delete "${progName}"?`)) {
-                    deleteProgramGlobal(progId);
-                }
+                showDeleteProgramModal(progId, progName);
             });
         }
 
@@ -3281,6 +4316,95 @@ function handleGetDepartmentHierarchy() {
             .always(function() {
                 hideLoading();
             });
+        }
+
+        function showAddProgramModal() {
+            // Reset form
+            $('#addProgramForm')[0].reset();
+            $('#addProgramName').removeClass('is-invalid');
+            $('#addProgramDepartment').removeClass('is-invalid');
+
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('addProgramModal'));
+            modal.show();
+        }
+
+        function saveNewProgram() {
+            const progName = $('#addProgramName').val().trim();
+            const deptId = $('#addProgramDepartment').val();
+            const status = $('#addProgramStatus').val();
+
+            // Validation
+            let isValid = true;
+
+            if (!progName) {
+                $('#addProgramName').addClass('is-invalid');
+                isValid = false;
+            } else {
+                $('#addProgramName').removeClass('is-invalid');
+            }
+
+            if (!deptId) {
+                $('#addProgramDepartment').addClass('is-invalid');
+                isValid = false;
+            } else {
+                $('#addProgramDepartment').removeClass('is-invalid');
+            }
+
+            if (progName.length > 100) {
+                $('#addProgramName').addClass('is-invalid');
+                showAlert('warning', 'Program name must be less than 100 characters');
+                return;
+            }
+
+            if (!isValid) {
+                showAlert('warning', 'Please fill in all required fields');
+                return;
+            }
+
+            showLoading();
+
+            $.post('?ajax=1&action=add_program', {
+                program_name: progName,
+                department_id: deptId,
+                status: status
+            })
+            .done(function(data) {
+                if (data.status === 'success') {
+                    showAlert('success', data.message);
+                    bootstrap.Modal.getInstance(document.getElementById('addProgramModal')).hide();
+                    loadPrograms();
+                    // Also refresh departments to show the new program
+                    loadDepartments();
+                } else {
+                    showAlert('danger', data.message);
+                }
+            })
+            .fail(function(xhr, status, error) {
+                console.error('Error adding program:', error);
+                showAlert('danger', 'Failed to add program. Please try again.');
+            })
+            .always(function() {
+                hideLoading();
+            });
+        }
+
+        function showDeleteProgramModal(progId, progName) {
+            programToDelete = { id: progId, name: progName };
+            $('#deleteProgramName').text(`"${progName}"`);
+            const modal = new bootstrap.Modal(document.getElementById('deleteProgramModal'));
+            modal.show();
+        }
+
+        function confirmDeleteProgram() {
+            if (!programToDelete) return;
+
+            const progId = programToDelete.id;
+            const progName = programToDelete.name;
+
+            bootstrap.Modal.getInstance(document.getElementById('deleteProgramModal')).hide();
+            deleteProgramGlobal(progId);
+            programToDelete = null;
         }
     </script>
 </body>

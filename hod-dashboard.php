@@ -5,38 +5,43 @@ require_once "session_check.php";
 
 // Ensure user is logged in and is HoD
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
-    header("Location: login.php");
+    header("Location: login_new.php");
     exit;
 }
 
-// Get HoD information
+// Get HoD information and verify department assignment
 $user_id = $_SESSION['user_id'];
 try {
-    // First get the department ID from the departments table where hod_id matches the user_id
-    $stmt = $pdo->prepare("SELECT d.name as department_name FROM departments d WHERE d.hod_id = ?");
+    // First get the department by joining through lecturers table since hod_id stores lecturer ID
+    $stmt = $pdo->prepare("
+        SELECT d.name as department_name, d.id as department_id
+        FROM departments d
+        JOIN lecturers l ON d.hod_id = l.id
+        JOIN users u ON l.email = u.email AND u.role = 'hod'
+        WHERE u.id = ?
+    ");
     $stmt->execute([$user_id]);
     $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($dept_result) {
-        $department_name = $dept_result['department_name'];
-    } else {
-        // If no department found, try to get user info without department
-        $stmt = $pdo->prepare("SELECT username as name, email FROM users WHERE id = ?");
-        $stmt->execute([$user_id]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
-        $user['department_name'] = 'Not Assigned';
-        $department_name = 'Not Assigned';
+    if (!$dept_result) {
+        // User is HOD but not assigned to any department - deny access
+        header("Location: login.php?error=not_assigned");
+        exit;
     }
+
+    $department_name = $dept_result['department_name'];
+    $department_id = $dept_result['department_id'];
 
     // Get user information
     $stmt = $pdo->prepare("SELECT username as name, email FROM users WHERE id = ?");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     $user['department_name'] = $department_name;
+    $user['department_id'] = $department_id;
 
     if (!$user) {
         error_log("HoD user not found: User ID $user_id");
-        header("Location: login.php");
+        header("Location: login_new.php");
         exit;
     }
 } catch (PDOException $e) {
@@ -47,14 +52,8 @@ try {
 // Get dynamic statistics
 $stats = [];
 try {
-    // Get department ID for this HoD
-    $hod_id = $_SESSION['user_id'];
-    $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
-    $stmt->execute([$hod_id]);
-    $department = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($department) {
-        $department_id = $department['id'];
+    // Use the department_id we already retrieved
+    if (isset($department_id)) {
 
         // Calculate attendance percentage (last 30 days)
         $stmt = $pdo->prepare("
@@ -97,11 +96,12 @@ try {
         $students_result = $stmt->fetch(PDO::FETCH_ASSOC);
         $stats['total_students'] = $students_result['total_students'];
 
-        // Total lecturers in department (from lecturers table)
+        // Total lecturers in department (from lecturers table with users)
         $stmt = $pdo->prepare("
             SELECT COUNT(*) as total_lecturers
-            FROM lecturers
-            WHERE department_id = ?
+            FROM lecturers l
+            INNER JOIN users u ON l.email = u.email
+            WHERE l.department_id = ?
         ");
         $stmt->execute([$department_id]);
         $lecturers_result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -441,12 +441,8 @@ try {
           <div class="activity-list">
             <?php
             try {
-                // Get department ID first
-                $dept_stmt = $pdo->prepare("SELECT id FROM departments WHERE hod_id = ?");
-                $dept_stmt->execute([$hod_id]);
-                $department = $dept_stmt->fetch(PDO::FETCH_ASSOC);
-
-                if ($department) {
+                // Use the department_id we already have
+                if (isset($department_id)) {
                     // Get recent leave requests for this department
                     $stmt = $pdo->prepare("
                         SELECT lr.requested_at, s.first_name, s.last_name, lr.status
@@ -456,7 +452,7 @@ try {
                         ORDER BY lr.requested_at DESC
                         LIMIT 3
                     ");
-                    $stmt->execute([$department['id']]);
+                    $stmt->execute([$department_id]);
                     $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     if ($recent_activities) {

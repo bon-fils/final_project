@@ -4,9 +4,15 @@ require_once "config.php";
 require_once "session_check.php"; // ensure HoD is logged in
 require_role(['hod']);
 
-// Get HoD's department ID
+// Get HoD's department ID by joining through lecturers table
 $hod_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT id AS department_id FROM departments WHERE hod_id = ? LIMIT 1");
+$stmt = $pdo->prepare("
+    SELECT d.id AS department_id
+    FROM departments d
+    JOIN lecturers l ON d.hod_id = l.id
+    JOIN users u ON l.email = u.email AND u.role = 'hod'
+    WHERE u.id = ? LIMIT 1
+");
 $stmt->execute([$hod_id]);
 $hod = $stmt->fetch(PDO::FETCH_ASSOC);
 $hod_department = $hod['department_id'] ?? null;

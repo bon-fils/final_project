@@ -84,7 +84,11 @@ if (isset($_FILES['supportingFile']) && is_uploaded_file($_FILES['supportingFile
     // Ensure directory exists
     $targetDir = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'leave_docs';
     if (!is_dir($targetDir)) {
-        @mkdir($targetDir, 0775, true);
+        if (!mkdir($targetDir, 0775, true)) {
+            error_log("Failed to create leave_docs directory: $targetDir");
+            header("Location: request-leave.php?error=directory_creation_failed");
+            exit;
+        }
     }
 
     // Generate unique name

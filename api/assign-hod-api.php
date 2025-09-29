@@ -98,7 +98,7 @@ function handleGetDepartments(PDO $pdo): array {
             d.name,
             d.hod_id,
             CASE
-                WHEN u.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
+                WHEN l.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
                 ELSE 'Not Assigned'
             END as hod_name,
             l.email as hod_email,
@@ -106,8 +106,8 @@ function handleGetDepartments(PDO $pdo): array {
             u.role as hod_role,
             l.role as lecturer_role
         FROM departments d
-        LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
-        LEFT JOIN lecturers l ON u.email = l.email AND l.role IN ('lecturer', 'hod')
+        LEFT JOIN lecturers l ON d.hod_id = l.id AND l.role IN ('lecturer', 'hod')
+        LEFT JOIN users u ON l.email = u.email AND u.role = 'hod'
         ORDER BY d.name
     ");
 
@@ -296,16 +296,16 @@ function handleAssignHod(PDO $pdo): array {
                 throw new Exception('Selected HOD is not a valid lecturer');
             }
 
-            // Create or update user account for the HOD
-            $user_id = createOrUpdateHodUserAccount($pdo, $lecturer);
+            // Check if user account exists for the HOD
+            $user_id = getOrCreateHodUserAccount($pdo, $lecturer);
 
             // Update lecturer role to 'hod'
             $stmt = $pdo->prepare("UPDATE lecturers SET role = 'hod', updated_at = NOW() WHERE id = ?");
             $stmt->execute([$hod_id]);
 
-            // Update the department with the new HOD (using user ID, not lecturer ID)
+            // Update the department with the new HOD (using lecturer ID, not user ID)
             $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
-            $stmt->execute([$user_id, $department_id]);
+            $stmt->execute([$hod_id, $department_id]);
 
             error_log("Assigned HOD: Department ID {$department_id} -> User ID {$user_id} (Lecturer: {$lecturer['first_name']} {$lecturer['last_name']})");
         } else {
@@ -340,7 +340,7 @@ function handleAssignHod(PDO $pdo): array {
                 u.username as hod_username
             FROM departments d
             LEFT JOIN lecturers l ON d.hod_id = l.id AND l.role IN ('lecturer', 'hod')
-            LEFT JOIN users u ON u.email = l.email AND u.role = 'hod'
+            LEFT JOIN users u ON l.email = u.email AND u.role = 'hod'
             WHERE d.id = ?
         ");
         $stmt->execute([$department_id]);
@@ -357,9 +357,11 @@ function handleAssignHod(PDO $pdo): array {
 
         $pdo->commit();
 
+        $message = $hod_id ? 'HOD assigned successfully and user account created/updated' : 'HOD assignment removed successfully';
+
         return [
             'status' => 'success',
-            'message' => $hod_id ? 'HOD assigned successfully and user account created/updated' : 'HOD assignment removed successfully',
+            'message' => $message,
             'data' => $assignment
         ];
 
@@ -371,42 +373,38 @@ function handleAssignHod(PDO $pdo): array {
 }
 
 /**
- * Create or update HOD user account in users table
- * @return int The user ID
+ * Get or create HOD user account in users table
+ * Only updates existing accounts to HOD role, does not create new ones
+ * @return int|null The user ID if account exists, null otherwise
  */
-function createOrUpdateHodUserAccount(PDO $pdo, array $lecturer): int {
-    // Generate username from first name and last name
-    $username = generateUsername($lecturer['first_name'], $lecturer['last_name']);
-    $password = generateTemporaryPassword();
-    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-
+function getOrCreateHodUserAccount(PDO $pdo, array $lecturer): ?int {
     // Check if user already exists
-    $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
+    $stmt = $pdo->prepare("SELECT id, username FROM users WHERE email = ?");
     $stmt->execute([$lecturer['email']]);
     $existing_user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing_user) {
-        // Update existing user to HOD role
-        $stmt = $pdo->prepare("UPDATE users SET username = ?, role = 'hod', password = ?, status = 'active', updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$username, $hashed_password, $existing_user['id']]);
+        // Update existing user to HOD role (keep existing username, password and status)
+        $stmt = $pdo->prepare("UPDATE users SET role = 'hod', updated_at = NOW() WHERE id = ?");
+        $stmt->execute([$existing_user['id']]);
 
         error_log("Updated existing user to HOD role: {$lecturer['email']}");
         return $existing_user['id'];
     } else {
-        // Create new HOD user account
+        // Create new user account with default password
+        $username = generateUsername($lecturer['first_name'], $lecturer['last_name']);
+        $password = password_hash('hod123', PASSWORD_DEFAULT); // Default password for HODs
+
         $stmt = $pdo->prepare("
             INSERT INTO users (username, email, password, role, status, created_at, updated_at)
             VALUES (?, ?, ?, 'hod', 'active', NOW(), NOW())
         ");
-        $stmt->execute([$username, $lecturer['email'], $hashed_password]);
+        $stmt->execute([$username, $lecturer['email'], $password]);
         $user_id = $pdo->lastInsertId();
 
-        error_log("Created new HOD user account: {$lecturer['email']} with temporary password");
+        error_log("Created new HOD user account for lecturer: {$lecturer['email']} with username: {$username}");
         return $user_id;
     }
-
-    // Log the user account creation (you might want to email the credentials in a real system)
-    error_log("HOD User Account - Username: {$username}, Temporary Password: {$password}");
 }
 
 /**
@@ -494,7 +492,7 @@ function handleGetDepartmentDetails(PDO $pdo): array {
             d.name,
             d.hod_id,
             CASE
-                WHEN u.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
+                WHEN l.id IS NOT NULL THEN CONCAT(l.first_name, ' ', l.last_name)
                 ELSE 'Not Assigned'
             END as hod_name,
             l.email as hod_email,
@@ -502,8 +500,8 @@ function handleGetDepartmentDetails(PDO $pdo): array {
             u.username as hod_username,
             l.role as lecturer_role
         FROM departments d
-        LEFT JOIN users u ON d.hod_id = u.id AND u.role = 'hod'
-        LEFT JOIN lecturers l ON u.email = l.email AND l.role IN ('lecturer', 'hod')
+        LEFT JOIN lecturers l ON d.hod_id = l.id AND l.role IN ('lecturer', 'hod')
+        LEFT JOIN users u ON l.email = u.email AND u.role = 'hod'
         WHERE d.id = ?
     ");
 
@@ -580,25 +578,24 @@ function handleValidateAssignment(PDO $pdo): array {
         $validation_result['hod_email'] = $lecturer['email'] ?? null;
 
         if ($validation_result['hod_valid']) {
-            // Check for conflicts - but wait, HODs are stored in users table, not lecturers
-            // The conflict check should be against users table
-            $stmt = $pdo->prepare("SELECT d.name FROM departments d JOIN users u ON d.hod_id = u.id WHERE u.id = ? AND d.id != ?");
+            // Check for conflicts - HODs are stored in departments table with lecturer IDs
+            $stmt = $pdo->prepare("SELECT d.name FROM departments d WHERE d.hod_id = ? AND d.id != ?");
             $stmt->execute([$hod_id, $department_id]);
             $conflicts = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
             if (!empty($conflicts)) {
                 $validation_result['conflicts'] = $conflicts;
-                $validation_result['warnings'][] = 'This user is already assigned as HOD to other departments';
+                $validation_result['warnings'][] = 'This lecturer is already assigned as HOD to other departments';
             }
 
-            // Check if user account already exists
-            $stmt = $pdo->prepare("SELECT username FROM users WHERE id = ? AND role = 'hod'");
+            // Check if user account already exists for this lecturer
+            $stmt = $pdo->prepare("SELECT u.username FROM users u JOIN lecturers l ON u.email = l.email WHERE l.id = ? AND u.role = 'hod'");
             $stmt->execute([$hod_id]);
             $existing_user = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($existing_user) {
                 $validation_result['existing_user_account'] = $existing_user['username'];
-                $validation_result['warnings'][] = 'User account already exists for this HOD';
+                $validation_result['warnings'][] = 'User account already exists for this lecturer';
             }
         }
     } else {

@@ -2,7 +2,7 @@
 session_start();
 require_once "config.php";
 require_once "session_check.php";
-require_role(['lecturer', 'admin']);
+require_role(['lecturer', 'hod', 'admin']);
 
 // Get current page for active state
 $currentPage = basename($_SERVER['PHP_SELF']);
@@ -701,6 +701,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
         departmentSelect.innerHTML = '<option value="" disabled selected>Loading departments...</option>';
         departmentSelect.disabled = true;
 
+        console.log('Loading departments...');
         const response = await fetch('api/attendance-session-api.php?action=get_departments', {
           method: 'GET',
           headers: {
@@ -709,6 +710,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
         });
 
         const result = await response.json();
+        console.log('Departments API response:', result);
 
         if (result.status === 'success') {
           departmentSelect.innerHTML = '<option value="" disabled selected>Select Department</option>';
@@ -717,6 +719,12 @@ $userRole = $_SESSION['role'] ?? 'admin';
             departmentSelect.innerHTML += '<option value="" disabled>No departments available</option>';
             updateCourseInfo('⚠️ No departments are assigned to your account. Please contact your administrator to get access to attendance sessions.');
             showNotification('No departments are assigned to your account. Please contact your administrator.', 'warning');
+
+            // Hide the "Department Access Required" alert since we got a successful response
+            const noDepartmentInfo = document.getElementById('noDepartmentInfo');
+            if (noDepartmentInfo) {
+              noDepartmentInfo.style.display = 'none';
+            }
           } else {
             result.data.forEach(dept => {
               const option = document.createElement('option');
@@ -726,10 +734,17 @@ $userRole = $_SESSION['role'] ?? 'admin';
             });
             updateCourseInfo(`✅ Loaded ${result.data.length} department(s). Select your department to continue.`);
             showNotification(`✅ Loaded ${result.data.length} department(s) for your account`, 'success');
+
+            // Hide the "Department Access Required" alert since departments were loaded
+            const noDepartmentInfo = document.getElementById('noDepartmentInfo');
+            if (noDepartmentInfo) {
+              noDepartmentInfo.style.display = 'none';
+            }
           }
         } else {
           departmentSelect.innerHTML = '<option value="" disabled selected>Error loading departments</option>';
           showNotification('Error loading departments: ' + result.message, 'error');
+          console.error('API Error:', result);
         }
       } catch (error) {
         console.error('Error loading departments:', error);

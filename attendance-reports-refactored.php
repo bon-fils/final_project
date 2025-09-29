@@ -16,7 +16,7 @@ require_once "config.php";
 require_once "session_check.php";
 require_once "attendance_reports_utils.php";
 
-require_role(['lecturer', 'admin']);
+require_role(['lecturer', 'hod', 'admin']);
 
 // Get user data and setup
 $user_id = $_SESSION['user_id'] ?? null;

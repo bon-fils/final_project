@@ -72,9 +72,15 @@ function handleGetOptions() {
     $departmentId = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
 
     if (!$departmentId) {
-        // Fallback to HoD's department ID from session (for HOD usage)
+        // Fallback to HoD's department ID from session (for HOD usage) by joining through lecturers table
         $hod_id = $_SESSION['user_id'];
-        $deptStmt = $pdo->prepare("SELECT id FROM departments WHERE hod_id = ?");
+        $deptStmt = $pdo->prepare("
+            SELECT d.id
+            FROM departments d
+            JOIN lecturers l ON d.hod_id = l.id
+            JOIN users u ON l.email = u.email AND u.role = 'hod'
+            WHERE u.id = ?
+        ");
         $deptStmt->execute([$hod_id]);
         $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
 

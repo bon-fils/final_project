@@ -173,8 +173,8 @@ try {
         echo "<p class='info'>Inserting sample lecturers...</p>";
         $pdo->exec("
             INSERT INTO lecturers (first_name, last_name, gender, dob, id_number, email, phone, department_id, education_level, role, password) VALUES
-            ('Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'PhD', 'lecturer', '12345'),
-            ('Scott', 'Adkin', 'Male', '2008-06-25', '12345678900987654', 'scott@gmail.com', '078789234', 3, 'PhD', 'lecturer', '12345')
+            ('Frank', 'Mugabe', 'Male', '2004-09-02', '120018001269039', 'frankm@gmail.com', '0784615059', 4, 'PhD', 'lecturer', '" . password_hash('Welcome123!', PASSWORD_DEFAULT) . "'),
+            ('Scott', 'Adkin', 'Male', '2008-06-25', '12345678900987654', 'scott@gmail.com', '078789234', 3, 'PhD', 'lecturer', '" . password_hash('Welcome123!', PASSWORD_DEFAULT) . "')
         ");
         echo "<p class='success'>✅ Sample lecturers inserted</p>";
     } else {

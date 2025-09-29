@@ -9,6 +9,20 @@ require 'security_utils.php'; // Enhanced security utilities
 $error = "";
 $success = "";
 
+// Handle error messages from redirects
+if (isset($_GET['error'])) {
+    switch ($_GET['error']) {
+        case 'not_assigned':
+            $error = "You are not assigned to any department. Please contact an administrator.";
+            break;
+        case 'access_denied':
+            $error = "Access denied. Please log in with appropriate credentials.";
+            break;
+        default:
+            $error = "An error occurred. Please try logging in again.";
+    }
+}
+
 // Rate limiting check
 $login_attempts_key = 'login_attempts_' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
 if (!check_rate_limit($login_attempts_key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_TIME)) {

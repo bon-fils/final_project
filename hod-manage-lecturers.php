@@ -7,9 +7,15 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 require_role(['hod']);
 
-// Get HoD's department ID (via departments.hod_id referencing users.id)
+// Get HoD's department ID by joining through lecturers table
 $hod_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT id AS department_id FROM departments WHERE hod_id = ? LIMIT 1");
+$stmt = $pdo->prepare("
+    SELECT d.id AS department_id
+    FROM departments d
+    JOIN lecturers l ON d.hod_id = l.id
+    JOIN users u ON l.email = u.email AND u.role = 'hod'
+    WHERE u.id = ? LIMIT 1
+");
 $stmt->execute([$hod_id]);
 $hod = $stmt->fetch(PDO::FETCH_ASSOC);
 $hod_department = $hod['department_id'] ?? null;
@@ -57,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone      = trim($_POST['phone']);
     $education_level = $_POST['education_level'];
     $role = 'lecturer';
-    $password_plain = '12345';
+    $password_plain = 'Welcome123!'; // Stronger default password
     $password = password_hash($password_plain, PASSWORD_DEFAULT);
 
     try {
@@ -266,6 +272,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $pdo->commit();
+
+        // Clear statistics cache for this department
+        require_once "cache_utils.php";
+        cache_delete("lecturer_stats_dept_$hod_department");
+
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
         // Include course and option assignment info in success message
@@ -274,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $course_message = $course_count > 0 ? " and assigned to $course_count course(s)" : "";
         $option_message = $option_count > 0 ? " with access to $option_count option(s)" : " (no option access assigned)";
 
-        $_SESSION['success_message'] = "Lecturer added successfully$course_message$option_message! Login credentials: Username: $username, Password: 12345";
+        $_SESSION['success_message'] = "Lecturer added successfully$course_message$option_message! Login credentials: Username: $username, Password: Welcome123!";
         header("Location: hod-manage-lecturers.php");
         exit;
     } catch (Throwable $e) {
@@ -1393,6 +1404,7 @@ let assignedCourses = [];
 let selectedCoursesForRegistration = [];
 let availableOptions = [];
 let selectedOptionsForRegistration = [];
+let csrfToken = '<?php echo $_SESSION['csrf_token']; ?>';
 
 // Load options for registration form
 function loadOptionsForRegistration() {
@@ -1650,18 +1662,18 @@ function loadCourseAssignmentData() {
     Promise.all([
         fetch('api/assign-courses-api.php?action=get_courses'),
         fetch('api/assign-courses-api.php?action=get_assigned_courses', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ lecturer_id: currentLecturerId })
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ lecturer_id: currentLecturerId, csrf_token: csrfToken })
         })
     ])
     .then(responses => Promise.all(responses.map(r => r.json())))
     .then(data => {
-        availableCourses = data[0];
-        assignedCourses = data[1];
-        renderCourseAssignmentInterface();
+      availableCourses = (data[0].success && data[0].data) ? data[0].data : [];
+      assignedCourses = (data[1].success && data[1].data) ? data[1].data : [];
+      renderCourseAssignmentInterface();
     })
     .catch(error => {
         console.error('Error loading course data:', error);
@@ -1735,9 +1747,10 @@ function saveCourseAssignments() {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            action: 'save_course_assignments',
-            lecturer_id: currentLecturerId,
-            course_ids: selectedCourses
+          action: 'save_course_assignments',
+          lecturer_id: currentLecturerId,
+          course_ids: selectedCourses,
+          csrf_token: csrfToken
         })
     })
     .then(response => response.json())
@@ -1771,6 +1784,8 @@ function removeCourseAssignment(courseId) {
 function updateAssignedCoursesDisplay() {
     const assignedList = document.getElementById('assignedCoursesList');
     const noAssignments = document.getElementById('noAssignments');
+    if (!assignedList || !noAssignments) return; // Guard against null elements
+
     const checkedBoxes = document.querySelectorAll('#assignmentContent input[type="checkbox"]:checked');
 
     assignedList.innerHTML = Array.from(checkedBoxes).map(cb => {
@@ -2151,6 +2166,10 @@ function initializeTooltips() {
 }
 
 function validateForm() {
+    // Ensure selections are updated before validation
+    updateSelectedOptions();
+    updateSelectedCourses();
+
     const firstName = document.querySelector('[name="first_name"]').value.trim();
     const lastName = document.querySelector('[name="last_name"]').value.trim();
     const gender = document.querySelector('[name="gender"]').value;

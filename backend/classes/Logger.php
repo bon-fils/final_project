@@ -367,13 +367,26 @@ class Logger {
         $file->seek(PHP_INT_MAX);
         $totalLines = $file->key();
 
-        $startLine = max(0, $totalLines - $limit);
+        $startLine = max(0, $totalLines - $limit * 2); // Read more lines to account for filtering
         $file->seek($startLine);
 
-        while (!$file->eof()) {
+        $collected = 0;
+        while (!$file->eof() && $collected < $limit) {
             $line = trim($file->fgets());
             if (!empty($line)) {
-                $logs[] = $line;
+                // Parse log line: [timestamp] LEVEL.CATEGORY: message | ...
+                if (preg_match('/^\[([^\]]+)\]\s+([^\.]+)\.([^:]+):\s+(.+)$/', $line, $matches)) {
+                    $logLevel = $matches[2];
+                    $logCategory = $matches[3];
+
+                    $levelMatch = !$level || $logLevel === $this->levelNames[$level];
+                    $categoryMatch = !$category || $logCategory === $category;
+
+                    if ($levelMatch && $categoryMatch) {
+                        $logs[] = $line;
+                        $collected++;
+                    }
+                }
             }
         }
 

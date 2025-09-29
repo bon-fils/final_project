@@ -2,7 +2,7 @@
 session_start();
 require_once "config.php"; // $pdo connection
 require_once "session_check.php";
-require_role(['lecturer']);
+require_role(['lecturer', 'hod']);
 
 // Get user_id from session
 $user_id = $_SESSION['user_id'] ?? null;

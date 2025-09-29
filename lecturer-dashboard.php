@@ -7,7 +7,7 @@ require_once "dashboard_utils.php"; // Dashboard utility functions
 // Get user_id from session
 $user_id = $_SESSION['user_id'] ?? null;
 
-require_role(['lecturer']);
+require_role(['lecturer', 'hod']);
 
 // Debug logging
 error_log("Lecturer dashboard access - user_id: " . ($user_id ?? 'null') . ", session role: " . ($_SESSION['role'] ?? 'null'));

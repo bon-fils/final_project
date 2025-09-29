@@ -97,7 +97,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
 // Load dashboard statistics
 $dashboard_stats = getDashboardStats();
-extract($dashboard_stats);
+$total_students = $dashboard_stats['total_students'];
+$total_lecturers = $dashboard_stats['total_lecturers'];
+$total_hods = $dashboard_stats['total_hods'];
+$total_departments = $dashboard_stats['total_departments'];
+$active_attendance = $dashboard_stats['active_attendance'];
+$total_sessions = $dashboard_stats['total_sessions'];
+$pending_requests = $dashboard_stats['pending_requests'];
+$approved_requests = $dashboard_stats['approved_requests'];
+$today_records = $dashboard_stats['today_records'];
+$active_users_24h = $dashboard_stats['active_users_24h'];
+$avg_attendance_rate = $dashboard_stats['avg_attendance_rate'];
+$last_updated = $dashboard_stats['last_updated'];
 ?>
 <!DOCTYPE html>
 <html lang="en">

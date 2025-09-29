@@ -125,7 +125,7 @@ class SimpleCache {
 /**
  * Global cache instance
  */
-$cache = new SimpleCache(__DIR__ . '/../cache', 1800); // 30 minutes default TTL
+$cache = new SimpleCache(__DIR__ . '/cache', 1800); // 30 minutes default TTL
 
 /**
  * Cache wrapper functions

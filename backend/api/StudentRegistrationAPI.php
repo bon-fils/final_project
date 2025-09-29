@@ -434,7 +434,7 @@ class StudentRegistrationAPI {
                 'sex' => $data['sex'],
                 'photo' => $data['photo'] ?? null,
                 'fingerprint' => $data['fingerprint'] ?? null,
-                'password' => password_hash('12345', PASSWORD_ARGON2ID)
+                'password' => password_hash('Welcome123!', PASSWORD_ARGON2ID)
             ];
 
             $studentId = $this->db->insert('students', $studentData, $_SESSION['user_id'] ?? null);
@@ -596,7 +596,7 @@ class StudentRegistrationAPI {
      */
     private function createUserAccount($data) {
         $username = $this->generateUsername($data['first_name'], $data['last_name']);
-        $password = password_hash('12345', PASSWORD_ARGON2ID);
+        $password = password_hash('Welcome123!', PASSWORD_ARGON2ID);
 
         $userData = [
             'username' => $username,

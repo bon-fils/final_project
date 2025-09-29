@@ -11,10 +11,16 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
 
 require_role(['hod']);
 
-// Get HoD department info
+// Get HoD department info by joining through lecturers table
 $hod_id = $_SESSION['user_id'];
 try {
-    $deptStmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
+    $deptStmt = $pdo->prepare("
+        SELECT d.id, d.name
+        FROM departments d
+        JOIN lecturers l ON d.hod_id = l.id
+        JOIN users u ON l.email = u.email AND u.role = 'hod'
+        WHERE u.id = ?
+    ");
     $deptStmt->execute([$hod_id]);
     $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {

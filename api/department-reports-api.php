@@ -10,10 +10,28 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
     exit;
 }
 
-// Get HoD's department ID
+// Handle JSON POST data
+$post_data = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    if (strpos($contentType, 'application/json') !== false) {
+        $json = json_decode(file_get_contents('php://input'), true);
+        $post_data = $json;
+    } else {
+        $post_data = $_POST;
+    }
+}
+
+// Get HoD's department ID by joining through lecturers table
 $hod_id = $_SESSION['user_id'];
 try {
-    $deptStmt = $pdo->prepare("SELECT id FROM departments WHERE hod_id = ?");
+    $deptStmt = $pdo->prepare("
+        SELECT d.id
+        FROM departments d
+        JOIN lecturers l ON d.hod_id = l.id
+        JOIN users u ON l.email = u.email AND u.role = 'hod'
+        WHERE u.id = ?
+    ");
     $deptStmt->execute([$hod_id]);
     $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -32,7 +50,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 try {
     switch ($action) {
         case 'get_overview_stats':
-            $department_id = $_POST['department_id'] ?? 0;
+            $department_id = $post_data['department_id'] ?? 0;
             if (!$department_id) {
                 echo json_encode(['success' => false, 'message' => 'Department ID required']);
                 break;
@@ -51,15 +69,18 @@ try {
                         (SELECT COUNT(DISTINCT c.id) FROM courses c
                          INNER JOIN attendance_sessions s ON c.id = s.course_id
                          WHERE c.department_id = ?) as active_courses,
-                        COALESCE(AVG(CASE
+                        COALESCE((SELECT AVG(CASE
                             WHEN ar.status = 1 THEN 100.0
                             ELSE 0.0
-                        END), 0) as avg_attendance,
+                        END) FROM attendance_records ar
+                        INNER JOIN attendance_sessions sess ON ar.session_id = sess.id
+                        INNER JOIN courses c ON sess.course_id = c.id
+                        WHERE c.department_id = ?), 0) as avg_attendance,
                         (SELECT COUNT(DISTINCT s.id) FROM attendance_sessions s
                          INNER JOIN courses c ON s.course_id = c.id
                          WHERE c.department_id = ?) as total_sessions,
                         COALESCE((SELECT SUM(c.credits) FROM courses c WHERE c.department_id = ?), 0) as total_credits",
-                    [$department_id, $department_id, $department_id, $department_id, $department_id],
+                    [$department_id, $department_id, $department_id, $department_id, $department_id, $department_id],
                     $cache_key,
                     600 // 10 minutes TTL
                 );
@@ -86,16 +107,19 @@ try {
                             (SELECT COUNT(DISTINCT c.id) FROM courses c
                              INNER JOIN attendance_sessions s ON c.id = s.course_id
                              WHERE c.department_id = ?) as active_courses,
-                            COALESCE(AVG(CASE
+                            COALESCE((SELECT AVG(CASE
                                 WHEN ar.status = 1 THEN 100.0
                                 ELSE 0.0
-                            END), 0) as avg_attendance,
+                            END) FROM attendance_records ar
+                            INNER JOIN attendance_sessions sess ON ar.session_id = sess.id
+                            INNER JOIN courses c ON sess.course_id = c.id
+                            WHERE c.department_id = ?), 0) as avg_attendance,
                             (SELECT COUNT(DISTINCT s.id) FROM attendance_sessions s
                              INNER JOIN courses c ON s.course_id = c.id
                              WHERE c.department_id = ?) as total_sessions,
                             COALESCE((SELECT SUM(c.credits) FROM courses c WHERE c.department_id = ?), 0) as total_credits
                     ");
-                    $stmt->execute([$department_id, $department_id, $department_id, $department_id, $department_id]);
+                    $stmt->execute([$department_id, $department_id, $department_id, $department_id, $department_id, $department_id]);
                     $direct_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     if (!empty($direct_stats) && isset($direct_stats[0])) {
@@ -136,12 +160,12 @@ try {
             break;
 
         case 'get_detailed_report':
-            $department_id = $_POST['department_id'] ?? 0;
-            $option_id = $_POST['option_id'] ?? '';
-            $course_id = $_POST['course_id'] ?? '';
-            $year_level = $_POST['year_level'] ?? '';
-            $start_date = $_POST['start_date'] ?? '';
-            $end_date = $_POST['end_date'] ?? '';
+            $department_id = $post_data['department_id'] ?? 0;
+            $option_id = $post_data['option_id'] ?? '';
+            $course_id = $post_data['course_id'] ?? '';
+            $year_level = $post_data['year_level'] ?? '';
+            $start_date = $post_data['start_date'] ?? '';
+            $end_date = $post_data['end_date'] ?? '';
 
             if (!$department_id || !$option_id || !$course_id || !$year_level || !$start_date || !$end_date) {
                 echo json_encode(['success' => false, 'message' => 'All parameters required']);
@@ -179,9 +203,9 @@ try {
             break;
 
         case 'get_course_performance':
-            $department_id = $_POST['department_id'] ?? 0;
-            $start_date = $_POST['start_date'] ?? '';
-            $end_date = $_POST['end_date'] ?? '';
+            $department_id = $post_data['department_id'] ?? 0;
+            $start_date = $post_data['start_date'] ?? '';
+            $end_date = $post_data['end_date'] ?? '';
 
             if (!$department_id || !$start_date || !$end_date) {
                 echo json_encode(['success' => false, 'message' => 'Department ID and date range required']);
@@ -217,10 +241,10 @@ try {
             break;
 
         case 'get_student_attendance_summary':
-            $department_id = $_POST['department_id'] ?? 0;
-            $option_id = $_POST['option_id'] ?? '';
-            $course_id = $_POST['course_id'] ?? '';
-            $limit = (int)($_POST['limit'] ?? 10);
+            $department_id = $post_data['department_id'] ?? 0;
+            $option_id = $post_data['option_id'] ?? '';
+            $course_id = $post_data['course_id'] ?? '';
+            $limit = (int)($post_data['limit'] ?? 10);
 
             if (!$department_id) {
                 echo json_encode(['success' => false, 'message' => 'Department ID required']);

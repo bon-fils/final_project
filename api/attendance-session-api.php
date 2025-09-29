@@ -10,8 +10,8 @@ require_once __DIR__ . "/../session_check.php";
 require_once __DIR__ . "/../cache_utils.php";
 session_start();
 
-// Ensure user is logged in and is lecturer or admin
-require_role(['lecturer', 'admin']);
+// Ensure user is logged in and is lecturer, hod, or admin
+require_role(['lecturer', 'hod', 'admin']);
 
 // Set JSON response headers
 header('Content-Type: application/json');
@@ -123,24 +123,69 @@ exit;
  * Get departments for the current lecturer
  */
 function handleGetDepartments(PDO $pdo): array {
-    $lecturer_id = $_SESSION['user_id'];
+    $user_id = $_SESSION['user_id'];
+    $user_role = $_SESSION['role'];
 
-    // Get lecturer's department
-    $stmt = $pdo->prepare("SELECT department_id FROM lecturers WHERE id = ?");
-    $stmt->execute([$lecturer_id]);
-    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+    error_log("handleGetDepartments called for user_id: $user_id, role: $user_role");
 
-    if (!$lecturer || !$lecturer['department_id']) {
-        // If lecturer has no department assigned, return empty result
+    // Get user's department - could be lecturer or hod
+    if ($user_role === 'hod') {
+        // For HODs, get department from departments table where they are assigned as HOD
+        error_log("Querying departments for HOD user_id: $user_id");
+        $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
+        $stmt->execute([$user_id]);
+        $department = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        error_log("HOD department query result: " . ($department ? "Found department " . $department['id'] : "No department found"));
+
+        if (!$department) {
+            return [
+                'status' => 'success',
+                'message' => 'No department assigned to this HOD',
+                'data' => [],
+                'count' => 0
+            ];
+        }
+
+        // Return the department data
         return [
             'status' => 'success',
-            'message' => 'No department assigned to this lecturer',
-            'data' => [],
-            'count' => 0
+            'message' => 'Departments retrieved successfully',
+            'data' => [$department],
+            'count' => 1
+        ];
+    } else {
+        // For lecturers, get department from lecturers table
+        error_log("Querying departments for lecturer user_id: $user_id");
+        $stmt = $pdo->prepare("
+            SELECT l.id as lecturer_id, l.department_id, d.name
+            FROM lecturers l
+            JOIN users u ON l.email = u.email
+            JOIN departments d ON l.department_id = d.id
+            WHERE u.id = ? AND u.role = 'lecturer'
+        ");
+        $stmt->execute([$user_id]);
+        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        error_log("Lecturer department query result: " . ($lecturer ? "Found department " . $lecturer['department_id'] : "No department found"));
+
+        if (!$lecturer || !$lecturer['department_id']) {
+            return [
+                'status' => 'success',
+                'message' => 'No department assigned to this lecturer',
+                'data' => [],
+                'count' => 0
+            ];
+        }
+
+        // Return the department data
+        return [
+            'status' => 'success',
+            'message' => 'Departments retrieved successfully',
+            'data' => [['id' => $lecturer['department_id'], 'name' => $lecturer['name']]],
+            'count' => 1
         ];
     }
-
-    $lecturer_department_id = $lecturer['department_id'];
 
     // For admins, return all departments
     if ($_SESSION['role'] === 'admin') {
@@ -172,20 +217,44 @@ function handleGetOptions(PDO $pdo): array {
         throw new Exception('Invalid department ID');
     }
 
-    // Get current lecturer's department to ensure they can only access their department's options
-    $lecturer_id = $_SESSION['user_id'];
-    $stmt = $pdo->prepare("SELECT department_id FROM lecturers WHERE id = ?");
-    $stmt->execute([$lecturer_id]);
-    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Get current user's department to ensure they can only access their department's options
+    $user_id = $_SESSION['user_id'];
+    $user_role = $_SESSION['role'];
 
-    if (!$lecturer || !$lecturer['department_id']) {
-        return [
-            'status' => 'error',
-            'message' => 'No department assigned to this lecturer'
-        ];
+    if ($user_role === 'hod') {
+        // For HODs, get department from departments table where they are assigned as HOD
+        $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
+        $stmt->execute([$user_id]);
+        $department = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$department) {
+            return [
+                'status' => 'error',
+                'message' => 'No department assigned to this HOD'
+            ];
+        }
+
+        $lecturer_department_id = $department['department_id'];
+    } else {
+        // For lecturers, get department from lecturers table
+        $stmt = $pdo->prepare("
+            SELECT l.department_id
+            FROM lecturers l
+            JOIN users u ON l.email = u.email
+            WHERE u.id = ? AND u.role = 'lecturer'
+        ");
+        $stmt->execute([$user_id]);
+        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$lecturer || !$lecturer['department_id']) {
+            return [
+                'status' => 'error',
+                'message' => 'No department assigned to this lecturer'
+            ];
+        }
+
+        $lecturer_department_id = $lecturer['department_id'];
     }
-
-    $lecturer_department_id = $lecturer['department_id'];
 
     // Verify that the requested department matches the lecturer's department (unless admin)
     if ($_SESSION['role'] !== 'admin' && $department_id != $lecturer_department_id) {
@@ -278,20 +347,45 @@ function handleGetCourses(PDO $pdo): array {
     // Note: year_level is optional for course loading since courses don't have year levels
     // Year level filtering should be applied when getting students, not courses
 
-    // Get current lecturer's department to ensure they can only access their department's courses
-    $lecturer_id = $_SESSION['user_id'];
-    $stmt = $pdo->prepare("SELECT department_id FROM lecturers WHERE id = ?");
-    $stmt->execute([$lecturer_id]);
-    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+    $user_id = $_SESSION['user_id'];
+    $user_role = $_SESSION['role'];
 
-    if (!$lecturer || !$lecturer['department_id']) {
-        return [
-            'status' => 'error',
-            'message' => 'No department assigned to this lecturer'
-        ];
+    if ($user_role === 'hod') {
+        // For HODs, get department from departments table where they are assigned as HOD
+        $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
+        $stmt->execute([$user_id]);
+        $department = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$department) {
+            return [
+                'status' => 'error',
+                'message' => 'No department assigned to this HOD'
+            ];
+        }
+
+        $lecturer_department_id = $department['id'];
+        $lecturer_id = null; // HODs don't have lecturer_id
+    } else {
+        // For lecturers, get department from lecturers table
+        $stmt = $pdo->prepare("
+            SELECT l.id as lecturer_id, l.department_id
+            FROM lecturers l
+            JOIN users u ON l.email = u.email
+            WHERE u.id = ? AND u.role = 'lecturer'
+        ");
+        $stmt->execute([$user_id]);
+        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$lecturer || !$lecturer['department_id']) {
+            return [
+                'status' => 'error',
+                'message' => 'No department assigned to this lecturer'
+            ];
+        }
+
+        $lecturer_department_id = $lecturer['department_id'];
+        $lecturer_id = $lecturer['lecturer_id'];
     }
-
-    $lecturer_department_id = $lecturer['department_id'];
 
     // Verify that the requested department matches the lecturer's department (unless admin)
     if ($_SESSION['role'] !== 'admin' && $department_id != $lecturer_department_id) {

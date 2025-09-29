@@ -4,9 +4,15 @@ require_once "session_check.php"; // Session management - requires config.php co
 session_start(); // Start session after config and session_check
 require_role(['hod']);
 
-// Get HoD department id
+// Get HoD department id by joining through lecturers table
 $hod_id = $_SESSION['user_id'];
-$deptStmt = $pdo->prepare("SELECT id, name FROM departments WHERE hod_id = ?");
+$deptStmt = $pdo->prepare("
+    SELECT d.id, d.name
+    FROM departments d
+    JOIN lecturers l ON d.hod_id = l.id
+    JOIN users u ON l.email = u.email AND u.role = 'hod'
+    WHERE u.id = ?
+");
 $deptStmt->execute([$hod_id]);
 $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
 

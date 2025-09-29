@@ -2,7 +2,7 @@
 session_start();
 require_once "config.php"; // $pdo connection
 require_once "session_check.php";
-require_role(['lecturer', 'admin']);
+require_role(['lecturer', 'hod', 'admin']);
 
 // Get user_id from session
 $user_id = $_SESSION['user_id'] ?? null;
@@ -30,7 +30,7 @@ if ($user_role === 'admin') {
             SELECT l.department_id, l.id as lecturer_id
             FROM lecturers l
             INNER JOIN users u ON l.email = u.email
-            WHERE u.id = :user_id AND u.role = 'lecturer'
+            WHERE u.id = :user_id AND u.role IN ('lecturer', 'hod')
         ");
         $dept_stmt->execute(['user_id' => $user_id]);
         $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
@@ -47,9 +47,9 @@ if ($user_role === 'admin') {
             SELECT
                 CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
                 CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
-                email, 7, 'lecturer', '12345'
-            FROM users
-            WHERE id = :user_id AND role = 'lecturer'
+                email, 7, u.role, '12345'
+            FROM users u
+            WHERE id = :user_id AND role IN ('lecturer', 'hod')
             ON DUPLICATE KEY UPDATE email = email
         ");
         $create_lecturer_stmt->execute(['user_id' => $user_id]);

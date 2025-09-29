@@ -28,8 +28,17 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
 }
 
 // Validate CSRF token for POST requests
+$post_data = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $csrf_token = $_POST['csrf_token'] ?? '';
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    if (strpos($contentType, 'application/json') !== false) {
+        $json = json_decode(file_get_contents('php://input'), true);
+        $csrf_token = $json['csrf_token'] ?? '';
+        $post_data = $json;
+    } else {
+        $csrf_token = $_POST['csrf_token'] ?? '';
+        $post_data = $_POST;
+    }
     if (!validate_csrf_token($csrf_token)) {
         http_response_code(403);
         echo json_encode([
@@ -41,10 +50,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$action = $_GET['action'] ?? $_POST['action'] ?? '';
-
 try {
     // Validate action parameter
+    $action = $_GET['action'] ?? $post_data['action'] ?? '';
     if (empty($action)) {
         throw new Exception('Action parameter is required', 400);
     }
@@ -527,8 +535,6 @@ function handleGetCourseAssignmentOverview(PDO $pdo, int $hod_id): array {
             LEFT JOIN courses c ON l.id = c.lecturer_id
             LEFT JOIN attendance_sessions s ON c.id = s.course_id
             WHERE l.department_id = ?
-                AND u.role = 'lecturer'
-                AND l.role IN ('lecturer', 'hod')
             GROUP BY l.id, l.first_name, l.last_name, l.email, l.phone, l.education_level, u.username, u.role
             ORDER BY l.first_name, l.last_name
         ");
@@ -582,7 +588,9 @@ function getHodDepartment(PDO $pdo, int $hod_id): ?array {
     $stmt = $pdo->prepare("
         SELECT d.id, d.name
         FROM departments d
-        WHERE d.hod_id = ?
+        JOIN lecturers l ON d.hod_id = l.id
+        JOIN users u ON l.email = u.email AND u.role = 'hod'
+        WHERE u.id = ?
     ");
     $stmt->execute([$hod_id]);
     $department = $stmt->fetch(PDO::FETCH_ASSOC);

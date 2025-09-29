@@ -1,0 +1,68 @@
+# RP Attendance System .gitignore
+
+# Test files (organized in tests/ directory)
+tests/
+
+# Logs
+logs/
+*.log
+webserver.log
+
+# Cache files
+cache/
+*.cache
+
+# Uploads (user data - keep structure but ignore files)
+uploads/students/
+uploads/lecturers/
+uploads/leave_docs/
+!uploads/.gitkeep
+
+# Session and temporary files
+cookies.txt
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Database dumps (keep structure)
+*.sql
+!setup_database.php
+
+# Node modules (if any)
+node_modules/
+
+# Composer
+vendor/
+
+# PHP error logs
+error_log
+php_error.log
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Temporary files
+tmp/
+temp/
