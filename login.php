@@ -17,7 +17,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 SELECT * FROM users
                 WHERE (email = :email OR username = :username)
                   AND role = :role
-                  AND status = 'active'
                 LIMIT 1
             ");
             $stmt->execute([
@@ -38,7 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $storedPassword = (string)($user['password'] ?? '');
 
                 // If stored is a hash, verify securely; otherwise fall back to plain and upgrade to hash-on-login
-                $looksHashed = (strpos($storedPassword, '$2y$') === 0) || (strpos($storedPassword, '$argon2') === 0);
+                $looksHashed = str_starts_with($storedPassword, '$2y$') || str_starts_with($storedPassword, '$argon2');
 
                 if ($looksHashed) {
                     $isAuthenticated = password_verify($password, $storedPassword);
@@ -69,22 +68,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             if ($isAuthenticated) {
-                // Update last login timestamp
-                try {
-                    $updateStmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
-                    $updateStmt->execute([$user['id']]);
-                } catch (Throwable $t) {
-                    // Ignore if update fails
-                }
-
                 $_SESSION['user_id']  = $user['id'];
                 $_SESSION['username'] = $user['username'];
-                $_SESSION['user_role'] = $user['role']; // Changed from 'role' to 'user_role' to match validation
-                $_SESSION['role']     = $user['role']; // Keep for backward compatibility
-
-                // Initialize required session keys for session integrity validation
-                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-                $_SESSION['login_time'] = time();
+                $_SESSION['role']     = $user['role'];
 
                 // Set role-specific IDs for consistency across pages
                 switch ($user['role']) {
@@ -100,14 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         header("Location: students-dashboard.php");
                         exit;
                     case 'lecturer':
-                        try {
-                            $l = $pdo->prepare("SELECT id FROM lecturers WHERE email = ? LIMIT 1");
-                            $l->execute([$user['email']]);
-                            $lec = $l->fetch(PDO::FETCH_ASSOC);
-                            if (!empty($lec['id'])) {
-                                $_SESSION['lecturer_id'] = (int)$lec['id'];
-                            }
-                        } catch (Throwable $t) {}
+                        $_SESSION['lecturer_id'] = (int)$user['id'];
                         error_log("Redirecting lecturer to dashboard: " . $user['username']);
                         header("Location: lecturer-dashboard.php");
                         exit;
@@ -161,27 +140,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       padding-top: 70px;
     }
     .login-box {
-      background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(10px);
+      background: white;
       border-radius: 12px;
       padding: 40px 30px;
-      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
       width: 100%;
       max-width: 400px;
       margin: 30px 15px 60px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .login-box::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 4px;
-      background: var(--primary-gradient);
     }
     .form-control, .form-select { border-radius: 8px; }
     .btn-primary {
@@ -198,9 +163,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
 
   <!-- Navbar -->
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top" style="background: linear-gradient(135deg, #0066cc 0%, #003366 100%) !important; backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255, 255, 255, 0.2);">
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top">
     <div class="container">
-      <a class="navbar-brand fw-bold" href="index.php" style="color: white !important;">
+      <a class="navbar-brand fw-bold" href="index.php">
         <i class="fas fa-fingerprint me-2"></i>RP Attendance System
       </a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarLogin" aria-controls="navbarLogin" aria-expanded="false" aria-label="Toggle navigation">
@@ -208,10 +173,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </button>
       <div class="collapse navbar-collapse" id="navbarLogin">
         <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="index.php" style="color: rgba(255, 255, 255, 0.8) !important; font-weight: 500;">Home</a></li>
-          <li class="nav-item"><a class="nav-link" href="index.php#features" style="color: rgba(255, 255, 255, 0.8) !important; font-weight: 500;">Features</a></li>
-          <li class="nav-item"><a class="nav-link" href="index.php#about" style="color: rgba(255, 255, 255, 0.8) !important; font-weight: 500;">About Us</a></li>
-          <li class="nav-item"><a class="nav-link" href="index.php#contact" style="color: rgba(255, 255, 255, 0.8) !important; font-weight: 500;">Contact Us</a></li>
+          <li class="nav-item"><a class="nav-link" href="index.php">Home</a></li>
+          <li class="nav-item"><a class="nav-link" href="#features">Features</a></li>
+          <li class="nav-item"><a class="nav-link" href="#about">About Us</a></li>
+          <li class="nav-item"><a class="nav-link" href="#contact">Contact Us</a></li>
         </ul>
       </div>
     </div>

@@ -25,7 +25,7 @@ if (isset($_GET['error'])) {
 
 // Rate limiting check
 $login_attempts_key = 'login_attempts_' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-if (!check_rate_limit($login_attempts_key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_TIME)) {
+if (!check_ip_rate_limit($login_attempts_key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_TIME)) {
     $error = "Too many login attempts. Please try again later.";
     log_message('warning', 'Rate limit exceeded', [
         'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',

@@ -1,6 +1,19 @@
 <?php
 // session_check.php - Enhanced security session management
 error_reporting(0); // Keep disabled for production
+
+// Configure session cookie for AJAX compatibility - must be set before session_start()
+if (!headers_sent()) {
+    session_set_cookie_params([
+        'lifetime' => 0, // Session cookie
+        'path' => '/',
+        'domain' => '', // Leave empty for current domain
+        'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
+        'httponly' => false, // Allow JavaScript access for AJAX
+        'samesite' => 'Lax' // Allow cross-site requests
+    ]);
+}
+
 session_start();
 
 // Security headers
@@ -16,8 +29,8 @@ header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
 header("Expires: 0");
 
-// Session security settings
-if (!isset($_SESSION['initiated'])) {
+// Session security settings - only regenerate for non-AJAX requests to avoid session issues
+if (!isset($_SESSION['initiated']) && !$is_ajax) {
     session_regenerate_id(true);
     $_SESSION['initiated'] = true;
 }
@@ -25,7 +38,20 @@ if (!isset($_SESSION['initiated'])) {
 // Session timeout using configuration constant
 $session_timeout = defined('SESSION_LIFETIME') ? SESSION_LIFETIME : 1800;
 if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $session_timeout)) {
-    // Log session timeout (using error_log as fallback)
+    // For AJAX requests to API endpoints, don't destroy session - just return error
+    if ($is_ajax && strpos($current_page, '-api.php') !== false) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Session expired. Please refresh the page and login again.',
+            'error_code' => 'SESSION_EXPIRED',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+        exit;
+    }
+
+    // For regular pages, destroy session and redirect
     error_log("Session expired for user_id: " . ($_SESSION['user_id'] ?? 'unknown') . ", IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
     session_unset();
     session_destroy();
@@ -39,34 +65,77 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// Check if user is logged in (allow register-student.php for demo)
+// Check if user is logged in (allow register-student.php and login.php for demo)
 $current_page = basename($_SERVER['PHP_SELF']);
+$is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // Allow access to registration page for demo purposes
-    if ($current_page !== 'register-student.php') {
-        error_log("Session check failed: user_id or role not set");
-        echo "<script>window.location.href='login.php';</script>";
-        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
-        exit;
+    // Allow access to registration and login pages
+    if ($current_page !== 'register-student.php' && $current_page !== 'login.php' && $current_page !== 'login_new.php' && $current_page !== 'forgot-password.php' && $current_page !== 'reset-password.php') {
+        error_log("Session check failed: user_id or role not set for page: $current_page");
+
+        if ($is_ajax) {
+            // For AJAX requests, return JSON error instead of HTML
+            header('Content-Type: application/json');
+            http_response_code(401);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Session expired. Please refresh the page and login again.',
+                'error_code' => 'SESSION_EXPIRED',
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+            exit;
+        } else {
+            // For regular requests, use HTML redirect
+            echo "<script>window.location.href='login.php';</script>";
+            echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+            exit;
+        }
     }
 }
 
 // Validate session data
 if (empty($_SESSION['user_id']) || empty($_SESSION['role'])) {
     error_log("Session check failed: user_id or role is empty");
-    session_destroy();
-    echo "<script>window.location.href='login.php';</script>";
-    echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
-    exit;
+
+    if ($is_ajax) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Invalid session data. Please login again.',
+            'error_code' => 'INVALID_SESSION',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+        exit;
+    } else {
+        session_destroy();
+        echo "<script>window.location.href='login.php';</script>";
+        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+        exit;
+    }
 }
 
 // Additional validation for user_id format
 if (!is_numeric($_SESSION['user_id'])) {
     error_log("Session check failed: user_id is not numeric");
-    session_destroy();
-    echo "<script>window.location.href='login.php';</script>";
-    echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
-    exit;
+
+    if ($is_ajax) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Invalid session format. Please login again.',
+            'error_code' => 'INVALID_SESSION_FORMAT',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+        exit;
+    } else {
+        session_destroy();
+        echo "<script>window.location.href='login.php';</script>";
+        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+        exit;
+    }
 }
 
 // Enhanced role-based access control
@@ -79,10 +148,24 @@ function require_role($roles) {
         // Log unauthorized access attempt
         error_log("Unauthorized access attempt: User ID {$_SESSION['user_id']} tried to access restricted area. Required roles: " . implode(', ', $roles) . ", User role: {$_SESSION['role']}");
 
-        // Use direct redirect instead of header to avoid issues
-        echo "<script>window.location.href='login.php?error=unauthorized';</script>";
-        echo "<p>If you are not redirected, <a href='login.php?error=unauthorized'>click here</a>.</p>";
-        exit;
+        $is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+            http_response_code(403);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Insufficient permissions to access this resource.',
+                'error_code' => 'INSUFFICIENT_PERMISSIONS',
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+            exit;
+        } else {
+            // Use direct redirect instead of header to avoid issues
+            echo "<script>window.location.href='login.php?error=unauthorized';</script>";
+            echo "<p>If you are not redirected, <a href='login.php?error=unauthorized'>click here</a>.</p>";
+            exit;
+        }
     }
 }
 

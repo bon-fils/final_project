@@ -3,40 +3,61 @@
  * HOD Assignment API
  * Handles all AJAX requests for HOD assignment functionality
  * Automatically creates user accounts when assigning HODs
+ *
+ * @version 2.1.0
+ * @author RP System Development Team
  */
 
 require_once __DIR__ . "/../config.php"; // Must be first - defines SESSION_LIFETIME
-require_once __DIR__ . "/../session_check.php"; // Session management - requires config.php constants
-session_start(); // Start session after config and session_check
-require_role(['admin']);
+require_once __DIR__ . "/../session_check.php"; // Session management - session already started
 
+require_role(['admin']); // Re-enabled after testing
 // Set JSON response headers
 header('Content-Type: application/json');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
 
 // Initialize response structure
 $response = [
     'status' => 'error',
     'message' => 'Unknown error occurred',
     'data' => null,
-    'timestamp' => date('Y-m-d H:i:s')
+    'timestamp' => date('Y-m-d H:i:s'),
+    'request_id' => uniqid('hod_api_', true)
 ];
 
 try {
+    // Configure PDO for better error handling and security
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
     // Validate CSRF token for POST requests
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $csrf_token = $_POST['csrf_token'] ?? '';
         if (!validate_csrf_token($csrf_token)) {
+            http_response_code(403);
             throw new Exception('CSRF token validation failed');
         }
     }
 
+    // Validate action parameter
     $action = $_GET['action'] ?? '';
+    if (empty($action)) {
+        http_response_code(400);
+        throw new Exception('Action parameter is required');
+    }
+
+    // Sanitize action parameter
+    $action = filter_var($action, FILTER_SANITIZE_STRING);
+    if (!preg_match('/^[a-z_]+$/', $action)) {
+        http_response_code(400);
+        throw new Exception('Invalid action format');
+    }
 
     // Route actions based on request
     switch ($action) {
@@ -70,22 +91,35 @@ try {
 
         default:
             http_response_code(400);
-            $response['message'] = 'Invalid action specified';
+            $response['message'] = 'Invalid action specified: ' . htmlspecialchars($action);
     }
 
 } catch (PDOException $e) {
-    error_log("Database Error in HOD API: " . $e->getMessage());
+    error_log("Database Error in HOD API [{$response['request_id']}]: " . $e->getMessage());
     http_response_code(500);
-    $response['message'] = 'Database error occurred';
+    $response['message'] = 'Database operation failed. Please try again.';
+    $response['error_code'] = 'DB_ERROR';
 
-} catch (Exception $e) {
-    error_log("Error in HOD API: " . $e->getMessage());
+} catch (InvalidArgumentException $e) {
+    error_log("Validation Error in HOD API [{$response['request_id']}]: " . $e->getMessage());
     http_response_code(400);
     $response['message'] = $e->getMessage();
+    $response['error_code'] = 'VALIDATION_ERROR';
+
+} catch (Exception $e) {
+    error_log("General Error in HOD API [{$response['request_id']}]: " . $e->getMessage());
+    http_response_code(400);
+    $response['message'] = $e->getMessage();
+    $response['error_code'] = 'GENERAL_ERROR';
 }
 
+// Ensure response always has required fields
+$response['status'] = $response['status'] ?? 'error';
+$response['message'] = $response['message'] ?? 'Unknown error occurred';
+$response['timestamp'] = date('Y-m-d H:i:s');
+
 // Output JSON response
-echo json_encode($response, JSON_PRETTY_PRINT);
+echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 exit;
 
 /**
@@ -196,25 +230,37 @@ function handleGetLecturers(PDO $pdo): array {
 
 /**
  * Handle assign_hod action - Assign or remove HOD from department and create user account
+ * Includes comprehensive input validation and security checks
  */
 function handleAssignHod(PDO $pdo): array {
-    // Validate input
-    $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
+    // Validate and sanitize input parameters
+    $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT, [
+        'options' => ['min_range' => 1]
+    ]);
+
+    if (!$department_id) {
+        throw new InvalidArgumentException('Invalid or missing department ID. Must be a positive integer.');
+    }
 
     // Handle hod_id - can be null to remove assignment
-    $hod_id_raw = $_POST['hod_id'] ?? null;
+    $hod_id_raw = trim($_POST['hod_id'] ?? '');
 
-    if ($hod_id_raw === null || $hod_id_raw === 'null' || $hod_id_raw === '') {
-        $hod_id = null;
-    } else {
-        $hod_id = filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT);
+    // More robust null checking
+    $null_values = ['', 'null', 'NULL', '0', null, false];
+    $hod_id = null;
+
+    if (!in_array($hod_id_raw, $null_values, true)) {
+        $hod_id = filter_var($hod_id_raw, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1]
+        ]);
         if ($hod_id === false) {
-            throw new Exception('Invalid HOD ID format');
+            throw new InvalidArgumentException('Invalid HOD ID format. Must be a positive integer or empty.');
         }
     }
 
-    if (!$department_id || $department_id <= 0) {
-        throw new Exception('Invalid department selected');
+    // Additional security: Check for reasonable ID ranges (prevent potential DoS with extremely large IDs)
+    if ($department_id > 999999 || ($hod_id && $hod_id > 999999)) {
+        throw new InvalidArgumentException('Invalid ID range detected.');
     }
 
     // Verify the department exists
@@ -250,6 +296,29 @@ function handleAssignHod(PDO $pdo): array {
             ];
         }
     }
+
+    // Basic rate limiting: prevent too many assignments in short time
+    $rate_limit_key = 'hod_assignment_' . $_SESSION['user_id'];
+    $current_time = time();
+
+    // Simple in-memory rate limiting (in production, use Redis or database)
+    if (!isset($_SESSION['hod_assignment_last_time'])) {
+        $_SESSION['hod_assignment_last_time'] = 0;
+        $_SESSION['hod_assignment_count'] = 0;
+    }
+
+    // Reset counter if more than 5 minutes have passed
+    if ($current_time - $_SESSION['hod_assignment_last_time'] > 300) {
+        $_SESSION['hod_assignment_count'] = 0;
+    }
+
+    // Allow maximum 10 assignments per 5 minutes
+    if ($_SESSION['hod_assignment_count'] >= 10) {
+        throw new Exception('Rate limit exceeded. Please wait before making more assignments.');
+    }
+
+    $_SESSION['hod_assignment_last_time'] = $current_time;
+    $_SESSION['hod_assignment_count']++;
 
     // Start transaction for atomic operation
     $pdo->beginTransaction();
@@ -374,61 +443,122 @@ function handleAssignHod(PDO $pdo): array {
 
 /**
  * Get or create HOD user account in users table
- * Only updates existing accounts to HOD role, does not create new ones
- * @return int|null The user ID if account exists, null otherwise
+ * Updates existing accounts to HOD role or creates new ones with secure defaults
+ *
+ * @param PDO $pdo Database connection
+ * @param array $lecturer Lecturer data array with required fields: email, first_name, last_name
+ * @return int The user ID (existing or newly created)
+ * @throws InvalidArgumentException If lecturer data is invalid
+ * @throws Exception If database operation fails
  */
-function getOrCreateHodUserAccount(PDO $pdo, array $lecturer): ?int {
+function getOrCreateHodUserAccount(PDO $pdo, array $lecturer): int {
+    // Validate required lecturer data
+    if (empty($lecturer['email']) || !filter_var($lecturer['email'], FILTER_VALIDATE_EMAIL)) {
+        throw new InvalidArgumentException('Valid lecturer email is required');
+    }
+    if (empty($lecturer['first_name']) || empty($lecturer['last_name'])) {
+        throw new InvalidArgumentException('Lecturer first and last names are required');
+    }
+
     // Check if user already exists
-    $stmt = $pdo->prepare("SELECT id, username FROM users WHERE email = ?");
+    $stmt = $pdo->prepare("SELECT id, username, role FROM users WHERE email = ?");
     $stmt->execute([$lecturer['email']]);
     $existing_user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing_user) {
-        // Update existing user to HOD role (keep existing username, password and status)
+        // If already HOD, return existing ID
+        if ($existing_user['role'] === 'hod') {
+            return (int)$existing_user['id'];
+        }
+
+        // Update existing user to HOD role (preserve username and password)
         $stmt = $pdo->prepare("UPDATE users SET role = 'hod', updated_at = NOW() WHERE id = ?");
         $stmt->execute([$existing_user['id']]);
 
-        error_log("Updated existing user to HOD role: {$lecturer['email']}");
-        return $existing_user['id'];
+        error_log("Updated existing user to HOD role: {$lecturer['email']} (ID: {$existing_user['id']})");
+        return (int)$existing_user['id'];
     } else {
-        // Create new user account with default password
+        // Create new user account with secure defaults
         $username = generateUsername($lecturer['first_name'], $lecturer['last_name']);
-        $password = password_hash('hod123', PASSWORD_DEFAULT); // Default password for HODs
 
-        $stmt = $pdo->prepare("
-            INSERT INTO users (username, email, password, role, status, created_at, updated_at)
-            VALUES (?, ?, ?, 'hod', 'active', NOW(), NOW())
-        ");
-        $stmt->execute([$username, $lecturer['email'], $password]);
-        $user_id = $pdo->lastInsertId();
+        // Use a more secure default password (should be changed by admin)
+        $default_password = 'ChangeMe123!'; // TODO: Generate random password and send via email
+        $password_hash = password_hash($default_password, PASSWORD_DEFAULT);
 
-        error_log("Created new HOD user account for lecturer: {$lecturer['email']} with username: {$username}");
-        return $user_id;
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO users (username, email, password, role, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'hod', 'active', NOW(), NOW())
+            ");
+            $stmt->execute([$username, $lecturer['email'], $password_hash]);
+            $user_id = (int)$pdo->lastInsertId();
+
+            error_log("Created new HOD user account for lecturer: {$lecturer['email']} with username: {$username} (ID: {$user_id})");
+            return $user_id;
+        } catch (PDOException $e) {
+            // Handle potential duplicate username
+            if ($e->getCode() == 23000) { // Integrity constraint violation
+                throw new Exception('Username already exists. Please contact administrator.');
+            }
+            throw $e;
+        }
     }
 }
 
 /**
- * Generate username from first and last name
+ * Generate unique username from first and last name
+ * Ensures username is unique in the users table
+ *
+ * @param string $firstName Lecturer's first name
+ * @param string $lastName Lecturer's last name
+ * @return string Generated unique username
+ * @throws Exception If unable to generate unique username after multiple attempts
  */
 function generateUsername(string $firstName, string $lastName): string {
+    // Validate input
+    $firstName = trim($firstName);
+    $lastName = trim($lastName);
+
+    if (empty($firstName) || empty($lastName)) {
+        throw new InvalidArgumentException('First and last names are required for username generation');
+    }
+
+    // Create base username: firstname.lastname
     $baseUsername = strtolower($firstName . '.' . $lastName);
+
+    // Remove non-alphanumeric characters except dots
     $baseUsername = preg_replace('/[^a-z0-9.]/', '', $baseUsername);
-    
-    // Check if username exists and add number if needed
+
+    // Ensure minimum length and remove consecutive dots
+    $baseUsername = preg_replace('/\.{2,}/', '.', $baseUsername);
+    $baseUsername = trim($baseUsername, '.');
+
+    // Ensure we have a valid base username
+    if (empty($baseUsername) || strlen($baseUsername) < 3) {
+        // Fallback: use first 3 chars of first name + last name
+        $baseUsername = strtolower(substr($firstName, 0, 3) . $lastName);
+        $baseUsername = preg_replace('/[^a-z0-9]/', '', $baseUsername);
+    }
+
     global $pdo;
+
+    // Check if base username exists and add number if needed
     $username = $baseUsername;
     $counter = 1;
-    
-    while (true) {
+    $max_attempts = 100; // Prevent infinite loop
+
+    while ($counter < $max_attempts) {
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
         $stmt->execute([$username]);
         if ($stmt->fetchColumn() == 0) {
-            break;
+            return $username;
         }
         $username = $baseUsername . $counter;
         $counter++;
     }
-    
+
+    // If we can't find a unique username, add timestamp
+    $username = $baseUsername . '_' . time();
     return $username;
 }
 
@@ -446,28 +576,52 @@ function generateTemporaryPassword(int $length = 12): string {
 
 /**
  * Handle get_assignment_stats action - Get statistics about HOD assignments
+ * Uses separate optimized queries for accurate counting
  */
 function handleGetAssignmentStats(PDO $pdo): array {
-    $stmt = $pdo->prepare("
+    // Get department statistics
+    $deptStats = $pdo->query("
         SELECT
-            (SELECT COUNT(*) FROM departments) as total_departments,
-            (SELECT COUNT(*) FROM departments WHERE hod_id IS NOT NULL) as assigned_departments,
-            (SELECT COUNT(*) FROM departments WHERE hod_id IS NULL) as unassigned_departments,
-            (SELECT COUNT(*) FROM lecturers WHERE role IN ('lecturer', 'hod')) as total_lecturers,
-            (SELECT COUNT(DISTINCT hod_id) FROM departments WHERE hod_id IS NOT NULL) as lecturers_assigned_as_hod,
-            (SELECT COUNT(*) FROM users WHERE role = 'hod') as hod_user_accounts
-    ");
+            COUNT(*) as total_departments,
+            COUNT(CASE WHEN hod_id IS NOT NULL THEN 1 END) as assigned_departments,
+            COUNT(CASE WHEN hod_id IS NULL THEN 1 END) as unassigned_departments
+        FROM departments
+    ")->fetch(PDO::FETCH_ASSOC);
 
-    $stmt->execute();
-    $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Get lecturer statistics
+    $lecturerStats = $pdo->query("
+        SELECT COUNT(*) as total_lecturers
+        FROM lecturers
+        WHERE role IN ('lecturer', 'hod')
+    ")->fetch(PDO::FETCH_ASSOC);
+
+    // Get lecturers assigned as HOD (from departments table)
+    $hodAssigned = $pdo->query("
+        SELECT COUNT(DISTINCT hod_id) as lecturers_assigned_as_hod
+        FROM departments
+        WHERE hod_id IS NOT NULL
+    ")->fetch(PDO::FETCH_ASSOC);
+
+    // Get user account statistics
+    $userStats = $pdo->query("
+        SELECT COUNT(*) as hod_user_accounts
+        FROM users
+        WHERE role = 'hod'
+    ")->fetch(PDO::FETCH_ASSOC);
+
+    // Combine results
+    $stats = array_merge($deptStats, $lecturerStats, $hodAssigned, $userStats);
+
+    // Ensure all values are integers
+    $stats = array_map('intval', $stats);
 
     // Add calculated fields
     $stats['assignment_percentage'] = $stats['total_departments'] > 0
         ? round(($stats['assigned_departments'] / $stats['total_departments']) * 100, 1)
-        : 0;
+        : 0.0;
 
-    $stats['available_lecturers'] = $stats['total_lecturers'] - $stats['lecturers_assigned_as_hod'];
-    $stats['accounts_missing'] = $stats['assigned_departments'] - $stats['hod_user_accounts'];
+    $stats['available_lecturers'] = max(0, $stats['total_lecturers'] - $stats['lecturers_assigned_as_hod']);
+    $stats['accounts_missing'] = max(0, $stats['assigned_departments'] - $stats['hod_user_accounts']);
 
     return [
         'status' => 'success',

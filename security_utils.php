@@ -371,6 +371,35 @@ function validate_phone(string $phone): bool {
 
 
 /**
+ * Check IP-based rate limit (returns true if allowed, false if blocked)
+ */
+function check_ip_rate_limit(string $key, int $max_requests, int $window_seconds): bool {
+    $current_time = time();
+    $rate_limit_file = sys_get_temp_dir() . "/rate_limit_{$key}.txt";
+
+    if (file_exists($rate_limit_file)) {
+        $data = json_decode(file_get_contents($rate_limit_file), true);
+        if ($data && $data['window_start'] > ($current_time - $window_seconds)) {
+            if ($data['count'] >= $max_requests) {
+                return false; // Blocked
+            }
+        } else {
+            // Reset window
+            unlink($rate_limit_file);
+        }
+    }
+
+    // Record attempt
+    $data = [
+        'count' => isset($data['count']) ? $data['count'] + 1 : 1,
+        'window_start' => $current_time
+    ];
+    file_put_contents($rate_limit_file, json_encode($data));
+
+    return true;
+}
+
+/**
  * Get remaining rate limit
  */
 function get_rate_limit_status(string $key, int $window_seconds, int $max_requests): array {

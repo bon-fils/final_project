@@ -38,7 +38,7 @@ function validate_status($status) {
 /**
  * Get all users with their details
  */
-function getAllUsers($search = '', $role_filter = '', $status_filter = '') {
+function getAllUsers($search = '', $role_filter = '', $status_filter = '', $department_filter = '', $year_level_filter = '', $gender_filter = '', $age_filter = '', $reg_no_filter = '', $email_filter = '') {
     global $pdo;
 
     try {
@@ -75,10 +75,29 @@ function getAllUsers($search = '', $role_filter = '', $status_filter = '') {
                     WHEN u.role = 'lecturer' THEN l.phone
                     WHEN u.role = 'hod' THEN l.phone
                     ELSE NULL
-                END as phone
+                END as phone,
+                CASE
+                    WHEN u.role = 'student' THEN s.dob
+                    ELSE NULL
+                END as dob,
+                CASE
+                    WHEN u.role = 'student' THEN s.sex
+                    ELSE NULL
+                END as gender,
+                CASE
+                    WHEN u.role = 'student' THEN s.year_level
+                    ELSE NULL
+                END as year_level,
+                CASE
+                    WHEN u.role = 'student' THEN d.name
+                    WHEN u.role IN ('lecturer', 'hod') THEN l_dept.name
+                    ELSE NULL
+                END as department_name
             FROM users u
             LEFT JOIN students s ON u.email = s.email AND u.role = 'student'
             LEFT JOIN lecturers l ON u.email = l.email AND u.role IN ('lecturer', 'hod')
+            LEFT JOIN departments d ON s.department_id = d.id
+            LEFT JOIN departments l_dept ON l.department_id = l_dept.id
             WHERE 1=1
         ";
 
@@ -101,6 +120,51 @@ function getAllUsers($search = '', $role_filter = '', $status_filter = '') {
         if (!empty($status_filter) && validate_status($status_filter)) {
             $conditions[] = "u.status = ?";
             $params[] = $status_filter;
+        }
+
+        if (!empty($department_filter)) {
+            if (in_array($role_filter, ['lecturer', 'hod', ''])) {
+                $conditions[] = "(l.department_id = ? OR s.department_id = ?)";
+                $params[] = $department_filter;
+                $params[] = $department_filter;
+            } else {
+                $conditions[] = "s.department_id = ?";
+                $params[] = $department_filter;
+            }
+        }
+
+        if (!empty($year_level_filter)) {
+            $conditions[] = "s.year_level = ?";
+            $params[] = $year_level_filter;
+        }
+
+        if (!empty($gender_filter)) {
+            $conditions[] = "s.sex = ?";
+            $params[] = $gender_filter;
+        }
+
+        if (!empty($age_filter)) {
+            $age_ranges = explode('-', $age_filter);
+            if (count($age_ranges) === 2) {
+                $min_age = (int)$age_ranges[0];
+                $max_age = (int)$age_ranges[1];
+                $conditions[] = "TIMESTAMPDIFF(YEAR, s.dob, CURDATE()) BETWEEN ? AND ?";
+                $params[] = $min_age;
+                $params[] = $max_age;
+            } elseif ($age_filter === '26+') {
+                $conditions[] = "TIMESTAMPDIFF(YEAR, s.dob, CURDATE()) >= ?";
+                $params[] = 26;
+            }
+        }
+
+        if (!empty($reg_no_filter)) {
+            $conditions[] = "s.reg_no LIKE ?";
+            $params[] = "%{$reg_no_filter}%";
+        }
+
+        if (!empty($email_filter)) {
+            $conditions[] = "u.email LIKE ?";
+            $params[] = "%{$email_filter}%";
         }
 
         if (!empty($conditions)) {
@@ -283,6 +347,7 @@ function updateUser($user_id, $username, $email, $role, $first_name, $last_name,
         // Start transaction
         $pdo->beginTransaction();
 
+
         // Update user
         $stmt = $pdo->prepare("
             UPDATE users
@@ -291,25 +356,30 @@ function updateUser($user_id, $username, $email, $role, $first_name, $last_name,
         ");
         $stmt->execute([$username, $email, $role, $status, $user_id]);
 
-        // Update role-specific data
+        // Get previous email for role-specific update
+        $prevEmailStmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+        $prevEmailStmt->execute([$user_id]);
+        $prevEmail = $prevEmailStmt->fetchColumn();
+
+        // Update role-specific data using user_id if possible, else fallback to email
         switch ($role) {
             case 'student':
                 $stmt = $pdo->prepare("
                     UPDATE students
-                    SET first_name = ?, last_name = ?, telephone = ?, reg_no = ?, updated_at = NOW()
+                    SET first_name = ?, last_name = ?, telephone = ?, reg_no = ?, email = ?, updated_at = NOW()
                     WHERE email = ?
                 ");
-                $stmt->execute([$first_name, $last_name, $phone, $reference_id, $email]);
+                $stmt->execute([$first_name, $last_name, $phone, $reference_id, $email, $prevEmail]);
                 break;
 
             case 'lecturer':
             case 'hod':
                 $stmt = $pdo->prepare("
                     UPDATE lecturers
-                    SET first_name = ?, last_name = ?, phone = ?, id_number = ?, role = ?, updated_at = NOW()
+                    SET first_name = ?, last_name = ?, phone = ?, id_number = ?, role = ?, email = ?, updated_at = NOW()
                     WHERE email = ?
                 ");
-                $stmt->execute([$first_name, $last_name, $phone, $reference_id, $role, $email]);
+                $stmt->execute([$first_name, $last_name, $phone, $reference_id, $role, $email, $prevEmail]);
                 break;
         }
 
@@ -404,19 +474,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
         switch ($action) {
             case 'get_users':
-                $search = sanitize_input($_GET['search'] ?? '');
-                $role_filter = sanitize_input($_GET['role'] ?? '');
-                $status_filter = sanitize_input($_GET['status'] ?? '');
-                $users = getAllUsers($search, $role_filter, $status_filter);
-                $stats = getUserStats();
-
-                echo json_encode([
-                    'status' => 'success',
-                    'data' => $users,
-                    'stats' => $stats,
-                    'timestamp' => time()
-                ]);
-                break;
+                    $search = sanitize_input($_GET['search'] ?? '');
+                    $role_filter = sanitize_input($_GET['role'] ?? '');
+                    $status_filter = sanitize_input($_GET['status'] ?? '');
+                    $department_filter = sanitize_input($_GET['department'] ?? '');
+                    $year_level_filter = sanitize_input($_GET['year_level'] ?? '');
+                    $gender_filter = sanitize_input($_GET['gender'] ?? '');
+                    $age_filter = sanitize_input($_GET['age'] ?? '');
+                    $reg_no_filter = sanitize_input($_GET['reg_no'] ?? '');
+                    $email_filter = sanitize_input($_GET['email'] ?? '');
+                    $users = getAllUsers($search, $role_filter, $status_filter, $department_filter, $year_level_filter, $gender_filter, $age_filter, $reg_no_filter, $email_filter);
+                    $stats = getUserStats();
+   
+                    echo json_encode([
+                        'status' => 'success',
+                        'data' => $users,
+                        'stats' => $stats,
+                        'timestamp' => time()
+                    ]);
+                    break;
 
             case 'create_user':
                 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -552,70 +628,121 @@ $stats = getUserStats();
             left: 0;
             width: 280px;
             height: 100vh;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-right: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 20px 0;
+            background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
+            border-right: 1px solid rgba(0, 102, 204, 0.1);
+            padding: 0;
             overflow-y: auto;
             z-index: 1000;
-            box-shadow: var(--shadow-medium);
+            box-shadow: 0 0 20px rgba(0, 102, 204, 0.1);
         }
 
         .sidebar .logo {
+            background: linear-gradient(135deg, #0066cc 0%, #004080 100%);
+            color: white;
+            padding: 25px 20px;
             text-align: center;
-            margin-bottom: 30px;
-            padding: 0 20px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .sidebar .logo::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="10" cy="10" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="90" cy="20" r="0.5" fill="rgba(255,255,255,0.1)"/><circle cx="30" cy="80" r="1.5" fill="rgba(255,255,255,0.1)"/></svg>');
+            pointer-events: none;
         }
 
         .sidebar .logo h3 {
-            color: #333;
+            color: white;
             font-weight: 700;
             margin: 0;
-            font-size: 1.5rem;
+            font-size: 1.4rem;
+            position: relative;
+            z-index: 2;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
 
         .sidebar .logo small {
-            color: #6c757d;
-            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.75rem;
+            font-weight: 500;
+            position: relative;
+            z-index: 2;
         }
 
         .sidebar-nav {
             list-style: none;
-            padding: 0;
+            padding: 20px 0;
             margin: 0;
         }
 
-        .sidebar-nav li {
-            margin: 5px 0;
+        .sidebar-nav .nav-section {
+            padding: 15px 20px 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid rgba(0, 102, 204, 0.1);
+            margin-bottom: 10px;
         }
 
         .sidebar-nav a {
             display: block;
-            padding: 12px 20px;
+            padding: 14px 25px;
             color: #495057;
             text-decoration: none;
-            border-radius: 8px;
-            margin: 0 15px;
+            border-radius: 0 25px 25px 0;
+            margin: 0 0 2px 0;
             transition: var(--transition);
             font-weight: 500;
+            position: relative;
+            border-left: 3px solid transparent;
         }
 
         .sidebar-nav a:hover {
-            background: rgba(0, 102, 204, 0.1);
+            background: rgba(0, 102, 204, 0.08);
             color: #0066cc;
-            transform: translateX(5px);
+            border-left-color: #0066cc;
+            transform: translateX(8px);
+            box-shadow: 2px 0 8px rgba(0, 102, 204, 0.15);
         }
 
         .sidebar-nav a.active {
-            background: var(--primary-gradient);
-            color: white;
-            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
+            background: linear-gradient(90deg, rgba(0, 102, 204, 0.15) 0%, rgba(0, 102, 204, 0.05) 100%);
+            color: #0066cc;
+            border-left-color: #0066cc;
+            box-shadow: 2px 0 12px rgba(0, 102, 204, 0.2);
+            font-weight: 600;
+        }
+
+        .sidebar-nav a.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 60%;
+            background: #0066cc;
+            border-radius: 0 2px 2px 0;
         }
 
         .sidebar-nav a i {
-            margin-right: 10px;
-            width: 18px;
+            margin-right: 12px;
+            width: 20px;
             text-align: center;
+            font-size: 1.1rem;
+        }
+
+        .sidebar-nav .mt-4 {
+            margin-top: 2rem !important;
+            padding-top: 2rem !important;
+            border-top: 1px solid rgba(0, 102, 204, 0.1);
         }
 
         .main-content {
@@ -731,25 +858,52 @@ $stats = getUserStats();
         .mobile-menu-toggle {
             display: none;
             position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 1001;
-            background: var(--primary-gradient);
+            top: 15px;
+            left: 15px;
+            z-index: 1003;
+            background: linear-gradient(135deg, #0066cc 0%, #004080 100%);
             color: white;
             border: none;
-            border-radius: 8px;
-            padding: 10px;
-            box-shadow: var(--shadow-medium);
+            border-radius: 10px;
+            padding: 12px;
+            box-shadow: 0 4px 20px rgba(0, 102, 204, 0.3);
+            width: 45px;
+            height: 45px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: var(--transition);
+        }
+
+        .mobile-menu-toggle:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 25px rgba(0, 102, 204, 0.4);
         }
 
         @media (max-width: 768px) {
             .sidebar {
                 transform: translateX(-100%);
-                transition: transform 0.3s ease;
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                width: 260px;
+                z-index: 1002;
             }
 
             .sidebar.show {
                 transform: translateX(0);
+                box-shadow: 0 0 30px rgba(0, 0, 0, 0.3);
+            }
+
+            .sidebar.show::after {
+                content: '';
+                position: fixed;
+                top: 0;
+                left: 260px;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                backdrop-filter: blur(2px);
+                z-index: -1;
             }
 
             .main-content {
@@ -759,6 +913,16 @@ $stats = getUserStats();
 
             .mobile-menu-toggle {
                 display: block !important;
+            }
+
+            .sidebar-nav a {
+                padding: 16px 20px;
+                font-size: 0.95rem;
+            }
+
+            .sidebar-nav .nav-section {
+                padding: 12px 20px 8px;
+                font-size: 0.7rem;
             }
         }
 
@@ -823,16 +987,79 @@ $stats = getUserStats();
         </div>
 
         <ul class="sidebar-nav">
-            <li><a href="admin-dashboard.php"><i class="fas fa-tachometer-alt"></i>Dashboard</a></li>
-            <li><a href="register-student.php"><i class="fas fa-user-plus"></i>Register Student</a></li>
-            <li><a href="manage-departments.php"><i class="fas fa-building"></i>Departments</a></li>
-            <li><a href="assign-hod.php"><i class="fas fa-user-tie"></i>Assign HOD</a></li>
-            <li><a href="admin-reports.php"><i class="fas fa-chart-bar"></i>Reports</a></li>
-            <li><a href="system-logs.php"><i class="fas fa-file-alt"></i>System Logs</a></li>
-            <li><a href="manage-users.php" class="active"><i class="fas fa-users"></i>Manage Users</a></li>
-            <li><a href="attendance-reports.php"><i class="fas fa-calendar-check"></i>Attendance</a></li>
-            <li><a href="hod-leave-management.php"><i class="fas fa-clipboard-list"></i>Leave Mgmt</a></li>
-            <li class="mt-4"><a href="logout.php" class="text-danger"><i class="fas fa-sign-out-alt"></i>Logout</a></li>
+            <li class="nav-section">
+                <i class="fas fa-th-large me-2"></i>Main Dashboard
+            </li>
+            <li>
+                <a href="admin-dashboard.php">
+                    <i class="fas fa-tachometer-alt"></i>Dashboard Overview
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-users me-2"></i>User Management
+            </li>
+            <li>
+                <a href="manage-users.php" class="active">
+                    <i class="fas fa-users-cog"></i>Manage Users
+                </a>
+            </li>
+            <li>
+                <a href="register-student.php">
+                    <i class="fas fa-user-plus"></i>Register Student
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-sitemap me-2"></i>Organization
+            </li>
+            <li>
+                <a href="manage-departments.php">
+                    <i class="fas fa-building"></i>Departments
+                </a>
+            </li>
+            <li>
+                <a href="assign-hod.php">
+                    <i class="fas fa-user-tie"></i>Assign HOD
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-chart-bar me-2"></i>Reports & Analytics
+            </li>
+            <li>
+                <a href="admin-reports.php">
+                    <i class="fas fa-chart-line"></i>Analytics Reports
+                </a>
+            </li>
+            <li>
+                <a href="attendance-reports.php">
+                    <i class="fas fa-calendar-check"></i>Attendance Reports
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-cog me-2"></i>System
+            </li>
+            <li>
+                <a href="system-logs.php">
+                    <i class="fas fa-file-code"></i>System Logs
+                </a>
+            </li>
+            <li>
+                <a href="hod-leave-management.php">
+                    <i class="fas fa-clipboard-list"></i>Leave Management
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-sign-out-alt me-2"></i>Account
+            </li>
+            <li>
+                <a href="logout.php" class="text-danger">
+                    <i class="fas fa-sign-out-alt"></i>Logout
+                </a>
+            </li>
         </ul>
     </div>
 
@@ -915,10 +1142,10 @@ $stats = getUserStats();
         <div class="card mb-4">
             <div class="card-body">
                 <div class="row g-3">
-                    <div class="col-md-4">
-                        <input type="text" class="form-control" id="searchInput" placeholder="Search users...">
-                    </div>
                     <div class="col-md-3">
+                        <input type="text" class="form-control" id="searchInput" placeholder="Search students...">
+                    </div>
+                    <div class="col-md-2">
                         <select class="form-select" id="roleFilter">
                             <option value="">All Roles</option>
                             <option value="admin">Admin</option>
@@ -927,7 +1154,7 @@ $stats = getUserStats();
                             <option value="student">Student</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <select class="form-select" id="statusFilter">
                             <option value="">All Status</option>
                             <option value="active">Active</option>
@@ -936,8 +1163,53 @@ $stats = getUserStats();
                         </select>
                     </div>
                     <div class="col-md-2">
+                        <select class="form-select" id="departmentFilter">
+                            <option value="">All Departments</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="yearLevelFilter">
+                            <option value="">All Years</option>
+                            <option value="1">Year 1</option>
+                            <option value="2">Year 2</option>
+                            <option value="3">Year 3</option>
+                            <option value="4">Year 4</option>
+                            <option value="5">Year 5</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
                         <button class="btn btn-outline-secondary w-100" id="clearFilters">
-                            <i class="fas fa-times me-1"></i>Clear
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="row g-3 mt-2">
+                    <div class="col-md-2">
+                        <select class="form-select" id="genderFilter">
+                            <option value="">All Genders</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="ageFilter">
+                            <option value="">All Ages</option>
+                            <option value="16-18">16-18 years</option>
+                            <option value="19-21">19-21 years</option>
+                            <option value="22-25">22-25 years</option>
+                            <option value="26+">26+ years</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="text" class="form-control" id="regNoFilter" placeholder="Reg. Number">
+                    </div>
+                    <div class="col-md-3">
+                        <input type="text" class="form-control" id="emailFilter" placeholder="Email Address">
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-primary w-100" id="applyAdvancedFilters">
+                            <i class="fas fa-search me-1"></i>Apply Filters
                         </button>
                     </div>
                 </div>
@@ -953,10 +1225,11 @@ $stats = getUserStats();
                             <tr>
                                 <th>User</th>
                                 <th>Role</th>
+                                <th>Department</th>
+                                <th>Academic Info</th>
                                 <th>Contact</th>
                                 <th>Status</th>
                                 <th>Created</th>
-                                <th>Last Login</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -1202,6 +1475,12 @@ $stats = getUserStats();
             const search = $("#searchInput").val();
             const role = $("#roleFilter").val();
             const status = $("#statusFilter").val();
+            const department = $("#departmentFilter").val();
+            const yearLevel = $("#yearLevelFilter").val();
+            const gender = $("#genderFilter").val();
+            const age = $("#ageFilter").val();
+            const regNo = $("#regNoFilter").val();
+            const email = $("#emailFilter").val();
 
             $.ajax({
                 url: 'manage-users.php',
@@ -1212,6 +1491,12 @@ $stats = getUserStats();
                     search: search,
                     role: role,
                     status: status,
+                    department: department,
+                    year_level: yearLevel,
+                    gender: gender,
+                    age: age,
+                    reg_no: regNo,
+                    email: email,
                     t: Date.now()
                 },
                 success: function(response) {
@@ -1234,6 +1519,19 @@ $stats = getUserStats();
             });
         }
 
+        function loadDepartmentsForFilter() {
+            $.getJSON('admin-reports.php?ajax=1&action=get_departments', function(data) {
+                const deptSelect = $('#departmentFilter');
+                deptSelect.empty().append('<option value="">All Departments</option>');
+
+                data.forEach(function(dept) {
+                    deptSelect.append(`<option value="${dept.id}">${dept.name}</option>`);
+                });
+            }).fail(function() {
+                console.error('Failed to load departments for filter');
+            });
+        }
+
         function updateStats(stats) {
             $("#totalUsers").text(stats.total);
             $("#activeUsers").text(stats.active);
@@ -1248,7 +1546,7 @@ $stats = getUserStats();
             if (filteredUsers.length === 0) {
                 tbody.html(`
                     <tr>
-                        <td colspan="7" class="text-center py-4">
+                        <td colspan="8" class="text-center py-4">
                             <i class="fas fa-users fa-2x text-muted mb-2"></i>
                             <p class="text-muted mb-0">No users found</p>
                         </td>
@@ -1276,6 +1574,18 @@ $stats = getUserStats();
                     </td>
                     <td>
                         <div>
+                            <small class="fw-semibold">${escapeHtml(user.department_name || 'Not Assigned')}</small>
+                        </div>
+                    </td>
+                    <td>
+                        <div>
+                            ${user.year_level ? `<div><small class="text-muted">Year ${user.year_level}</small></div>` : ''}
+                            ${user.gender ? `<div><small class="text-muted">${user.gender}</small></div>` : ''}
+                            ${user.dob ? `<div><small class="text-muted">${getAge(user.dob)} years old</small></div>` : ''}
+                        </div>
+                    </td>
+                    <td>
+                        <div>
                             <i class="fas fa-envelope text-muted me-1"></i>${escapeHtml(user.email)}
                             ${user.phone ? `<br><i class="fas fa-phone text-muted me-1"></i>${escapeHtml(user.phone)}` : ''}
                         </div>
@@ -1288,9 +1598,6 @@ $stats = getUserStats();
                     </td>
                     <td>
                         <small>${formatDate(user.created_at)}</small>
-                    </td>
-                    <td>
-                        <small>${user.last_login ? formatDate(user.last_login) : 'Never'}</small>
                     </td>
                     <td>
                         <div class="btn-group" role="group">
@@ -1366,21 +1673,77 @@ $stats = getUserStats();
             }
         }
 
+        function getAge(dateString) {
+            if (!dateString) return 'N/A';
+            try {
+                const birthDate = new Date(dateString);
+                const today = new Date();
+                let age = today.getFullYear() - birthDate.getFullYear();
+                const monthDiff = today.getMonth() - birthDate.getMonth();
+
+                if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+                    age--;
+                }
+
+                return age;
+            } catch (e) {
+                return 'N/A';
+            }
+        }
+
         function applyFilters() {
             const search = $("#searchInput").val().toLowerCase();
             const role = $("#roleFilter").val();
             const status = $("#statusFilter").val();
+            const department = $("#departmentFilter").val();
+            const yearLevel = $("#yearLevelFilter").val();
+            const gender = $("#genderFilter").val();
+            const age = $("#ageFilter").val();
+            const regNo = $("#regNoFilter").val().toLowerCase();
+            const email = $("#emailFilter").val().toLowerCase();
 
             filteredUsers = currentUsers.filter(user => {
+                const fullName = `${user.first_name || ''} ${user.last_name || ''}`.toLowerCase();
                 const matchesSearch = !search ||
                     (user.username && user.username.toLowerCase().includes(search)) ||
                     (user.email && user.email.toLowerCase().includes(search)) ||
-                    `${user.first_name || ''} ${user.last_name || ''}`.toLowerCase().includes(search);
+                    fullName.includes(search);
 
                 const matchesRole = !role || user.role === role;
                 const matchesStatus = !status || user.status === status;
+                const matchesDepartment = !department || user.department_name === department;
+                const matchesYearLevel = !yearLevel || (user.year_level && user.year_level.toString() === yearLevel);
+                const matchesGender = !gender || (user.gender && user.gender === gender);
+                const matchesRegNo = !regNo || (user.reference_id && user.reference_id.toLowerCase().includes(regNo));
+                const matchesEmail = !email || (user.email && user.email.toLowerCase().includes(email));
 
-                return matchesSearch && matchesRole && matchesStatus;
+                // Age filtering logic
+                let matchesAge = true;
+                if (age && user.dob) {
+                    const birthDate = new Date(user.dob);
+                    const today = new Date();
+                    const userAge = today.getFullYear() - birthDate.getFullYear();
+
+                    switch(age) {
+                        case '16-18':
+                            matchesAge = userAge >= 16 && userAge <= 18;
+                            break;
+                        case '19-21':
+                            matchesAge = userAge >= 19 && userAge <= 21;
+                            break;
+                        case '22-25':
+                            matchesAge = userAge >= 22 && userAge <= 25;
+                            break;
+                        case '26+':
+                            matchesAge = userAge >= 26;
+                            break;
+                        default:
+                            matchesAge = true;
+                    }
+                }
+
+                return matchesSearch && matchesRole && matchesStatus && matchesDepartment &&
+                       matchesYearLevel && matchesGender && matchesAge && matchesRegNo && matchesEmail;
             });
 
             renderUsersTable();
@@ -1454,11 +1817,12 @@ $stats = getUserStats();
 
         // Event handlers
         $(document).ready(function() {
-            // Load users immediately
+            // Load users and departments immediately
             loadUsers();
+            loadDepartmentsForFilter();
 
             // Search and filter events
-            $("#searchInput, #roleFilter, #statusFilter").on('input change', function() {
+            $("#searchInput, #roleFilter, #statusFilter, #departmentFilter, #yearLevelFilter, #genderFilter, #ageFilter, #regNoFilter, #emailFilter").on('input change', function() {
                 applyFilters();
             });
 
@@ -1466,6 +1830,16 @@ $stats = getUserStats();
                 $("#searchInput").val('');
                 $("#roleFilter").val('');
                 $("#statusFilter").val('');
+                $("#departmentFilter").val('');
+                $("#yearLevelFilter").val('');
+                $("#genderFilter").val('');
+                $("#ageFilter").val('');
+                $("#regNoFilter").val('');
+                $("#emailFilter").val('');
+                applyFilters();
+            });
+
+            $("#applyAdvancedFilters").click(function() {
                 applyFilters();
             });
 

@@ -198,11 +198,48 @@ try {
 
     echo "</div>";
 
+    // Create leave_requests table
+    echo "<div class='card'>";
+    echo "<h2>📝 Setting up Leave Requests Table...</h2>";
+    try {
+        $pdo->query("DESCRIBE leave_requests");
+        echo "<p class='success'>✅ Leave requests table already exists</p>";
+    } catch (Exception $e) {
+        echo "<p class='info'>Creating leave_requests table...</p>";
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS leave_requests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                student_id INT NOT NULL,
+                reason TEXT NOT NULL,
+                from_date DATE NOT NULL,
+                to_date DATE NOT NULL,
+                status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+                supporting_file VARCHAR(255),
+                request_to ENUM('hod', 'lecturer') NOT NULL,
+                course_id INT,
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP NULL,
+                reviewed_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_student_id (student_id),
+                INDEX idx_status (status),
+                INDEX idx_request_to (request_to),
+                INDEX idx_requested_at (requested_at),
+                FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE SET NULL,
+                FOREIGN KEY (reviewed_by) REFERENCES lecturers(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+        echo "<p class='success'>✅ Leave requests table created successfully</p>";
+    }
+    echo "</div>";
+
     // Show final statistics
     echo "<div class='card'>";
     echo "<h2>📈 Final Database Statistics</h2>";
 
-    $tables = ['departments', 'lecturers', 'users', 'options'];
+    $tables = ['departments', 'lecturers', 'users', 'options', 'leave_requests'];
     foreach ($tables as $table) {
         try {
             $stmt = $pdo->query("SELECT COUNT(*) as count FROM $table");

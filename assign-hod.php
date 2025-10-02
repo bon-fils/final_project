@@ -1,9 +1,9 @@
 <?php
 /**
- * HOD Assignment System - Frontend Interface
- * Streamlined, secure interface for managing Head of Department assignments
+ * HOD Assignment System - Complete Fixed Version
+ * Enhanced with better security, performance, and user experience
  *
- * @version 2.1.0
+ * @version 3.1.0
  * @author RP System Development Team
  */
 
@@ -11,6 +11,7 @@
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
+header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
 
 // Essential dependencies
 require_once "config.php";
@@ -36,6 +37,166 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
         exit;
     }
 }
+
+// --- Unified Data API for AJAX ---
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
+    // Security checks for AJAX requests
+    require_once "config.php";
+    require_once "session_check.php";
+
+    // Ensure user is logged in and is admin
+    if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['status' => 'error', 'message' => 'Unauthorized access']);
+        exit;
+    }
+
+    header('Content-Type: application/json');
+    $action = $_GET['action'] ?? '';
+    
+    try {
+        switch ($action) {
+            case 'get_lecturers':
+                // Get all lecturers (including HODs)
+                $stmt = $pdo->prepare("
+                    SELECT l.id, l.first_name, l.last_name, l.email, l.role, l.phone, l.department_id,
+                        CONCAT(l.first_name, ' ', l.last_name) as full_name,
+                        u.username, u.status, u.created_at, u.updated_at
+                    FROM lecturers l
+                    LEFT JOIN users u ON u.email = l.email AND u.role = l.role
+                    WHERE l.role IN ('lecturer', 'hod')
+                    ORDER BY l.first_name, l.last_name
+                ");
+                $stmt->execute();
+                $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['status' => 'success', 'data' => $lecturers]);
+                break;
+                
+            case 'get_hods':
+                // Get only HODs
+                $stmt = $pdo->prepare("
+                    SELECT l.id, l.first_name, l.last_name, l.email, l.role, l.phone, l.department_id,
+                        CONCAT(l.first_name, ' ', l.last_name) as full_name,
+                        u.username, u.status, u.created_at, u.updated_at
+                    FROM lecturers l
+                    LEFT JOIN users u ON u.email = l.email AND u.role = l.role
+                    WHERE l.role = 'hod'
+                    ORDER BY l.first_name, l.last_name
+                ");
+                $stmt->execute();
+                $hods = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['status' => 'success', 'data' => $hods]);
+                break;
+                
+            case 'get_departments':
+                // Get departments with HOD information
+                $stmt = $pdo->prepare("
+                    SELECT d.id, d.name, d.hod_id,
+                        l.first_name AS hod_first_name, 
+                        l.last_name AS hod_last_name, 
+                        CONCAT(l.first_name, ' ', l.last_name) as hod_name,
+                        l.email AS hod_email
+                    FROM departments d
+                    LEFT JOIN lecturers l ON d.hod_id = l.id
+                    ORDER BY d.name
+                ");
+                $stmt->execute();
+                $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['status' => 'success', 'data' => $departments]);
+                break;
+                
+            case 'get_assignment_stats':
+                // Get statistics
+                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM departments");
+                $stmt->execute();
+                $totalDepts = $stmt->fetchColumn();
+                
+                $stmt = $pdo->prepare("SELECT COUNT(*) as assigned FROM departments WHERE hod_id IS NOT NULL");
+                $stmt->execute();
+                $assignedDepts = $stmt->fetchColumn();
+                
+                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM lecturers WHERE role IN ('lecturer', 'hod')");
+                $stmt->execute();
+                $totalLecturers = $stmt->fetchColumn();
+                
+                echo json_encode([
+                    'status' => 'success', 
+                    'data' => [
+                        'total_departments' => $totalDepts,
+                        'assigned_departments' => $assignedDepts,
+                        'unassigned_departments' => $totalDepts - $assignedDepts,
+                        'total_lecturers' => $totalLecturers
+                    ]
+                ]);
+                break;
+                
+            case 'assign_hod':
+                // Handle HOD assignment
+                $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
+                $hod_id = filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT);
+                
+                if (!$department_id) {
+                    echo json_encode(['status' => 'error', 'message' => 'Invalid department ID']);
+                    exit;
+                }
+                
+                // Verify department exists
+                $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id = ?");
+                $stmt->execute([$department_id]);
+                $department = $stmt->fetch();
+                
+                if (!$department) {
+                    echo json_encode(['status' => 'error', 'message' => 'Department not found']);
+                    exit;
+                }
+                
+                if ($hod_id) {
+                    // Verify lecturer exists and can be HOD
+                    $stmt = $pdo->prepare("SELECT id, first_name, last_name, email FROM lecturers WHERE id = ?");
+                    $stmt->execute([$hod_id]);
+                    $lecturer = $stmt->fetch();
+                    
+                    if (!$lecturer) {
+                        echo json_encode(['status' => 'error', 'message' => 'Lecturer not found']);
+                        exit;
+                    }
+                    
+                    // Update lecturer role to HOD if not already
+                    $stmt = $pdo->prepare("UPDATE lecturers SET role = 'hod' WHERE id = ?");
+                    $stmt->execute([$hod_id]);
+                    
+                    // Create or update user account for HOD
+                    $stmt = $pdo->prepare("
+                        INSERT INTO users (username, email, password, role, status, created_at) 
+                        VALUES (?, ?, ?, 'hod', 'active', NOW())
+                        ON DUPLICATE KEY UPDATE 
+                        role = 'hod', status = 'active', updated_at = NOW()
+                    ");
+                    $username = strtolower($lecturer['first_name'] . '.' . $lecturer['last_name']);
+                    $default_password = password_hash('password123', PASSWORD_DEFAULT);
+                    $stmt->execute([$username, $lecturer['email'], $default_password]);
+                }
+                
+                // Update department HOD
+                $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
+                $stmt->execute([$hod_id ?: null, $department_id]);
+                
+                $action = $hod_id ? 'assigned' : 'removed';
+                echo json_encode([
+                    'status' => 'success', 
+                    'message' => "HOD {$action} successfully for {$department['name']}"
+                ]);
+                break;
+                
+            default:
+                echo json_encode(['status' => 'error', 'message' => 'Invalid action']);
+        }
+    } catch (Exception $e) {
+        error_log("HOD Assignment API Error: " . $e->getMessage());
+        echo json_encode(['status' => 'error', 'message' => 'Database error occurred: ' . $e->getMessage()]);
+    }
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -45,286 +206,330 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
     <title>Assign HOD | RP Attendance System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
-
     <style>
         :root {
-            --primary-gradient: linear-gradient(135deg, #0066cc 0%, #003366 100%);
-            --success-gradient: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
-            --warning-gradient: linear-gradient(135deg, #ffc107 0%, #e0a800 100%);
-            --danger-gradient: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-            --info-gradient: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
-            --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
-            --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
-            --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
-            --border-radius: 12px;
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --warning-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --info-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --sidebar-width: 280px;
+            --topbar-height: 80px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
         body {
-            background: linear-gradient(to right, #0066cc, #003366);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
             min-height: 100vh;
-            min-height: 100dvh; /* Dynamic viewport height for mobile */
-            font-family: 'Segoe UI', 'Roboto', sans-serif;
-            margin: 0;
-            position: relative;
             overflow-x: hidden;
         }
 
-        body::before {
-            content: '';
+        /* Loading Overlay */
+        .loading-overlay {
             position: fixed;
             top: 0;
             left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="20" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="80" cy="80" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="60" cy="40" r="0.5" fill="rgba(255,255,255,0.1)"/></svg>');
-            pointer-events: none;
-            z-index: -1;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(10px);
         }
 
+        .loading-content {
+            text-align: center;
+            color: white;
+            max-width: 400px;
+            padding: 2rem;
+        }
+
+        .loading-spinner {
+            width: 4rem;
+            height: 4rem;
+            border-width: 0.3em;
+        }
+
+        /* Sidebar */
         .sidebar {
             position: fixed;
             top: 0;
             left: 0;
-            width: 280px;
+            width: var(--sidebar-width);
             height: 100vh;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-right: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 20px 0;
-            overflow-y: auto;
+            background: linear-gradient(180deg, #2c3e50 0%, #3498db 100%);
+            color: white;
             z-index: 1000;
-            box-shadow: var(--shadow-medium);
+            transition: transform 0.3s ease;
+            box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
         }
 
         .sidebar .logo {
+            padding: 2rem 1.5rem 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             text-align: center;
-            margin-bottom: 30px;
-            padding: 0 20px;
         }
 
         .sidebar .logo h5 {
-            color: #333;
             font-weight: 700;
-            margin: 0;
-            font-size: 1.2rem;
+            margin-bottom: 0.25rem;
         }
 
         .sidebar .logo small {
-            color: #6c757d;
+            opacity: 0.7;
             font-size: 0.8rem;
         }
 
         .sidebar-nav {
             list-style: none;
-            padding: 0;
-            margin: 0;
+            padding: 1.5rem 0;
         }
 
         .sidebar-nav li {
-            margin: 5px 0;
+            margin-bottom: 0.5rem;
         }
 
         .sidebar-nav a {
-            display: block;
-            padding: 12px 20px;
-            color: #495057;
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
             text-decoration: none;
-            border-radius: 8px;
-            margin: 0 15px;
-            transition: var(--transition);
-            font-weight: 500;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
         }
 
-        .sidebar-nav a:hover {
-            background: rgba(0, 102, 204, 0.1);
-            color: #0066cc;
-            transform: translateX(5px);
-        }
-
+        .sidebar-nav a:hover,
         .sidebar-nav a.active {
-            background: var(--primary-gradient);
+            background: rgba(255, 255, 255, 0.1);
             color: white;
-            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
+            border-left-color: #3498db;
         }
 
         .sidebar-nav a i {
-            margin-right: 10px;
-            width: 18px;
-            text-align: center;
+            width: 1.5rem;
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
         }
 
+        /* Mobile Menu */
+        .mobile-menu-toggle {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 1001;
+            background: var(--primary-gradient);
+            border: none;
+            color: white;
+            width: 3rem;
+            height: 3rem;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Main Content */
         .main-content {
-            margin-left: 280px;
-            padding: 20px 30px;
+            margin-left: var(--sidebar-width);
             min-height: 100vh;
-            min-height: 100dvh;
+            transition: margin-left 0.3s ease;
         }
 
         .topbar {
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(10px);
-            padding: 15px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-            margin-bottom: 20px;
+            background: white;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border-bottom: 1px solid #e9ecef;
         }
 
-        .dashboard-card {
-            border-radius: var(--border-radius);
-            box-shadow: var(--shadow-light);
-            border: none;
-            transition: var(--transition);
-            margin-bottom: 20px;
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(5px);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .dashboard-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
+        .topbar h2 {
+            font-weight: 700;
             background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
-        .dashboard-card:hover {
-            transform: translateY(-5px);
-            box-shadow: var(--shadow-medium);
-        }
-
-        .dashboard-card .card-body {
-            padding: 25px;
-            text-align: center;
-            position: relative;
-            z-index: 2;
-        }
-
-        .btn {
-            border-radius: 8px;
-            font-weight: 600;
-            padding: 10px 20px;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            transition: var(--transition);
-        }
-
-        .btn:hover::before {
-            width: 300px;
-            height: 300px;
-        }
-
-        .btn-primary {
-            background: var(--primary-gradient);
-            border: none;
-            box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
-        }
-
-        .btn-primary:hover {
-            background: var(--primary-gradient);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
-        }
-
+        /* Statistics Cards */
         .stats-card {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
             text-align: center;
-            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: none;
+            height: 100%;
+        }
+
+        .stats-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
         }
 
         .stats-card i {
             font-size: 2.5rem;
-            margin-bottom: 10px;
+            margin-bottom: 1rem;
+            display: block;
         }
 
         .stats-card h3 {
-            font-size: 2.2rem;
+            font-size: 2.5rem;
             font-weight: 700;
-            margin-bottom: 5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .stats-card p {
+            color: #6c757d;
+            font-weight: 500;
+            margin: 0;
+        }
+
+        /* Cards */
+        .card {
+            border: none;
+            border-radius: 1rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .card-header {
+            border-radius: 1rem 1rem 0 0 !important;
+            padding: 1.25rem 1.5rem;
+            font-weight: 600;
+        }
+
+        /* Assignment Cards */
+        .assignments-container {
+            min-height: 300px;
         }
 
         .assignment-card {
-            border-left: 4px solid var(--primary-color);
-            background-color: #ffffff;
-            border: 1px solid rgba(0,0,0,0.125);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }
-
-        .assignment-card.assigned {
-            border-left-color: var(--success-color);
-            background-color: #ffffff;
-        }
-
-        .assignment-card.unassigned {
-            border-left-color: var(--warning-color);
-            background-color: #ffffff;
-        }
-
-        .assignment-card.invalid {
-            border-left-color: var(--danger-color);
-            background-color: #ffffff;
-            border: 1px solid rgba(220, 53, 69, 0.2);
-        }
-
-        .assignment-card.invalid:hover {
-            background-color: #ffffff;
-            box-shadow: 0 4px 8px rgba(220, 53, 69, 0.1);
+            border: none;
+            border-radius: 1rem;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            height: 100%;
         }
 
         .assignment-card:hover {
-            background-color: #ffffff;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            transform: translateY(-1px);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
         }
 
-        .invalid-assignment-warning {
-            background: rgba(248, 215, 218, 0.9);
-            backdrop-filter: blur(5px);
-            border: 1px solid #dc3545;
-            color: #721c24;
+        .assignment-card.assigned {
+            border-left: 4px solid #28a745;
+        }
+
+        .assignment-card.unassigned {
+            border-left: 4px solid #ffc107;
+        }
+
+        .assignment-card.invalid {
+            border-left: 4px solid #dc3545;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+
+        .assignment-card.selected {
+            border: 2px solid #007bff;
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+        }
+
+        /* Buttons */
+        .btn {
+            border-radius: 0.75rem;
+            font-weight: 500;
+            padding: 0.75rem 1.5rem;
+            transition: all 0.3s ease;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+        }
+
+        .btn-success {
+            background: var(--success-gradient);
+        }
+
+        .btn-warning {
+            background: var(--warning-gradient);
+        }
+
+        .btn-info {
+            background: var(--info-gradient);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Alerts */
+        .alert {
+            border: none;
+            border-radius: 1rem;
+            padding: 1rem 1.5rem;
         }
 
         .data-integrity-alert {
-            background: rgba(255, 243, 205, 0.9);
-            backdrop-filter: blur(5px);
-            border: 1px solid #ffc107;
-            color: #856404;
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border-left: 4px solid #ffc107;
         }
 
-        .mobile-menu-toggle {
-            display: none;
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 1001;
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px;
-            box-shadow: var(--shadow-medium);
+        /* Progress Bars */
+        .progress {
+            border-radius: 1rem;
+            height: 6px;
+            background: #e9ecef;
         }
 
+        .progress-bar {
+            border-radius: 1rem;
+            transition: width 0.6s ease;
+        }
+
+        /* Form Controls */
+        .form-control,
+        .form-select {
+            border-radius: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus,
+        .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+
+        /* Badges */
+        .badge {
+            border-radius: 0.5rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+        }
+
+        /* Responsive Design */
         @media (max-width: 768px) {
             .sidebar {
                 transform: translateX(-100%);
-                transition: transform 0.3s ease;
             }
 
             .sidebar.show {
@@ -333,325 +538,117 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
 
             .main-content {
                 margin-left: 0;
-                padding: 15px;
             }
 
             .mobile-menu-toggle {
-                display: block !important;
-            }
-        }
-
-        /* Desktop Styles - Sidebar always visible */
-        @media (min-width: 769px) {
-            .sidebar {
-                width: 280px;
-                height: 100vh;
-                height: 100dvh;
-                position: fixed;
-                z-index: 1000;
-                left: 0;
-                top: 0;
-                transform: translateX(0);
-            }
-            .main-content {
-                margin-left: 280px;
-                padding: 20px;
-                width: calc(100vw - 280px);
-                max-width: calc(100vw - 280px);
-                min-height: 100vh;
-                min-height: 100dvh;
-            }
-            .sidebar-toggle {
-                display: none !important;
-            }
-        }
-
-        .loading-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(5px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 9999;
-        }
-
-        .loading-overlay .spinner-border {
-            color: #0066cc;
-            width: 3rem;
-            height: 3rem;
-        }
-
-        .search-highlight {
-            background-color: rgba(255, 243, 205, 0.8);
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
-
-        .assignment-preview {
-            background: rgba(227, 242, 253, 0.9);
-            backdrop-filter: blur(5px);
-            border: 1px solid #2196f3;
-        }
-
-        .department-card {
-            transition: all 0.3s ease;
-            cursor: pointer;
-            background-color: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(5px);
-            border: 1px solid rgba(0,0,0,0.125);
-        }
-
-        .department-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-            background-color: rgba(255, 255, 255, 0.95);
-        }
-
-        .department-card.selected {
-            border-color: var(--primary-color);
-            background-color: rgba(255, 255, 255, 0.95);
-            box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
-        }
-
-        /* Improve text contrast */
-        .department-card .card-title {
-            color: #2c3e50;
-            font-weight: 600;
-        }
-
-        .department-card .text-muted {
-            color: #6c757d !important;
-        }
-
-        .department-card .fw-semibold {
-            color: #495057;
-            font-weight: 600;
-        }
-
-        .lecturer-option {
-            border-bottom: 1px solid rgba(238, 238, 238, 0.8);
-            padding: 8px 0;
-        }
-
-        .lecturer-option:last-child {
-            border-bottom: none;
-        }
-
-        .validation-feedback {
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-
-        .stats-number {
-            font-size: 2.5rem;
-            font-weight: 700;
-            line-height: 1;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .stats-label {
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 500;
-        }
-
-        .form-floating > .form-control {
-            height: calc(3.5rem + 2px);
-            background-color: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(5px);
-        }
-
-        .form-floating > label {
-            padding: 1rem 0.75rem;
-            font-weight: 500;
-        }
-
-        @media (max-width: 576px) {
-            .stats-card h3 {
-                font-size: 1.8rem;
+                display: flex;
             }
 
-            .card-body {
+            .topbar {
                 padding: 1rem;
             }
 
-            .btn-group {
-                flex-direction: column;
-                gap: 0.5rem;
-            }
-
-            .main-content {
-                padding: 10px;
+            .topbar h2 {
+                font-size: 1.5rem;
             }
 
             .stats-card {
-                padding: 15px;
+                padding: 1rem;
             }
 
-            .assignment-card {
-                margin-bottom: 1rem;
-            }
-
-            .stats-card .card-body {
-                padding: 20px 15px;
+            .stats-card h3 {
+                font-size: 2rem;
             }
         }
 
-        /* Mobile navigation toggle button styles */
-        .mobile-menu-toggle {
-            transition: all 0.3s ease;
-            z-index: 1050;
-            border-radius: 8px;
-            width: 50px;
-            height: 50px;
-            box-shadow: var(--shadow-medium);
+        /* Skip Link for Accessibility */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 6px;
+            background: #000;
+            color: white;
+            padding: 8px;
+            z-index: 10000;
+            text-decoration: none;
+            border-radius: 0 0 4px 4px;
         }
 
-        .mobile-menu-toggle:hover {
-            transform: scale(1.1);
-            box-shadow: var(--shadow-heavy);
+        .skip-link:focus {
+            top: 0;
         }
 
-        /* Smooth sidebar transitions */
-        .sidebar {
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
         }
 
-        .main-content {
-            transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
         }
 
-        /* Fullscreen specific styles */
-        .sidebar:fullscreen,
-        .sidebar:-webkit-full-screen,
-        .sidebar:-moz-full-screen {
-            width: 280px !important;
-            height: 100vh !important;
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 4px;
         }
 
-        .main-content:fullscreen,
-        .main-content:-webkit-full-screen,
-        .main-content:-moz-full-screen {
-            margin-left: 280px !important;
-            width: calc(100vw - 280px) !important;
-            height: 100vh !important;
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
         }
 
-        /* Ensure proper display in all modes */
-        html, body {
-            overflow-x: hidden;
+        /* Animation Classes */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
         }
 
-        /* Fix for any potential layout shifts */
-        * {
-            box-sizing: border-box;
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
-        /* Ensure proper display in all modes */
-        html, body {
-            overflow-x: hidden;
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
         }
 
-        /* Fix for any potential layout shifts */
-        * {
-            box-sizing: border-box;
+        @keyframes slideIn {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(0); }
         }
 
-        /* Ensure minimum touch target size on mobile */
-        @media (max-width: 768px) {
-            .btn, .form-control, .form-select, .card {
-                min-height: 44px;
+        /* Print Styles */
+        @media print {
+            .sidebar, .topbar, .btn, .mobile-menu-toggle {
+                display: none !important;
+            }
+
+            .main-content {
+                margin-left: 0 !important;
+            }
+
+            .card {
+                box-shadow: none !important;
+                border: 1px solid #dee2e6 !important;
             }
         }
-
-        /* Ensure proper spacing on all devices */
-        .container-fluid {
-            padding-left: 15px;
-            padding-right: 15px;
-        }
-
-        @media (min-width: 769px) {
-            .container-fluid {
-                padding-left: 20px;
-                padding-right: 20px;
-            }
-        }
-
-        /* Ensure minimum touch target size on mobile */
-        @media (max-width: 768px) {
-            .btn, .form-control, .form-select, .card {
-                min-height: 44px;
-            }
-        }
-
-        /* Improve data visibility */
-        .assignments-container {
-            background-color: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(5px);
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-        }
-
-        /* Better contrast for badges and status indicators */
-        .badge {
-            font-weight: 600;
-            padding: 6px 10px;
-            border-radius: 6px;
-        }
-
-        /* Improve button visibility */
-        .selectDepartment {
-            background-color: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(5px);
-            border: 2px solid #dee2e6;
-            color: #495057;
-            font-weight: 500;
-        }
-
-        .selectDepartment:hover {
-            background-color: rgba(248, 249, 250, 0.9);
-            border-color: var(--primary-color);
-            color: var(--primary-color);
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .dashboard-card {
-            animation: fadeInUp 0.6s ease-out;
-        }
-
-        .stats-card:nth-child(1) { animation-delay: 0.1s; }
-        .stats-card:nth-child(2) { animation-delay: 0.2s; }
-        .stats-card:nth-child(3) { animation-delay: 0.3s; }
-        .stats-card:nth-child(4) { animation-delay: 0.4s; }
     </style>
 </head>
 
 <body>
+    <!-- Skip Navigation for Accessibility -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="text-center text-white">
-            <div class="spinner-border mb-3" role="status" style="width: 3rem; height: 3rem;">
+        <div class="loading-content">
+            <div class="spinner-border loading-spinner mb-3" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <h5 class="mb-2">Loading HOD Assignment</h5>
+            <h5 class="mb-2">Loading HOD Assignment System</h5>
             <p class="mb-0">Please wait while we fetch the latest data...</p>
+            <div class="progress mt-3" style="height: 4px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+            </div>
         </div>
     </div>
 
@@ -702,20 +699,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
     </div>
 
     <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()">
+    <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()" aria-label="Toggle navigation menu">
         <i class="fas fa-bars"></i>
     </button>
 
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" id="main-content">
         <div class="topbar">
             <div class="d-flex align-items-center justify-content-between">
                 <div class="d-flex align-items-center">
-                    <h2 class="mb-0" style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
+                    <h2 class="mb-0">
                         <i class="fas fa-user-tie me-3"></i>Assign Head of Department
                     </h2>
                 </div>
-                <div class="d-flex gap-2 align-items-center">
+                <div class="d-flex gap-2 align-items-center flex-wrap">
                     <div class="badge bg-primary fs-6 px-3 py-2">
                         <i class="fas fa-clock me-1"></i>Live Updates
                     </div>
@@ -725,8 +722,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                     <button class="btn btn-outline-warning btn-sm" onclick="fixInvalidAssignments()" title="Fix invalid assignments" id="fixInvalidBtn" style="display: none;">
                         <i class="fas fa-tools me-1"></i>Fix Invalid
                     </button>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="testAPIs()" title="Test API endpoints">
-                        <i class="fas fa-bug me-1"></i>Debug
+                    <button class="btn btn-outline-secondary btn-sm" onclick="exportAssignments()" title="Export assignments to CSV">
+                        <i class="fas fa-download me-1"></i>Export
                     </button>
                     <button class="btn btn-outline-info btn-sm" onclick="showHelp()" title="Show help">
                         <i class="fas fa-question-circle"></i>
@@ -739,150 +736,375 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
         </div>
 
         <!-- Alert Messages -->
-        <div id="alertContainer" class="mb-4"></div>
+        <div id="alertContainer" class="container-fluid mt-3"></div>
 
         <!-- Statistics Cards -->
-        <div class="row g-4 mb-5">
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stats-card">
-                    <i class="fas fa-building text-primary"></i>
-                    <h3 id="totalDepartments">0</h3>
-                    <p>Total Departments</p>
+        <div class="container-fluid mt-4">
+            <div class="row g-4 mb-5">
+                <div class="col-xl-3 col-lg-6 col-md-6">
+                    <div class="stats-card fade-in">
+                        <i class="fas fa-building text-primary"></i>
+                        <h3 id="totalDepartments" aria-live="polite">0</h3>
+                        <p>Total Departments</p>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-lg-6 col-md-6">
+                    <div class="stats-card fade-in">
+                        <i class="fas fa-user-check text-success"></i>
+                        <h3 id="assignedDepartments" aria-live="polite">0</h3>
+                        <p>Assigned HODs</p>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-lg-6 col-md-6">
+                    <div class="stats-card fade-in">
+                        <i class="fas fa-chalkboard-teacher text-info"></i>
+                        <h3 id="totalLecturers" aria-live="polite">0</h3>
+                        <p>Available Lecturers</p>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-lg-6 col-md-6">
+                    <div class="stats-card fade-in">
+                        <i class="fas fa-exclamation-triangle text-warning"></i>
+                        <h3 id="unassignedDepartments" aria-live="polite">0</h3>
+                        <p>Unassigned Departments</p>
+                    </div>
                 </div>
             </div>
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stats-card">
-                    <i class="fas fa-user-check text-success"></i>
-                    <h3 id="assignedDepartments">0</h3>
-                    <p>Assigned HODs</p>
-                </div>
-            </div>
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stats-card">
-                    <i class="fas fa-chalkboard-teacher text-info"></i>
-                    <h3 id="totalLecturers">0</h3>
-                    <p>Available Lecturers</p>
-                </div>
-            </div>
-            <div class="col-xl-3 col-lg-6 col-md-6">
-                <div class="stats-card">
-                    <i class="fas fa-exclamation-triangle text-warning"></i>
-                    <h3 id="unassignedDepartments">0</h3>
-                    <p>Unassigned Departments</p>
-                </div>
-            </div>
-        </div>
 
-        <!-- Assignment Form -->
-        <div class="card border-0 shadow mb-4">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0 fw-bold">
-                    <i class="fas fa-plus-circle me-2"></i>
-                    HOD Assignment Form
-                </h5>
-            </div>
-            <div class="card-body">
-                <form id="assignHodForm">
-                    <input type="hidden" id="departmentId" name="department_id">
-
-                    <!-- Search and Filter Row -->
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label for="departmentSearch" class="form-label">Search Departments</label>
-                            <div class="input-group">
-                                <span class="input-group-text"><i class="fas fa-search"></i></span>
-                                <input type="text" class="form-control" id="departmentSearch" placeholder="Type to search departments...">
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="lecturerSearch" class="form-label">Search Lecturers</label>
-                            <div class="input-group">
-                                <span class="input-group-text"><i class="fas fa-search"></i></span>
-                                <input type="text" class="form-control" id="lecturerSearch" placeholder="Type to search lecturers...">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="departmentSelect" class="form-label">
-                                Department *
-                                <small class="text-muted">(Click on a card below to select)</small>
-                            </label>
-                            <select class="form-select" id="departmentSelect" name="department_id" required>
-                                <option value="">-- Select Department --</option>
-                            </select>
-                            <div id="departmentSelectFeedback" class="form-text"></div>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="lecturerSelect" class="form-label">
-                                Head of Department
-                                <small class="text-muted">(Optional - leave empty to remove HOD)</small>
-                            </label>
-                            <select class="form-select" id="lecturerSelect" name="hod_id">
-                                <option value="">-- Select Lecturer --</option>
-                            </select>
-                            <div id="lecturerSelectFeedback" class="form-text"></div>
-                        </div>
-                    </div>
-
-                    <!-- Current Assignment Info -->
-                    <div class="alert alert-info" id="currentAssignmentInfo" style="display: none;">
-                        <i class="fas fa-info-circle me-2"></i>
-                        <strong>Current Assignment:</strong> <span id="currentHodName"></span>
-                        <button type="button" class="btn btn-sm btn-outline-info float-end" onclick="clearCurrentAssignment()">
-                            <i class="fas fa-times me-1"></i>Clear
-                        </button>
-                    </div>
-
-                    <!-- Assignment Preview -->
-                    <div class="alert alert-warning" id="assignmentPreview" style="display: none;">
-                        <i class="fas fa-eye me-2"></i>
-                        <strong>Assignment Preview:</strong>
-                        <span id="previewText"></span>
-                    </div>
-
-                    <div class="d-flex gap-2">
-                        <button type="submit" class="btn btn-primary" id="assignBtn">
-                            <i class="fas fa-save me-2"></i>Assign HOD
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="resetFormBtn">
-                            <i class="fas fa-undo me-2"></i>Reset
-                        </button>
-                        <button type="button" class="btn btn-info" id="previewBtn" onclick="showAssignmentPreview()">
-                            <i class="fas fa-eye me-2"></i>Preview
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Current Assignments -->
-        <div class="card border-0 shadow">
-            <div class="card-header bg-primary text-white">
-                <div class="d-flex justify-content-between align-items-center">
+            <!-- Assignment Form -->
+            <div class="card border-0 shadow mb-4 fade-in">
+                <div class="card-header bg-primary text-white">
                     <h5 class="mb-0 fw-bold">
-                        <i class="fas fa-list me-2"></i>Current HOD Assignments
+                        <i class="fas fa-plus-circle me-2"></i>
+                        HOD Assignment Form
                     </h5>
-                    <button class="btn btn-outline-light btn-sm" id="refreshAssignments">
-                        <i class="fas fa-sync-alt me-1"></i>Refresh
-                    </button>
+                </div>
+                <div class="card-body">
+                    <form id="assignHodForm" novalidate>
+                        <input type="hidden" id="departmentId" name="department_id">
+                        <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
+
+                        <!-- Search and Filter Row -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label for="departmentSearch" class="form-label fw-semibold">
+                                    <i class="fas fa-search me-1"></i>Search Departments
+                                </label>
+                                <div class="input-group">
+                                    <span class="input-group-text bg-light"><i class="fas fa-search text-muted"></i></span>
+                                    <input type="text" class="form-control" id="departmentSearch" 
+                                           placeholder="Type to search departments..." aria-describedby="departmentSearchHelp">
+                                </div>
+                                <div id="departmentSearchHelp" class="form-text">Start typing to filter departments</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="lecturerSearch" class="form-label fw-semibold">
+                                    <i class="fas fa-search me-1"></i>Search Lecturers
+                                </label>
+                                <div class="input-group">
+                                    <span class="input-group-text bg-light"><i class="fas fa-search text-muted"></i></span>
+                                    <input type="text" class="form-control" id="lecturerSearch" 
+                                           placeholder="Type to search lecturers..." aria-describedby="lecturerSearchHelp">
+                                </div>
+                                <div id="lecturerSearchHelp" class="form-text">Start typing to filter lecturers</div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="departmentSelect" class="form-label fw-semibold">
+                                    <i class="fas fa-building me-1"></i>Department *
+                                </label>
+                                <select class="form-select" id="departmentSelect" name="department_id" required aria-describedby="departmentSelectFeedback">
+                                    <option value="">-- Select Department --</option>
+                                </select>
+                                <div id="departmentSelectFeedback" class="form-text mt-2"></div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="lecturerSelect" class="form-label fw-semibold">
+                                    <i class="fas fa-user-graduate me-1"></i>Head of Department
+                                </label>
+                                <select class="form-select" id="lecturerSelect" name="hod_id" aria-describedby="lecturerSelectFeedback">
+                                    <option value="">-- Select Lecturer --</option>
+                                </select>
+                                <div id="lecturerSelectFeedback" class="form-text mt-2"></div>
+                            </div>
+                        </div>
+
+                        <!-- Current Assignment Info -->
+                        <div class="alert alert-info fade-in" id="currentAssignmentInfo" style="display: none;" role="status">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    <strong>Current Assignment:</strong> <span id="currentHodName"></span>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-info" onclick="clearCurrentAssignment()" aria-label="Clear current assignment">
+                                    <i class="fas fa-times me-1"></i>Clear
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Assignment Preview -->
+                        <div class="alert alert-warning fade-in" id="assignmentPreview" style="display: none;" role="status">
+                            <i class="fas fa-eye me-2"></i>
+                            <strong>Assignment Preview:</strong>
+                            <div id="previewText" class="mt-2"></div>
+                        </div>
+
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="submit" class="btn btn-primary" id="assignBtn">
+                                <i class="fas fa-save me-2"></i>Assign HOD
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="resetFormBtn">
+                                <i class="fas fa-undo me-2"></i>Reset Form
+                            </button>
+                            <button type="button" class="btn btn-info" id="previewBtn" onclick="showAssignmentPreview()">
+                                <i class="fas fa-eye me-2"></i>Preview Assignment
+                            </button>
+                            <button type="button" class="btn btn-outline-success" onclick="enableBulkMode()" id="bulkModeBtn">
+                                <i class="fas fa-layer-group me-2"></i>Bulk Mode
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
-            <div class="card-body bg-white">
-                <div id="assignmentsContainer" class="row g-3 assignments-container">
-                    <!-- Assignments will be loaded here -->
+
+            <!-- Current Assignments -->
+            <div class="card border-0 shadow fade-in">
+                <div class="card-header bg-primary text-white">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap">
+                        <h5 class="mb-0 fw-bold">
+                            <i class="fas fa-list me-2"></i>Current HOD Assignments
+                        </h5>
+                        <div class="d-flex gap-2 mt-2 mt-md-0">
+                            <div class="input-group input-group-sm" style="width: 200px;">
+                                <span class="input-group-text bg-light"><i class="fas fa-filter"></i></span>
+                                <select class="form-select" id="statusFilter" onchange="filterAssignments()">
+                                    <option value="all">All Status</option>
+                                    <option value="assigned">Assigned</option>
+                                    <option value="unassigned">Unassigned</option>
+                                    <option value="invalid">Invalid</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-outline-light btn-sm" id="refreshAssignments">
+                                <i class="fas fa-sync-alt me-1"></i>Refresh
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body bg-white">
+                    <div id="assignmentsContainer" class="row g-3 assignments-container">
+                        <!-- Assignments will be loaded here -->
+                        <div class="col-12 text-center py-5">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="visually-hidden">Loading assignments...</span>
+                            </div>
+                            <p class="text-muted">Loading department assignments...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Global variables
-        let allDepartments = [];
-        let allLecturers = [];
+        // Make CSRF token available globally
+        window.csrfToken = "<?php echo $csrf_token; ?>";
 
-        // Mobile sidebar toggle function
+        // Global state management
+        const AppState = {
+            departments: [],
+            lecturers: [],
+            selectedDepartments: new Set(),
+            filters: {
+                search: '',
+                status: 'all'
+            },
+            isBulkMode: false,
+            
+            // State setters
+            setDepartments: function(depts) {
+                this.departments = depts;
+                this.notify('departmentsChanged');
+            },
+            
+            setLecturers: function(lects) {
+                this.lecturers = lects;
+                this.notify('lecturersChanged');
+            },
+            
+            // Observer pattern for state changes
+            observers: {},
+            subscribe: function(event, callback) {
+                if (!this.observers[event]) this.observers[event] = [];
+                this.observers[event].push(callback);
+            },
+            
+            notify: function(event, data) {
+                if (this.observers[event]) {
+                    this.observers[event].forEach(callback => callback(data));
+                }
+            }
+        };
+
+        // Utility functions
+        const Utils = {
+            debounce: function(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            },
+
+            animateValue: function(id, newValue, duration = 600) {
+                const el = document.getElementById(id);
+                if (!el) return;
+
+                const current = parseInt(el.innerText) || 0;
+                const startTime = Date.now();
+
+                function update() {
+                    const elapsed = Date.now() - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    const value = Math.floor(current + (newValue - current) * easeOut);
+
+                    el.innerText = value;
+
+                    if (progress < 1) {
+                        requestAnimationFrame(update);
+                    } else {
+                        el.innerText = newValue;
+                    }
+                }
+
+                requestAnimationFrame(update);
+            },
+
+            exportToCSV: function(data, filename) {
+                const headers = Object.keys(data[0]);
+                const csvContent = [
+                    headers.join(','),
+                    ...data.map(row => headers.map(header => {
+                        const value = row[header];
+                        return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+                    }).join(','))
+                ].join('\n');
+
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.setAttribute('hidden', '');
+                a.setAttribute('href', url);
+                a.setAttribute('download', filename);
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+        };
+
+        // DOM Ready
+        $(document).ready(function() {
+            initializeApp();
+            setupEventHandlers();
+            setupFullscreenHandling();
+            loadData();
+        });
+
+        function initializeApp() {
+            console.log('Initializing HOD Assignment System...');
+            
+            // Subscribe to state changes
+            AppState.subscribe('departmentsChanged', renderAssignments);
+            AppState.subscribe('lecturersChanged', updateLecturerSelect);
+            
+            // Add keyboard shortcuts help
+            $(document).on('keydown', handleKeyboardShortcuts);
+        }
+
+        function setupEventHandlers() {
+            // Department form submission
+            $('#assignHodForm').on('submit', handleDepartmentSubmit);
+
+            // Department selection change
+            $('#departmentSelect').on('change', function() {
+                updateCurrentAssignmentInfo();
+                validateForm();
+            });
+
+            // Lecturer selection change
+            $('#lecturerSelect').on('change', function() {
+                validateForm();
+                updateAssignmentPreview();
+            });
+
+            // Search functionality with debouncing
+            const debouncedDepartmentSearch = Utils.debounce((term) => {
+                filterDepartments(term);
+            }, 300);
+
+            const debouncedLecturerSearch = Utils.debounce((term) => {
+                filterLecturers(term);
+            }, 300);
+
+            $('#departmentSearch').on('input', function() {
+                debouncedDepartmentSearch($(this).val());
+            });
+
+            $('#lecturerSearch').on('input', function() {
+                debouncedLecturerSearch($(this).val());
+            });
+
+            // Reset form
+            $('#resetFormBtn').on('click', function() {
+                resetForm();
+            });
+
+            // Refresh assignments
+            $('#refreshAssignments').on('click', function() {
+                loadAssignments();
+            });
+
+            // Form validation on change
+            $('#departmentSelect, #lecturerSelect').on('change', validateForm);
+        }
+
+        function handleKeyboardShortcuts(e) {
+            // Ctrl/Cmd + R to refresh
+            if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+                e.preventDefault();
+                loadData();
+            }
+
+            // Ctrl/Cmd + S to submit form
+            if ((e.ctrlKey || e.metaKey) && e.key === 's' && $('#departmentSelect').val()) {
+                e.preventDefault();
+                $('#assignHodForm').submit();
+            }
+
+            // Escape to reset form
+            if (e.key === 'Escape') {
+                if (AppState.isBulkMode) {
+                    disableBulkMode();
+                } else {
+                    $('#resetFormBtn').click();
+                }
+            }
+
+            // Ctrl/Cmd + B to toggle bulk mode
+            if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+                e.preventDefault();
+                toggleBulkMode();
+            }
+        }
+
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('show');
@@ -908,116 +1130,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             }
         });
 
-        // DOM Ready
-        $(document).ready(function() {
-            loadData();
-            setupEventHandlers();
-            setupFullscreenHandling();
-        });
-
-        function setupEventHandlers() {
-            // Department form submission
-            $('#assignHodForm').on('submit', handleDepartmentSubmit);
-
-            // Department selection change
-            $('#departmentSelect').on('change', function() {
-                const selectedOption = $(this).find('option:selected');
-                const hodId = selectedOption.data('hod');
-                const hodName = selectedOption.data('hod-name');
-
-                if (hodId && hodName) {
-                    $('#currentAssignmentInfo').show();
-                    $('#currentHodName').text(hodName);
-                    $('#lecturerSelect').val(hodId);
-                } else {
-                    $('#currentAssignmentInfo').hide();
-                    $('#lecturerSelect').val('');
-                }
-                updateAssignmentPreview();
-            });
-
-            // Lecturer selection change
-            $('#lecturerSelect').on('change', function() {
-                updateAssignmentPreview();
-            });
-
-            // Search functionality with debouncing
-            let departmentSearchTimeout, lecturerSearchTimeout;
-
-            $('#departmentSearch').on('input', function() {
-                clearTimeout(departmentSearchTimeout);
-                departmentSearchTimeout = setTimeout(() => {
-                    filterDepartments($(this).val());
-                }, 300);
-            });
-
-            $('#lecturerSearch').on('input', function() {
-                clearTimeout(lecturerSearchTimeout);
-                lecturerSearchTimeout = setTimeout(() => {
-                    filterLecturers($(this).val());
-                }, 300);
-            });
-
-            // Reset form
-            $('#resetFormBtn').on('click', function() {
-                $('#assignHodForm')[0].reset();
-                $('#currentAssignmentInfo').hide();
-                $('#assignmentPreview').hide();
-                $('#departmentSearch').val('');
-                $('#lecturerSearch').val('');
-                $('.department-card').removeClass('selected');
-                filterDepartments('');
-                filterLecturers('');
-            });
-
-            // Refresh assignments
-            $('#refreshAssignments').on('click', loadAssignments);
-
-            // Form validation
-            $('#departmentSelect').on('change', validateForm);
-            $('#lecturerSelect').on('change', validateForm);
-
-            // Keyboard shortcuts
-            $(document).on('keydown', function(e) {
-                // Ctrl/Cmd + R to refresh
-                if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
-                    e.preventDefault();
-                    loadData();
-                }
-
-                // Ctrl/Cmd + S to submit form
-                if ((e.ctrlKey || e.metaKey) && e.key === 's' && $('#departmentSelect').val()) {
-                    e.preventDefault();
-                    $('#assignHodForm').submit();
-                }
-
-                // Escape to reset form
-                if (e.key === 'Escape') {
-                    $('#resetFormBtn').click();
-                }
-            });
-
-            // Auto-focus search on card click
-            $(document).on('click', '.department-card', function() {
-                $('#departmentSearch').focus();
-            });
-        }
-
-
         function setupFullscreenHandling() {
-            // Function to check if we're in fullscreen
             function isFullscreen() {
                 return !!(document.fullscreenElement || document.webkitFullscreenElement ||
                         document.mozFullScreenElement || document.msFullscreenElement);
             }
 
-            // Function to adjust layout for fullscreen
             function adjustForFullscreen() {
                 const fullscreen = isFullscreen();
                 const windowWidth = $(window).width();
 
                 if (fullscreen) {
-                    // Fullscreen mode adjustments
                     $('html, body').css({
                         'overflow-x': 'hidden',
                         'width': '100vw',
@@ -1035,22 +1158,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                             'width': 'calc(100vw - 280px)',
                             'height': '100vh'
                         });
-                    } else {
-                        $('.sidebar').css({
-                            'width': '100%',
-                            'height': '100vh',
-                            'position': 'fixed'
-                        });
-                        $('.main-content').css({
-                            'margin-left': sidebarCollapsed ? '0' : '0',
-                            'width': '100vw',
-                            'height': '100vh'
-                        });
                     }
                 } else {
-                    // Normal mode - use dvh for mobile browsers
                     const heightUnit = windowWidth <= 768 ? '100dvh' : '100vh';
-
                     $('.sidebar').css({
                         'height': heightUnit
                     });
@@ -1060,17 +1170,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 }
             }
 
-            // Listen for fullscreen changes
             $(document).on('fullscreenchange webkitfullscreenchange mozfullscreenchange MSFullscreenChange', function() {
                 setTimeout(adjustForFullscreen, 100);
             });
 
-            // Also listen for orientation changes which can affect fullscreen
             $(window).on('orientationchange', function() {
                 setTimeout(adjustForFullscreen, 200);
             });
 
-            // Initial adjustment
             setTimeout(adjustForFullscreen, 500);
         }
 
@@ -1084,26 +1191,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 const text = option.text().toLowerCase();
                 const shouldShow = !searchTerm || text.includes(searchTerm.toLowerCase());
 
-                if (option.val() !== '') { // Don't hide the placeholder
+                if (option.val() !== '') {
                     option.toggle(shouldShow);
                     if (shouldShow) visibleCount++;
                 }
             });
 
-            // Update feedback message
-            if (searchTerm) {
-                if (visibleCount === 0) {
-                    $('#departmentSelectFeedback')
-                        .html('<i class="fas fa-exclamation-triangle me-1"></i>No departments found matching "<strong>' + searchTerm + '</strong>"')
-                        .removeClass('text-success').addClass('text-warning');
-                } else {
-                    $('#departmentSelectFeedback')
-                        .html('<i class="fas fa-check me-1"></i>Found ' + visibleCount + ' department' + (visibleCount !== 1 ? 's' : '') + ' matching "<strong>' + searchTerm + '</strong>"')
-                        .removeClass('text-warning').addClass('text-success');
-                }
-            } else {
-                $('#departmentSelectFeedback').text('').removeClass('text-success text-warning');
-            }
+            updateSearchFeedback('departmentSelectFeedback', searchTerm, visibleCount, 'department');
         }
 
         function filterLecturers(searchTerm) {
@@ -1116,26 +1210,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 const text = option.text().toLowerCase();
                 const shouldShow = !searchTerm || text.includes(searchTerm.toLowerCase());
 
-                if (option.val() !== '') { // Don't hide the placeholder
+                if (option.val() !== '') {
                     option.toggle(shouldShow);
                     if (shouldShow) visibleCount++;
                 }
             });
 
-            // Update feedback message
+            updateSearchFeedback('lecturerSelectFeedback', searchTerm, visibleCount, 'lecturer');
+        }
+
+        function updateSearchFeedback(elementId, searchTerm, visibleCount, type) {
+            const feedback = $('#' + elementId);
+            
             if (searchTerm) {
                 if (visibleCount === 0) {
-                    $('#lecturerSelectFeedback')
-                        .html('<i class="fas fa-exclamation-triangle me-1"></i>No lecturers found matching "<strong>' + searchTerm + '</strong>"')
+                    feedback.html(`<i class="fas fa-exclamation-triangle me-1"></i>No ${type}s found matching "<strong>${searchTerm}</strong>"`)
                         .removeClass('text-success').addClass('text-warning');
                 } else {
-                    $('#lecturerSelectFeedback')
-                        .html('<i class="fas fa-check me-1"></i>Found ' + visibleCount + ' lecturer' + (visibleCount !== 1 ? 's' : '') + ' matching "<strong>' + searchTerm + '</strong>"')
+                    feedback.html(`<i class="fas fa-check me-1"></i>Found ${visibleCount} ${type}${visibleCount !== 1 ? 's' : ''} matching "<strong>${searchTerm}</strong>"`)
                         .removeClass('text-warning').addClass('text-success');
                 }
             } else {
-                $('#lecturerSelectFeedback').text('').removeClass('text-success text-warning');
+                feedback.text('').removeClass('text-success text-warning');
             }
+        }
+
+        function updateCurrentAssignmentInfo() {
+            const selectedOption = $('#departmentSelect').find('option:selected');
+            const hodId = selectedOption.data('hod');
+            const hodName = selectedOption.data('hod-name');
+
+            if (hodId && hodName) {
+                $('#currentAssignmentInfo').show();
+                $('#currentHodName').text(hodName);
+                $('#lecturerSelect').val(hodId);
+            } else {
+                $('#currentAssignmentInfo').hide();
+                $('#lecturerSelect').val('');
+            }
+            updateAssignmentPreview();
         }
 
         function updateAssignmentPreview() {
@@ -1178,10 +1291,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             }
 
             previewHtml += '</div>';
-
-            // Add action summary
             previewHtml += '<hr class="my-2">';
             previewHtml += '<div class="text-center">';
+            
             if (isInvalidAssignment && lecturerId) {
                 previewHtml += `<p class="mb-0"><i class="fas fa-tools me-2"></i><strong>Action:</strong> Fix invalid assignment</p>`;
                 previewHtml += '<small class="text-success">This will resolve the data integrity issue</small>';
@@ -1193,6 +1305,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             } else {
                 previewHtml += `<p class="mb-0"><i class="fas fa-times me-2"></i><strong>Action:</strong> Remove HOD from department</p>`;
             }
+            
             previewHtml += '</div>';
 
             $('#previewText').html(previewHtml);
@@ -1231,14 +1344,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             // Validate lecturer selection (optional)
             if (lecturerId) {
                 $('#lecturerSelect').removeClass('is-invalid').addClass('is-valid');
+                const selectedLecturer = $('#lecturerSelect option:selected').text();
                 $('#lecturerSelectFeedback')
-                    .html('<i class="fas fa-check me-1"></i>HOD selected - user account will be created/updated')
+                    .html(`<i class="fas fa-check me-1"></i>HOD selected: <strong>${selectedLecturer}</strong>`)
                     .removeClass('text-warning text-danger').addClass('text-success');
             } else {
                 $('#lecturerSelect').removeClass('is-valid is-invalid');
-                $('#lecturerSelectFeedback')
-                    .html('<i class="fas fa-info-circle me-1"></i>Optional - leave empty to remove HOD assignment')
-                    .removeClass('text-success text-danger').addClass('text-info');
+                const lecturerCount = $('#lecturerSelect').find('option').length - 1;
+                if (lecturerCount === 0) {
+                    $('#lecturerSelectFeedback')
+                        .html('<i class="fas fa-exclamation-triangle me-1"></i>No lecturers available in database')
+                        .removeClass('text-success text-info').addClass('text-warning');
+                } else {
+                    $('#lecturerSelectFeedback')
+                        .html('<i class="fas fa-info-circle me-1"></i>Optional - leave empty to remove HOD assignment')
+                        .removeClass('text-success text-danger').addClass('text-info');
+                }
             }
 
             // Update submit button state
@@ -1252,15 +1373,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             return isValid;
         }
 
-        function showAlert(type, message) {
+        function resetForm() {
+            $('#assignHodForm')[0].reset();
+            $('#currentAssignmentInfo').hide();
+            $('#assignmentPreview').hide();
+            $('#departmentSearch').val('');
+            $('#lecturerSearch').val('');
+            $('.department-card').removeClass('selected');
+            filterDepartments('');
+            filterLecturers('');
+            AppState.selectedDepartments.clear();
+            
+            if (AppState.isBulkMode) {
+                disableBulkMode();
+            }
+        }
+
+        function showAlert(type, message, duration = 5000) {
+            const icon = type === 'success' ? 'check-circle' : 
+                        type === 'warning' ? 'exclamation-triangle' : 
+                        type === 'info' ? 'info-circle' : 'exclamation-circle';
+            
             const alertHtml = `
                 <div class="alert alert-${type} alert-dismissible fade show" role="alert">
-                    <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-triangle'} me-2"></i>${message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    <i class="fas fa-${icon} me-2"></i>${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
             `;
             $('#alertContainer').html(alertHtml);
-            setTimeout(() => $('.alert').alert('close'), 5000);
+            
+            if (duration > 0) {
+                setTimeout(() => $('.alert').alert('close'), duration);
+            }
         }
 
         function showLoading() {
@@ -1273,8 +1417,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
 
         function loadData() {
             showLoading();
-
-            // Load all data in parallel
+            
             Promise.all([
                 loadDepartments(),
                 loadLecturers(),
@@ -1293,273 +1436,159 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             });
         }
 
-        // Debug function to test API endpoints
-        function testAPIs() {
-            console.log('Testing API endpoints...');
-
-            $.get('api/assign-hod-api.php?action=get_departments')
-                .done(function(response) {
-                    console.log('Departments API test:', response);
-                    if (response.status === 'success') {
-                        console.log('✅ Departments loaded:', response.count, 'departments');
-                    } else {
-                        console.error('❌ Departments API error:', response.message);
-                    }
-                })
-                .fail(function(xhr, status, error) {
-                    console.error('❌ Departments API failed:', xhr, status, error);
-                });
-
-            $.get('api/assign-hod-api.php?action=get_lecturers')
-                .done(function(response) {
-                    console.log('Lecturers API test:', response);
-                    if (response.status === 'success') {
-                        console.log('✅ Lecturers loaded:', response.count, 'lecturers');
-                    } else {
-                        console.error('❌ Lecturers API error:', response.message);
-                    }
-                })
-                .fail(function(xhr, status, error) {
-                    console.error('❌ Lecturers API failed:', xhr, status, error);
-                });
-        }
-
-        function checkDataIntegrity() {
-            const invalidAssignments = allDepartments.filter(dept =>
-                dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
-            );
-
-            if (invalidAssignments.length > 0) {
-                const departmentNames = invalidAssignments.map(dept => dept.name || dept.dept_name).join(', ');
-                const alertHtml = `
-                    <div class="alert data-integrity-alert alert-dismissible fade show">
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        <strong>Data Integrity Issue:</strong> Found ${invalidAssignments.length} department(s) with invalid HOD assignments.
-                        <br><small class="text-muted">Affected departments: ${departmentNames}</small>
-                        <br><small class="text-muted">These departments have hod_id values pointing to non-HOD users or missing records.</small>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                `;
-                $('#alertContainer').append(alertHtml);
-
-                // Show fix button
-                $('#fixInvalidBtn').show();
-
-                // Log details for debugging
-                console.warn('Invalid HOD assignments found:', invalidAssignments);
-                console.log('These departments have hod_id set but no valid HOD user/lecturer records');
-            } else {
-                // Hide fix button if no invalid assignments
-                $('#fixInvalidBtn').hide();
-            }
-        }
-
         function loadDepartments() {
             return new Promise((resolve, reject) => {
-                $.get('api/assign-hod-api.php?action=get_departments')
-                    .done(function(response) {
-                        console.log('Departments API response:', response);
-
-                        if (response.status === 'success') {
-                            allDepartments = response.data;
-                            const select = $('#departmentSelect');
-                            select.empty().append('<option value="">-- Select Department --</option>');
-
-                            if (response.data && response.data.length > 0) {
-                                response.data.forEach(dept => {
-                                    const currentHod = dept.hod_name && dept.hod_name !== 'Not Assigned' ? dept.hod_name : null;
-                                    const selected = currentHod ? ' (Current HOD: ' + currentHod + ')' : '';
-                                    const isInvalid = dept.hod_id && (!currentHod || currentHod === 'Not Assigned');
-
-                                    select.append(`<option value="${dept.id}" data-hod="${dept.hod_id || ''}" data-hod-name="${currentHod || ''}" data-invalid="${isInvalid ? 'true' : 'false'}">${dept.dept_name || dept.name}${selected}</option>`);
-                                });
-                            } else {
-                                select.append('<option value="" disabled>No departments available</option>');
-                            }
-
-                            resolve(response.data);
-                        } else {
-                            console.error('Departments API error:', response);
-                            // Try fallback with direct database query
-                            loadDepartmentsFallback().then(resolve).catch(reject);
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        console.error('Departments API failed:', xhr, status, error);
-                        // Try fallback with direct database query
-                        loadDepartmentsFallback().then(resolve).catch(reject);
-                    });
+                $.ajax({
+                    url: 'assign-hod.php?ajax=1&action=get_departments',
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .done(function(response) {
+                    console.log('Departments API Response:', response);
+                    
+                    if (response.status === 'success') {
+                        AppState.setDepartments(response.data);
+                        populateDepartmentSelect(response.data);
+                        resolve(response.data);
+                    } else {
+                        reject(response.message || 'Failed to load departments');
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    console.error('Departments API Error:', xhr, status, error);
+                    reject('Departments API failed: ' + error);
+                });
             });
         }
 
-        function loadDepartmentsFallback() {
-            return new Promise((resolve, reject) => {
-                console.log('Attempting fallback department loading...');
-                $.get('api/assign-hod-api.php?action=get_departments&fallback=1')
-                    .done(function(response) {
-                        console.log('Fallback departments response:', response);
-                        if (response.status === 'success') {
-                            resolve(response.data);
-                        } else {
-                            reject('Fallback also failed: ' + (response.message || 'Unknown error'));
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        console.error('Fallback departments failed:', xhr, status, error);
-                        reject('Both API and fallback failed: ' + error);
-                    });
-            });
+        function populateDepartmentSelect(departments) {
+            const select = $('#departmentSelect');
+            select.empty().append('<option value="">-- Select Department --</option>');
+            
+            if (departments && departments.length > 0) {
+                departments.forEach(dept => {
+                    const hodName = dept.hod_first_name && dept.hod_last_name ? 
+                        `${dept.hod_first_name} ${dept.hod_last_name}` : '';
+                    const selected = hodName ? ` (Current HOD: ${hodName})` : '';
+                    
+                    select.append(`<option value="${dept.id}" 
+                        data-hod="${dept.hod_id || ''}" 
+                        data-hod-name="${hodName}">
+                        ${dept.name}${selected}
+                    </option>`);
+                });
+            } else {
+                select.append('<option value="" disabled>No departments available</option>');
+            }
         }
 
         function loadLecturers() {
             return new Promise((resolve, reject) => {
-                $.get('api/assign-hod-api.php?action=get_lecturers')
-                    .done(function(response) {
-                        console.log('Lecturers API response:', response);
-
-                        if (response.status === 'success') {
-                            allLecturers = response.data;
-                            const select = $('#lecturerSelect');
-                            select.empty().append('<option value="">-- Select Lecturer --</option>');
-
-                            if (response.data && response.data.length > 0) {
-                                response.data.forEach(lecturer => {
-                                    const displayName = lecturer.display_name || lecturer.full_name || `${lecturer.first_name} ${lecturer.last_name}`;
-                                    select.append(`<option value="${lecturer.id}">${displayName}</option>`);
-                                });
-                            } else {
-                                select.append('<option value="" disabled>No lecturers available</option>');
-                            }
-
-                            resolve(response.data);
-                        } else {
-                            console.error('Lecturers API error:', response);
-                            // Try fallback with direct database query
-                            loadLecturersFallback().then(resolve).catch(reject);
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        console.error('Lecturers API failed:', xhr, status, error);
-                        // Try fallback with direct database query
-                        loadLecturersFallback().then(resolve).catch(reject);
-                    });
+                $.ajax({
+                    url: 'assign-hod.php?ajax=1&action=get_lecturers',
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .done(function(response) {
+                    console.log('Lecturers API Response:', response);
+                    
+                    if (response.status === 'success') {
+                        AppState.setLecturers(response.data);
+                        resolve(response.data);
+                    } else {
+                        reject(response.message || 'Failed to load lecturers');
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    console.error('Lecturers API Error:', xhr, status, error);
+                    reject('Lecturers API failed: ' + error);
+                });
             });
         }
 
-        function loadLecturersFallback() {
-            return new Promise((resolve, reject) => {
-                console.log('Attempting fallback lecturer loading...');
-                $.get('api/assign-hod-api.php?action=get_lecturers&fallback=1')
-                    .done(function(response) {
-                        console.log('Fallback lecturers response:', response);
-                        if (response.status === 'success') {
-                            resolve(response.data);
-                        } else {
-                            reject('Fallback also failed: ' + (response.message || 'Unknown error'));
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        console.error('Fallback lecturers failed:', xhr, status, error);
-                        reject('Both API and fallback failed: ' + error);
-                    });
-            });
+        function updateLecturerSelect(lecturers) {
+            console.log('Updating lecturer select with:', lecturers);
+            
+            const select = $('#lecturerSelect');
+            select.empty().append('<option value="">-- Select Lecturer --</option>');
+            
+            if (lecturers && lecturers.length > 0) {
+                lecturers.forEach(lecturer => {
+                    const displayName = lecturer.full_name || 
+                                       `${lecturer.first_name} ${lecturer.last_name}`;
+                    
+                    select.append(`<option value="${lecturer.id}">${displayName}</option>`);
+                });
+                console.log(`Loaded ${lecturers.length} lecturers into dropdown`);
+            } else {
+                select.append('<option value="" disabled>No lecturers available</option>');
+                console.warn('No lecturers available for dropdown');
+            }
+            
+            select.trigger('change');
         }
 
         function loadStatistics() {
             return new Promise((resolve, reject) => {
-                $.get('api/assign-hod-api.php?action=get_assignment_stats')
-                    .done(function(response) {
-                        if (response.status === 'success') {
-                            const data = response.data;
-
-                            // Animate numbers with improved animation
-                            animateValue('totalDepartments', data.total_departments || 0);
-                            animateValue('assignedDepartments', data.assigned_departments || 0);
-                            animateValue('totalLecturers', data.total_lecturers || 0);
-                            animateValue('unassignedDepartments', data.unassigned_departments || 0);
-
-                            resolve(response.data);
-                        } else {
-                            reject(response.message);
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        reject('Failed to load statistics: ' + error);
-                    });
+                $.ajax({
+                    url: 'assign-hod.php?ajax=1&action=get_assignment_stats',
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .done(function(response) {
+                    console.log('Statistics API Response:', response);
+                    
+                    if (response.status === 'success') {
+                        const data = response.data;
+                        Utils.animateValue('totalDepartments', data.total_departments || 0);
+                        Utils.animateValue('assignedDepartments', data.assigned_departments || 0);
+                        Utils.animateValue('totalLecturers', data.total_lecturers || 0);
+                        Utils.animateValue('unassignedDepartments', data.unassigned_departments || 0);
+                        resolve(response.data);
+                    } else {
+                        reject(response.message);
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    console.error('Statistics API Error:', xhr, status, error);
+                    reject('Failed to load statistics: ' + error);
+                });
             });
-        }
-
-        function animateValue(id, newValue, duration = 600) {
-            const el = document.getElementById(id);
-            if (!el) return;
-
-            const current = parseInt(el.innerText) || 0;
-            const startTime = Date.now();
-
-            function update() {
-                const elapsed = Date.now() - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                const easeOut = 1 - Math.pow(1 - progress, 3);
-                const value = Math.floor(current + (newValue - current) * easeOut);
-
-                el.innerText = value;
-
-                if (progress < 1) {
-                    requestAnimationFrame(update);
-                } else {
-                    el.innerText = newValue;
-                }
-            }
-
-            requestAnimationFrame(update);
-        }
-
-        function animateNumber(selector, targetNumber, duration = 1000) {
-            const element = $(selector);
-            const startNumber = parseInt(element.text()) || 0;
-            const startTime = Date.now();
-
-            function updateNumber() {
-                const currentTime = Date.now();
-                const elapsed = currentTime - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-
-                // Easing function for smooth animation
-                const easeOut = 1 - Math.pow(1 - progress, 3);
-                const currentNumber = Math.round(startNumber + (targetNumber - startNumber) * easeOut);
-
-                element.text(currentNumber);
-
-                if (progress < 1) {
-                    requestAnimationFrame(updateNumber);
-                }
-            }
-
-            updateNumber();
         }
 
         function loadAssignments() {
             return new Promise((resolve, reject) => {
-                $.get('api/assign-hod-api.php?action=get_departments')
-                    .done(function(response) {
-                        if (response.status === 'success') {
-                            renderAssignments(response.data);
-                            resolve(response.data);
-                        } else {
-                            reject(response.message);
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        reject('Failed to load assignments: ' + error);
-                    });
+                $.ajax({
+                    url: 'assign-hod.php?ajax=1&action=get_departments',
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .done(function(response) {
+                    if (response.status === 'success') {
+                        renderAssignments(response.data);
+                        resolve(response.data);
+                    } else {
+                        reject(response.message);
+                    }
+                })
+                .fail(function(xhr, status, error) {
+                    reject('Failed to load assignments: ' + error);
+                });
             });
         }
 
         function renderAssignments(departments) {
             const container = $('#assignmentsContainer');
-            container.empty();
-
-            if (departments.length === 0) {
+            
+            if (!departments || departments.length === 0) {
                 container.html(`
                     <div class="col-12 text-center py-5">
                         <i class="fas fa-building fa-3x text-muted mb-3"></i>
@@ -1573,48 +1602,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 return;
             }
 
-            departments.forEach(dept => {
-                // Check for invalid assignments (hod_id exists but no valid HOD name)
+            let html = '';
+            const filteredDepts = filterAssignmentsByStatus(departments);
+            
+            filteredDepts.forEach(dept => {
                 const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
-                const cardClass = hasInvalidAssignment ? 'assignment-card invalid' : (dept.hod_id ? 'assignment-card assigned' : 'assignment-card unassigned');
-                const statusIcon = hasInvalidAssignment ? 'fas fa-exclamation-circle text-danger' : (dept.hod_id ? 'fas fa-user-check text-success' : 'fas fa-exclamation-triangle text-warning');
+                const cardClass = hasInvalidAssignment ? 'assignment-card invalid' : 
+                                (dept.hod_id ? 'assignment-card assigned' : 'assignment-card unassigned');
+                const statusIcon = hasInvalidAssignment ? 'fas fa-exclamation-circle text-danger' : 
+                                 (dept.hod_id ? 'fas fa-user-check text-success' : 'fas fa-exclamation-triangle text-warning');
                 const statusText = hasInvalidAssignment ? 'Invalid' : (dept.hod_id ? 'Assigned' : 'Unassigned');
                 const statusColor = hasInvalidAssignment ? 'danger' : (dept.hod_id ? 'success' : 'warning');
+                const isSelected = AppState.selectedDepartments.has(dept.id.toString());
 
-                const cardHtml = `
+                html += `
                     <div class="col-md-6 col-lg-4">
-                        <div class="card ${cardClass} h-100 department-card" data-department-id="${dept.id}">
+                        <div class="card ${cardClass} h-100 department-card ${isSelected ? 'selected' : ''}" 
+                             data-department-id="${dept.id}">
                             <div class="card-body">
                                 <div class="d-flex justify-content-between align-items-start mb-3">
-                                    <h6 class="card-title text-primary mb-0">${dept.dept_name}</h6>
-                                    <span class="badge bg-${statusColor}">${statusText}</span>
+                                    <h6 class="card-title text-primary mb-0">${dept.name}</h6>
+                                    <span class="badge bg-${statusColor}">
+                                        <i class="${statusIcon} me-1"></i>${statusText}
+                                    </span>
                                 </div>
 
                                 <div class="mb-3">
-                                    <div class="row">
-                                        <div class="col-8">
-                                            <small class="text-muted d-block">Current HOD:</small>
-                                            <div class="${dept.hod_id ? (hasInvalidAssignment ? 'text-danger' : 'text-success') : 'text-warning'} fw-semibold">
-                                                ${hasInvalidAssignment ? 'INVALID ASSIGNMENT' : (dept.hod_name || 'Not Assigned')}
-                                            </div>
-                                            ${hasInvalidAssignment ? '<small class="text-danger"><i class="fas fa-exclamation-triangle me-1"></i>HOD ID exists but lecturer not found</small>' : ''}
-                                        </div>
-                                        <div class="col-4 text-end">
-                                            <small class="text-muted d-block">Programs:</small>
-                                            <span class="badge bg-info">${dept.program_count || 0}</span>
-                                        </div>
+                                    <small class="text-muted d-block">Current HOD:</small>
+                                    <div class="${dept.hod_id ? (hasInvalidAssignment ? 'text-danger' : 'text-success') : 'text-warning'} fw-semibold">
+                                        ${hasInvalidAssignment ? 'INVALID ASSIGNMENT' : (dept.hod_name || 'Not Assigned')}
                                     </div>
+                                    ${hasInvalidAssignment ? 
+                                        '<small class="text-danger"><i class="fas fa-exclamation-triangle me-1"></i>HOD ID exists but lecturer not found</small>' : ''}
                                 </div>
 
                                 <div class="mb-3">
                                     <div class="progress" style="height: 4px;">
-                                        <div class="progress-bar bg-${statusColor}" role="progressbar" style="width: ${hasInvalidAssignment ? '50%' : (dept.hod_id ? '100%' : '0%')}"></div>
+                                        <div class="progress-bar bg-${statusColor}" role="progressbar" 
+                                             style="width: ${hasInvalidAssignment ? '50%' : (dept.hod_id ? '100%' : '0%')}">
+                                        </div>
                                     </div>
                                 </div>
 
                                 <button class="btn btn-sm ${hasInvalidAssignment ? 'btn-outline-danger' : 'btn-outline-primary'} w-100 selectDepartment"
                                         data-id="${dept.id}"
-                                        data-name="${dept.dept_name}"
+                                        data-name="${dept.name}"
                                         data-hod="${dept.hod_id || ''}"
                                         data-hod-name="${dept.hod_name || ''}"
                                         data-invalid="${hasInvalidAssignment}">
@@ -1625,10 +1657,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                         </div>
                     </div>
                 `;
-                container.append(cardHtml);
             });
 
-            // Add event listeners to select buttons
+            container.html(html);
+            setupAssignmentCardInteractions();
+        }
+
+        function filterAssignmentsByStatus(departments) {
+            const status = $('#statusFilter').val();
+            
+            if (status === 'all') return departments;
+            
+            return departments.filter(dept => {
+                const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
+                
+                switch (status) {
+                    case 'assigned': return dept.hod_id && !hasInvalidAssignment;
+                    case 'unassigned': return !dept.hod_id;
+                    case 'invalid': return hasInvalidAssignment;
+                    default: return true;
+                }
+            });
+        }
+
+        function filterAssignments() {
+            renderAssignments(AppState.departments);
+        }
+
+        function setupAssignmentCardInteractions() {
+            // Select department for assignment
             $('.selectDepartment').on('click', function() {
                 const deptId = $(this).data('id');
                 const deptName = $(this).data('name');
@@ -1636,41 +1693,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 const hodName = $(this).data('hod-name');
                 const isInvalid = $(this).data('invalid');
 
-                // Remove previous selection
-                $('.department-card').removeClass('selected');
-                // Add selection to clicked card
-                $(this).closest('.department-card').addClass('selected');
-
-                $('#departmentSelect').val(deptId);
-                $('#lecturerSelect').val(hodId);
-
-                if (hodId && hodName && !isInvalid) {
-                    $('#currentAssignmentInfo').show();
-                    $('#currentHodName').text(hodName);
-                } else if (isInvalid) {
-                    $('#currentAssignmentInfo').hide();
-                    showAlert('warning', `Department <strong>${deptName}</strong> has an invalid HOD assignment that needs to be fixed.`);
+                if (AppState.isBulkMode) {
+                    // Toggle selection in bulk mode
+                    if (AppState.selectedDepartments.has(deptId.toString())) {
+                        AppState.selectedDepartments.delete(deptId.toString());
+                        $(this).closest('.department-card').removeClass('selected');
+                    } else {
+                        AppState.selectedDepartments.add(deptId.toString());
+                        $(this).closest('.department-card').addClass('selected');
+                    }
+                    updateBulkModeUI();
                 } else {
-                    $('#currentAssignmentInfo').hide();
+                    // Single selection mode
+                    $('.department-card').removeClass('selected');
+                    $(this).closest('.department-card').addClass('selected');
+
+                    $('#departmentSelect').val(deptId);
+                    $('#lecturerSelect').val(hodId);
+
+                    if (hodId && hodName && !isInvalid) {
+                        $('#currentAssignmentInfo').show();
+                        $('#currentHodName').text(hodName);
+                    } else if (isInvalid) {
+                        $('#currentAssignmentInfo').hide();
+                        showAlert('warning', `Department <strong>${deptName}</strong> has an invalid HOD assignment that needs to be fixed.`);
+                    } else {
+                        $('#currentAssignmentInfo').hide();
+                    }
+
+                    // Scroll to form
+                    $('html, body').animate({
+                        scrollTop: $('#assignHodForm').offset().top - 100
+                    }, 500);
+
+                    const alertType = isInvalid ? 'warning' : 'info';
+                    const alertMessage = isInvalid ?
+                        `Selected department with invalid assignment: <strong>${deptName}</strong>` :
+                        `Selected department: <strong>${deptName}</strong>`;
+
+                    showAlert(alertType, alertMessage);
+                    validateForm();
                 }
-
-                // Scroll to form with animation
-                $('html, body').animate({
-                    scrollTop: $('#assignHodForm').offset().top - 100
-                }, 500);
-
-                const alertType = isInvalid ? 'warning' : 'info';
-                const alertMessage = isInvalid
-                    ? `Selected department with invalid assignment: <strong>${deptName}</strong>`
-                    : `Selected department: <strong>${deptName}</strong>`;
-
-                showAlert(alertType, alertMessage);
-
-                // Update form validation
-                validateForm();
             });
 
-            // Add hover effects
+            // Hover effects
             $('.department-card').hover(
                 function() {
                     if (!$(this).hasClass('selected')) {
@@ -1688,10 +1754,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
         function handleDepartmentSubmit(e) {
             e.preventDefault();
 
+            if (AppState.isBulkMode && AppState.selectedDepartments.size > 0) {
+                handleBulkAssignment();
+                return;
+            }
+
             const departmentId = $('#departmentSelect').val();
             const hodId = $('#lecturerSelect').val();
-            const departmentOption = $('#departmentSelect option:selected');
-            const isInvalidAssignment = departmentOption.data('invalid') === 'true';
 
             if (!departmentId) {
                 showAlert('warning', 'Please select a department');
@@ -1699,62 +1768,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                 return;
             }
 
-            // Check if this is fixing an invalid assignment
+            const department = AppState.departments.find(dept => dept.id == departmentId);
+            const isInvalidAssignment = department.hod_id && (!department.hod_name || department.hod_name === 'Not Assigned');
+
+            // Confirmation for critical actions
             if (isInvalidAssignment && !hodId) {
                 if (!confirm('This department has an invalid HOD assignment. Removing the HOD will clear this invalid reference. Continue?')) {
                     return;
                 }
             }
 
-            showLoading();
-            const submitBtn = $(this).find('button[type="submit"]');
-            const originalText = submitBtn.html();
-            submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Processing...').prop('disabled', true);
+            submitAssignment(departmentId, hodId);
+        }
 
-            $.post('api/assign-hod-api.php?action=assign_hod', {
+        function submitAssignment(departmentId, hodId, isBulk = false) {
+            showLoading();
+            const submitBtn = $('#assignBtn');
+            const originalText = submitBtn.html();
+            
+            if (isBulk) {
+                submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Processing Bulk Assignment...');
+            } else {
+                submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Processing...');
+            }
+            
+            submitBtn.prop('disabled', true);
+
+            $.post('assign-hod.php?ajax=1&action=assign_hod', {
                 department_id: departmentId,
                 hod_id: hodId,
-                csrf_token: "<?php echo $csrf_token; ?>"
+                csrf_token: window.csrfToken
             })
             .done(function(response) {
                 if (response.status === 'success') {
-                    const message = isInvalidAssignment && hodId
-                        ? 'Invalid HOD assignment fixed successfully!'
-                        : response.message;
+                    const message = isBulk ? 
+                        'Bulk assignment completed successfully!' : 
+                        response.message || 'HOD assignment updated successfully!';
                     showAlert('success', message);
-                    loadData(); // Refresh all data
-                    $('#assignHodForm')[0].reset();
-                    $('#currentAssignmentInfo').hide();
-                } else if (response.status === 'warning' && response.requires_confirmation) {
-                    if (confirm(response.message + ' Continue anyway?')) {
-                        // Retry with confirmation
-                        $.post('api/assign-hod-api.php?action=assign_hod', {
-                            department_id: departmentId,
-                            hod_id: hodId,
-                            csrf_token: "<?php echo $csrf_token; ?>",
-                            confirmed: true
-                        })
-                        .done(function(retryResponse) {
-                            if (retryResponse.status === 'success') {
-                                showAlert('success', 'HOD reassigned successfully!');
-                                loadData();
-                                $('#assignHodForm')[0].reset();
-                                $('#currentAssignmentInfo').hide();
-                            } else {
-                                showAlert('danger', retryResponse.message);
-                            }
-                        })
-                        .fail(function() {
-                            showAlert('danger', 'Failed to reassign HOD. Please try again.');
-                        });
+                    loadData();
+                    if (!isBulk) {
+                        resetForm();
                     }
                 } else {
-                    showAlert('danger', response.message);
+                    showAlert('danger', response.message || 'Failed to assign HOD');
                 }
             })
             .fail(function(xhr, status, error) {
                 let errorMessage = 'Failed to process HOD assignment. Please try again.';
-
                 if (xhr.status === 400) {
                     try {
                         const errorResponse = JSON.parse(xhr.responseText);
@@ -1763,7 +1823,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                         // Use default error message
                     }
                 }
-
                 showAlert('danger', errorMessage);
             })
             .always(function() {
@@ -1772,10 +1831,185 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
             });
         }
 
-        // Make loadData function available globally
-        window.loadData = loadData;
+        function checkDataIntegrity() {
+            const invalidAssignments = AppState.departments.filter(dept =>
+                dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
+            );
 
-        // Help functionality
+            if (invalidAssignments.length > 0) {
+                const departmentNames = invalidAssignments.map(dept => dept.name).join(', ');
+                const alertHtml = `
+                    <div class="alert alert-warning alert-dismissible fade show">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Data Integrity Issue:</strong> Found ${invalidAssignments.length} department(s) with invalid HOD assignments.
+                        <br><small class="text-muted">Affected departments: ${departmentNames}</small>
+                        <br><small class="text-muted">These departments have hod_id values pointing to non-HOD users or missing records.</small>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                `;
+                $('#alertContainer').append(alertHtml);
+                $('#fixInvalidBtn').show();
+            } else {
+                $('#fixInvalidBtn').hide();
+            }
+        }
+
+        function fixInvalidAssignments() {
+            const invalidDepts = AppState.departments.filter(dept =>
+                dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
+            );
+
+            if (invalidDepts.length === 0) {
+                showAlert('info', 'No invalid assignments found.');
+                return;
+            }
+
+            if (confirm(`Found ${invalidDepts.length} department(s) with invalid HOD assignments.\n\nThese departments have hod_id values pointing to users who are not HODs or missing lecturer records.\n\nFix them by clearing the invalid HOD assignments?`)) {
+                showLoading();
+
+                let fixedCount = 0;
+                let errorCount = 0;
+
+                const fixNext = (index) => {
+                    if (index >= invalidDepts.length) {
+                        hideLoading();
+                        if (errorCount === 0) {
+                            showAlert('success', `Successfully fixed ${fixedCount} invalid HOD assignment(s)!`);
+                        } else {
+                            showAlert('warning', `Fixed ${fixedCount} assignment(s), but ${errorCount} failed. Please check the console for details.`);
+                        }
+                        loadData();
+                        return;
+                    }
+
+                    const dept = invalidDepts[index];
+                    console.log(`Fixing department: ${dept.name} (ID: ${dept.id})`);
+
+                    $.post('assign-hod.php?ajax=1&action=assign_hod', {
+                        department_id: dept.id,
+                        hod_id: null,
+                        csrf_token: window.csrfToken
+                    })
+                    .done(function(response) {
+                        if (response.status === 'success') {
+                            console.log(`✅ Fixed: ${dept.name}`);
+                            fixedCount++;
+                        } else {
+                            console.error(`❌ Failed to fix ${dept.name}:`, response.message);
+                            errorCount++;
+                        }
+                    })
+                    .fail(function(xhr, status, error) {
+                        console.error(`❌ Request failed for ${dept.name}:`, xhr, status, error);
+                        errorCount++;
+                    })
+                    .always(function() {
+                        fixNext(index + 1);
+                    });
+                };
+
+                fixNext(0);
+            }
+        }
+
+        function enableBulkMode() {
+            AppState.isBulkMode = true;
+            $('#bulkModeBtn').removeClass('btn-outline-success').addClass('btn-success')
+                .html('<i class="fas fa-layer-group me-2"></i>Bulk Mode Active');
+            $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign to Selected');
+            showAlert('info', 'Bulk mode activated. Select multiple departments and choose an HOD to assign to all selected departments.', 0);
+        }
+
+        function disableBulkMode() {
+            AppState.isBulkMode = false;
+            AppState.selectedDepartments.clear();
+            $('#bulkModeBtn').removeClass('btn-success').addClass('btn-outline-success')
+                .html('<i class="fas fa-layer-group me-2"></i>Bulk Mode');
+            $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign HOD');
+            $('.department-card').removeClass('selected');
+            showAlert('info', 'Bulk mode disabled.');
+        }
+
+        function toggleBulkMode() {
+            if (AppState.isBulkMode) {
+                disableBulkMode();
+            } else {
+                enableBulkMode();
+            }
+        }
+
+        function updateBulkModeUI() {
+            const selectedCount = AppState.selectedDepartments.size;
+            if (selectedCount > 0) {
+                $('#assignBtn').html(`<i class="fas fa-save me-2"></i>Assign to ${selectedCount} Departments`);
+            } else {
+                $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign to Selected');
+            }
+        }
+
+        function handleBulkAssignment() {
+            const hodId = $('#lecturerSelect').val();
+            const selectedCount = AppState.selectedDepartments.size;
+
+            if (!hodId) {
+                showAlert('warning', 'Please select an HOD for bulk assignment');
+                return;
+            }
+
+            if (confirm(`Assign the selected HOD to ${selectedCount} department(s)?`)) {
+                showLoading();
+                
+                let processed = 0;
+                let successCount = 0;
+                let errorCount = 0;
+
+                AppState.selectedDepartments.forEach(deptId => {
+                    $.post('assign-hod.php?ajax=1&action=assign_hod', {
+                        department_id: deptId,
+                        hod_id: hodId,
+                        csrf_token: window.csrfToken
+                    })
+                    .done(function(response) {
+                        if (response.status === 'success') {
+                            successCount++;
+                        } else {
+                            errorCount++;
+                        }
+                    })
+                    .fail(function() {
+                        errorCount++;
+                    })
+                    .always(function() {
+                        processed++;
+                        if (processed === selectedCount) {
+                            hideLoading();
+                            if (errorCount === 0) {
+                                showAlert('success', `Successfully assigned HOD to ${successCount} department(s)!`);
+                            } else {
+                                showAlert('warning', `Assigned HOD to ${successCount} department(s), but ${errorCount} failed.`);
+                            }
+                            loadData();
+                            disableBulkMode();
+                        }
+                    });
+                });
+            }
+        }
+
+        function exportAssignments() {
+            const assignments = AppState.departments.map(dept => ({
+                'Department ID': dept.id,
+                'Department Name': dept.name,
+                'HOD Name': dept.hod_name || 'Not Assigned',
+                'HOD Email': dept.hod_email || '',
+                'Status': dept.hod_id ? 'Assigned' : 'Unassigned',
+                'Last Updated': dept.updated_at || 'N/A'
+            }));
+
+            Utils.exportToCSV(assignments, `hod-assignments-${new Date().toISOString().split('T')[0]}.csv`);
+            showAlert('success', 'Assignments exported successfully!');
+        }
+
         function showHelp() {
             const helpHtml = `
                 <div class="modal fade" id="helpModal" tabindex="-1">
@@ -1794,7 +2028,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                                         <ul class="list-unstyled">
                                             <li><kbd>Ctrl+R</kbd> <span class="text-muted">Refresh all data</span></li>
                                             <li><kbd>Ctrl+S</kbd> <span class="text-muted">Submit assignment form</span></li>
-                                            <li><kbd>Esc</kbd> <span class="text-muted">Reset form</span></li>
+                                            <li><kbd>Ctrl+B</kbd> <span class="text-muted">Toggle bulk mode</span></li>
+                                            <li><kbd>Esc</kbd> <span class="text-muted">Reset form / Exit bulk mode</span></li>
                                         </ul>
 
                                         <h6><i class="fas fa-search me-2"></i>Search Features</h6>
@@ -1831,84 +2066,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
                                 </div>
                             </div>
                             <div class="modal-footer">
-                                <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Close</button>
+                                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it!</button>
                             </div>
                         </div>
                     </div>
                 </div>
             `;
 
-            // Remove existing modal if present
             $('#helpModal').remove();
             $('body').append(helpHtml);
 
-            // Show modal
             const modal = new bootstrap.Modal(document.getElementById('helpModal'));
             modal.show();
         }
 
-        // Function to fix invalid assignments
-        function fixInvalidAssignments() {
-            const invalidDepts = allDepartments.filter(dept =>
-                dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
-            );
+        // Make functions globally available
+        window.loadData = loadData;
+        window.fixInvalidAssignments = fixInvalidAssignments;
+        window.exportAssignments = exportAssignments;
+        window.showHelp = showHelp;
+        window.toggleSidebar = toggleSidebar;
+        window.enableBulkMode = enableBulkMode;
+        window.toggleBulkMode = toggleBulkMode;
+        window.filterAssignments = filterAssignments;
 
-            if (invalidDepts.length === 0) {
-                showAlert('info', 'No invalid assignments found.');
-                return;
+        // Debug function
+        window.debugLecturerSelection = function() {
+            console.log('=== DEBUG LECTURER SELECTION ===');
+            console.log('All Lecturers:', AppState.lecturers);
+            console.log('Lecturer Select Element:', $('#lecturerSelect'));
+            console.log('Selected Lecturer Value:', $('#lecturerSelect').val());
+            console.log('Lecturer Options:', $('#lecturerSelect').find('option').length);
+            
+            if (AppState.lecturers && AppState.lecturers.length > 0) {
+                console.log('First lecturer:', AppState.lecturers[0]);
+            } else {
+                console.log('No lecturers loaded in AppState');
             }
-
-            console.log('Invalid assignments to fix:', invalidDepts);
-
-            if (confirm(`Found ${invalidDepts.length} department(s) with invalid HOD assignments.\n\nThese departments have hod_id values pointing to users who are not HODs or missing lecturer records.\n\nFix them by clearing the invalid HOD assignments?`)) {
-                showLoading();
-
-                // Fix each invalid assignment one by one to handle errors gracefully
-                let fixedCount = 0;
-                let errorCount = 0;
-
-                const fixNext = (index) => {
-                    if (index >= invalidDepts.length) {
-                        // All done
-                        hideLoading();
-                        if (errorCount === 0) {
-                            showAlert('success', `Successfully fixed ${fixedCount} invalid HOD assignment(s)!`);
-                        } else {
-                            showAlert('warning', `Fixed ${fixedCount} assignment(s), but ${errorCount} failed. Please check the console for details.`);
-                        }
-                        loadData(); // Refresh all data
-                        return;
-                    }
-
-                    const dept = invalidDepts[index];
-                    console.log(`Fixing department: ${dept.name} (ID: ${dept.id})`);
-
-                    $.post('api/assign-hod-api.php?action=assign_hod', {
-                        department_id: dept.id,
-                        hod_id: null,
-                        csrf_token: "<?php echo $csrf_token; ?>"
-                    })
-                    .done(function(response) {
-                        if (response.status === 'success') {
-                            console.log(`✅ Fixed: ${dept.name}`);
-                            fixedCount++;
-                        } else {
-                            console.error(`❌ Failed to fix ${dept.name}:`, response.message);
-                            errorCount++;
-                        }
-                    })
-                    .fail(function(xhr, status, error) {
-                        console.error(`❌ Request failed for ${dept.name}:`, xhr, status, error);
-                        errorCount++;
-                    })
-                    .always(function() {
-                        fixNext(index + 1);
-                    });
-                };
-
-                fixNext(0);
-            }
-        }
+        };
     </script>
 </body>
 </html>

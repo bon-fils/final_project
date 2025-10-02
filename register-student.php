@@ -1001,14 +1001,19 @@ class StudentRegistration {
         $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
         $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
 
-        // Phone number input filtering (digits only)
+        // Phone number input filtering (digits only, max 10 characters)
         $('input[name="telephone"]').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '');
+            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
         });
 
         // Student ID number input filtering (digits only)
         $('#studentIdNumber').on('input', function() {
             this.value = this.value.replace(/[^0-9]/g, '');
+        });
+
+        // Parent contact input filtering (digits only, max 10 characters)
+        $('input[name="parent_contact"]').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
         });
 
         // Fingerprint functionality
@@ -1185,8 +1190,9 @@ class StudentRegistration {
     }
 
     isValidPhone(phone) {
+        // Must be exactly 10 digits, start with 0, and contain no letters
         const phoneRegex = /^0\d{9}$/;
-        return phoneRegex.test(phone);
+        return phoneRegex.test(phone) && /^[0-9]+$/.test(phone);
     }
 
     showFieldError(field, message) {
@@ -2061,7 +2067,7 @@ class StudentRegistration {
     // Phone number validation
     const phone = $('#telephone').val();
     if (phone && !this.isValidPhone(phone)) {
-        this.showFieldError($('#telephone')[0], 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
+        this.showFieldError($('#telephone')[0], 'Phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
         isValid = false;
         errors.push('Invalid phone number format');
     }
@@ -2069,7 +2075,7 @@ class StudentRegistration {
     // Parent contact validation if provided
     const parentContact = $('#parent_contact').val();
     if (parentContact && !this.isValidPhone(parentContact)) {
-        this.showFieldError($('#parent_contact')[0], 'Please enter a valid parent phone number');
+        this.showFieldError($('#parent_contact')[0], 'Parent phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
         isValid = false;
         errors.push('Invalid parent phone number format');
     }

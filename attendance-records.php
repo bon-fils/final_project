@@ -10,6 +10,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
 $student_id = null;
 $attendanceData = [];
 $courses = [];
+$departments = [];
+$options = [];
 
 if ($userRole === 'student') {
     $student_id = $_SESSION['student_id'] ?? null;
@@ -51,11 +53,14 @@ if ($userRole === 'student') {
 } else {
     // For admin users, show all attendance records or allow filtering
     $stmt = $pdo->query("
-        SELECT s.first_name, s.last_name, c.name AS course, ses.session_date AS date, r.status
+        SELECT s.first_name, s.last_name, c.name AS course, ses.session_date AS date, r.status,
+               d.name AS department, o.name AS option_name
         FROM attendance_records r
         JOIN attendance_sessions ses ON r.session_id = ses.id
         JOIN courses c ON ses.course_id = c.id
         JOIN students s ON r.student_id = s.id
+        LEFT JOIN departments d ON s.department_id = d.id
+        LEFT JOIN options o ON s.option_id = o.id
         ORDER BY ses.session_date DESC
         LIMIT 100
     ");
@@ -64,6 +69,14 @@ if ($userRole === 'student') {
     // Get unique courses
     $stmt2 = $pdo->query("SELECT DISTINCT c.name FROM courses c ORDER BY c.name");
     $courses = $stmt2->fetchAll(PDO::FETCH_COLUMN);
+
+    // Get unique departments
+    $stmt3 = $pdo->query("SELECT DISTINCT d.name FROM departments d ORDER BY d.name");
+    $departments = $stmt3->fetchAll(PDO::FETCH_COLUMN);
+
+    // Get unique options
+    $stmt4 = $pdo->query("SELECT DISTINCT o.name FROM options o ORDER BY o.name");
+    $options = $stmt4->fetchAll(PDO::FETCH_COLUMN);
 }
 ?>
 <!DOCTYPE html>
@@ -136,12 +149,26 @@ if ($userRole === 'student') {
         <div class="card-body">
           <div class="d-flex justify-content-between mb-3">
             <h6>Attendance Records</h6>
-            <select id="courseFilter" class="form-select w-auto">
-              <option value="All">All Courses</option>
-              <?php foreach($courses as $course): ?>
-                <option value="<?= htmlspecialchars($course) ?>"><?= htmlspecialchars($course) ?></option>
-              <?php endforeach; ?>
-            </select>
+            <div class="d-flex gap-2">
+              <select id="departmentFilter" class="form-select">
+                <option value="All">All Departments</option>
+                <?php foreach($departments as $department): ?>
+                  <option value="<?= htmlspecialchars($department) ?>"><?= htmlspecialchars($department) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <select id="optionFilter" class="form-select">
+                <option value="All">All Options</option>
+                <?php foreach($options as $option): ?>
+                  <option value="<?= htmlspecialchars($option) ?>"><?= htmlspecialchars($option) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <select id="courseFilter" class="form-select">
+                <option value="All">All Courses</option>
+                <?php foreach($courses as $course): ?>
+                  <option value="<?= htmlspecialchars($course) ?>"><?= htmlspecialchars($course) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
           </div>
 
           <div class="table-responsive">
@@ -203,16 +230,20 @@ if ($userRole === 'student') {
     const attendanceData = <?= json_encode($attendanceData) ?>;
     const tableBody = document.getElementById("attendanceTable");
     const courseFilter = document.getElementById("courseFilter");
+    const departmentFilter = document.getElementById("departmentFilter");
+    const optionFilter = document.getElementById("optionFilter");
     const percentDisplay = document.getElementById("attendancePercent");
     const circle = document.getElementById("circle");
     const userRole = '<?= $userRole ?>';
 
-    function loadTable(filter = "All") {
+    function loadTable(deptFilter = "All", optFilter = "All", courseFilter = "All") {
       tableBody.innerHTML = "";
       let total = 0, present = 0;
 
       attendanceData.forEach(record => {
-        if (filter === "All" || record.course === filter) {
+        if ((deptFilter === "All" || record.department === deptFilter) &&
+            (optFilter === "All" || record.option_name === optFilter) &&
+            (courseFilter === "All" || record.course === courseFilter)) {
           total++;
           if (record.status === "Present") present++;
 
@@ -258,8 +289,15 @@ if ($userRole === 'student') {
       }
     }
 
-    courseFilter.addEventListener("change", () => loadTable(courseFilter.value));
-    loadTable();
+    function applyFilters() {
+      loadTable(departmentFilter.value, optionFilter.value, courseFilter.value);
+    }
+
+    departmentFilter.addEventListener("change", applyFilters);
+    optionFilter.addEventListener("change", applyFilters);
+    courseFilter.addEventListener("change", applyFilters);
+
+    applyFilters();
   </script>
 </body>
 </html>

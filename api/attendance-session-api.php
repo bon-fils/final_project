@@ -403,7 +403,8 @@ function handleGetCourses(PDO $pdo): array {
         $pdo->query("SELECT 1 FROM attendance_records LIMIT 1");
 
         // Check for data issues
-        $stmt = $pdo->query("SELECT COUNT(*) as count FROM courses WHERE department_id = $department_id");
+        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM courses WHERE department_id = ?");
+        $stmt->execute([$department_id]);
         $course_count = $stmt->fetch()['count'];
 
         if ($course_count == 0) {
@@ -426,12 +427,13 @@ function handleGetCourses(PDO $pdo): array {
         }
 
         // Check if lecturer_id values in courses match lecturers table (but don't fail)
-        $stmt = $pdo->query("
+        $stmt = $pdo->prepare("
             SELECT c.lecturer_id, COUNT(*) as course_count
             FROM courses c
-            WHERE c.department_id = $department_id
+            WHERE c.department_id = ?
             GROUP BY c.lecturer_id
         ");
+        $stmt->execute([$department_id]);
         $lecturer_usage = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($lecturer_usage as $usage) {
@@ -639,7 +641,8 @@ function handleGetCourses(PDO $pdo): array {
 
         // Let's also check if the tables exist and have data
         try {
-            $stmt = $pdo->query("SELECT COUNT(*) as count FROM courses WHERE department_id = $department_id");
+            $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM courses WHERE department_id = ?");
+            $stmt->execute([$department_id]);
             $course_count = $stmt->fetch()['count'];
             error_log("Found $course_count courses for department $department_id");
 
@@ -647,7 +650,8 @@ function handleGetCourses(PDO $pdo): array {
             $lecturer_count = $stmt->fetch()['count'];
             error_log("Found $lecturer_count lecturers total");
 
-            $stmt = $pdo->query("SELECT lecturer_id, COUNT(*) as count FROM courses WHERE department_id = $department_id GROUP BY lecturer_id");
+            $stmt = $pdo->prepare("SELECT lecturer_id, COUNT(*) as count FROM courses WHERE department_id = ? GROUP BY lecturer_id");
+            $stmt->execute([$department_id]);
             $lecturer_usage = $stmt->fetchAll(PDO::FETCH_ASSOC);
             error_log("Lecturer usage in courses: " . print_r($lecturer_usage, true));
 
