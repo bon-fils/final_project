@@ -135,7 +135,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
         $action = $_GET['action'];
 
         // Validate CSRF token for state-changing operations
-        $csrfActions = ['add_department', 'delete_department', 'add_program', 'delete_program'];
+        $csrfActions = ['add_department', 'delete_department', 'add_program', 'delete_program', 'update_department_hod'];
         if (in_array($action, $csrfActions)) {
             $csrfValidation = $validator->validateCSRF($_POST['csrf_token'] ?? '', $_SESSION['csrf_token']);
             if (!$csrfValidation['valid']) {
@@ -154,6 +154,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 } else {
                     jsonResponse('error', $result['message'], [], 500);
                 }
+                break;
+
+            case 'get_available_hods':
+                $hods = $departmentManager->getAvailableHoDs();
+                jsonResponse('success', 'Available HODs retrieved', ['hods' => $hods]);
                 break;
 
             case 'add_department':
@@ -296,6 +301,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 } else {
                     // Log the detailed error for debugging
                     $logger->error("Delete program failed: " . $result['message']);
+                    jsonResponse('error', $result['message'], [], 400);
+                }
+                break;
+
+            case 'update_department_hod':
+                $deptId = (int)($_POST['department_id'] ?? 0);
+                $hodId = !empty($_POST['hod_id']) ? (int)$_POST['hod_id'] : null;
+
+                $deptValidation = $validator->validateId($deptId, 'Department ID');
+                if (!$deptValidation['valid']) {
+                    jsonResponse('error', $deptValidation['message'], [], 400);
+                }
+
+                $result = $departmentManager->updateDepartmentHod($deptId, $hodId);
+                if ($result['success']) {
+                    jsonResponse('success', $result['message'], $result['data']);
+                } else {
                     jsonResponse('error', $result['message'], [], 400);
                 }
                 break;
@@ -835,179 +857,97 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
     </div>
 
     <!-- Sidebar -->
-    <div class="sidebar position-fixed top-0 start-0 h-100 bg-primary text-white d-flex flex-column" style="width: 280px; z-index: 1000; box-shadow: 4px 0 20px rgba(0,0,0,0.15);">
-        <!-- Sidebar Header -->
-        <div class="sidebar-header p-4 text-center border-bottom border-white border-opacity-25">
-            <div class="user-avatar bg-white text-primary rounded-circle d-inline-flex align-items-center justify-content-center mb-3 shadow" style="width: 80px; height: 80px; font-size: 2rem;">
-                <i class="fas fa-user-tie"></i>
-            </div>
-            <h5 class="mb-1 fw-bold">Admin Dashboard</h5>
-            <p class="mb-0 opacity-75 small">Rwanda Polytechnic</p>
-            <div class="user-info mt-2">
-                <small class="opacity-75">Logged in as:</small><br>
-                <span class="fw-semibold">Administrator</span>
-            </div>
+    <div class="sidebar" id="sidebar">
+        <div class="logo">
+            <h3><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
+            <small>Admin Panel</small>
         </div>
 
-        <!-- Navigation Menu -->
-        <nav class="nav flex-column flex-grow-1 p-3 overflow-y-auto">
-            <div class="nav-section mb-4">
-                <h6 class="sidebar-heading text-uppercase fw-bold opacity-75 mb-3 px-2 small">
-                    <i class="fas fa-compass me-2"></i>Main Navigation
-                </h6>
-                <ul class="sidebar-nav">
-                    <li class="nav-section">
-                        <i class="fas fa-th-large me-2"></i>Main Dashboard
-                    </li>
-                    <li>
-                        <a href="admin-dashboard.php">
-                            <i class="fas fa-tachometer-alt"></i>Dashboard Overview
-                        </a>
-                    </li>
-       
-                    <li class="nav-section">
-                        <i class="fas fa-users me-2"></i>User Management
-                    </li>
-                    <li>
-                        <a href="manage-users.php">
-                            <i class="fas fa-users-cog"></i>Manage Users
-                        </a>
-                    </li>
-                    <li>
-                        <a href="register-student.php">
-                            <i class="fas fa-user-plus"></i>Register Student
-                        </a>
-                    </li>
-       
-                    <li class="nav-section">
-                        <i class="fas fa-sitemap me-2"></i>Organization
-                    </li>
-                    <li>
-                        <a href="#" class="active">
-                            <i class="fas fa-building"></i>Departments
-                        </a>
-                    </li>
-                    <li>
-                        <a href="assign-hod.php">
-                            <i class="fas fa-user-tie"></i>Assign HOD
-                        </a>
-                    </li>
-       
-                    <li class="nav-section">
-                        <i class="fas fa-chart-bar me-2"></i>Reports & Analytics
-                    </li>
-                    <li>
-                        <a href="admin-reports.php">
-                            <i class="fas fa-chart-line"></i>Analytics Reports
-                        </a>
-                    </li>
-                    <li>
-                        <a href="attendance-reports.php">
-                            <i class="fas fa-calendar-check"></i>Attendance Reports
-                        </a>
-                    </li>
-       
-                    <li class="nav-section">
-                        <i class="fas fa-cog me-2"></i>System
-                    </li>
-                    <li>
-                        <a href="system-logs.php">
-                            <i class="fas fa-file-code"></i>System Logs
-                        </a>
-                    </li>
-                    <li>
-                        <a href="hod-leave-management.php">
-                            <i class="fas fa-clipboard-list"></i>Leave Management
-                        </a>
-                    </li>
-       
-                    <li class="nav-section">
-                        <i class="fas fa-sign-out-alt me-2"></i>Account
-                    </li>
-                    <li>
-                        <a href="logout.php" class="text-danger">
-                            <i class="fas fa-sign-out-alt"></i>Logout
-                        </a>
-                    </li>
-                </ul>
-            </div>
-
-            <div class="nav-section mb-4">
-                <h6 class="sidebar-heading text-uppercase fw-bold opacity-75 mb-3 px-2 small">
-                    <i class="fas fa-cog me-2"></i>Management
-                </h6>
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="assign-hod.php">
-                            <i class="fas fa-user-tag me-3"></i>
-                            <span>Assign HoD</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="hod-manage-lecturers.php">
-                            <i class="fas fa-chalkboard-teacher me-3"></i>
-                            <span>Lecturers</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="leave-requests.php">
-                            <i class="fas fa-calendar-check me-3"></i>
-                            <span>Leave Requests</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="system-logs.php">
-                            <i class="fas fa-list-check me-3"></i>
-                            <span>System Logs</span>
-                        </a>
-                    </li>
-                </ul>
-            </div>
-
-            <div class="nav-section mb-4">
-                <h6 class="sidebar-heading text-uppercase fw-bold opacity-75 mb-3 px-2 small">
-                    <i class="fas fa-graduation-cap me-2"></i>Academic
-                </h6>
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="my-courses.php">
-                            <i class="fas fa-book me-3"></i>
-                            <span>Courses</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="attendance-records.php">
-                            <i class="fas fa-clipboard-list me-3"></i>
-                            <span>Attendance</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link text-white py-2 px-3 rounded mb-1" href="students-dashboard.php">
-                            <i class="fas fa-user-graduate me-3"></i>
-                            <span>Students</span>
-                        </a>
-                    </li>
-                </ul>
-            </div>
-        </nav>
-
-        <!-- Sidebar Footer -->
-        <div class="sidebar-footer p-3 border-top border-white border-opacity-25">
-            <div class="d-flex align-items-center mb-2">
-                <div class="flex-grow-1">
-                    <div class="d-flex align-items-center">
-                        <div class="online-indicator bg-success rounded-circle me-2" style="width: 8px; height: 8px;"></div>
-                        <small class="text-white opacity-75">System Online</small>
-                    </div>
-                </div>
-                <a href="logout.php" class="btn btn-outline-light btn-sm" title="Logout">
-                    <i class="fas fa-sign-out-alt"></i>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <i class="fas fa-th-large me-2"></i>Main Dashboard
+            </li>
+            <li>
+                <a href="admin-dashboard.php">
+                    <i class="fas fa-tachometer-alt"></i>Dashboard Overview
                 </a>
-            </div>
-            <div class="text-center">
-                <small class="opacity-50">© 2024 RP Attendance System</small>
-            </div>
-        </div>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-users me-2"></i>User Management
+            </li>
+            <li>
+                <a href="register-student.php">
+                    <i class="fas fa-user-plus"></i>Register Student
+                </a>
+            </li>
+            <li>
+                <a href="manage-users.php?role=lecturer">
+                    <i class="fas fa-chalkboard-teacher"></i>Register Lecturer
+                </a>
+            </li>
+            <li>
+                <a href="manage-users.php">
+                    <i class="fas fa-users-cog"></i>Manage Users
+                </a>
+            </li>
+            <li>
+                <a href="admin-view-users.php">
+                    <i class="fas fa-users"></i>View Users
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-sitemap me-2"></i>Organization
+            </li>
+            <li>
+                <a href="manage-departments.php" class="active">
+                    <i class="fas fa-building"></i>Departments
+                </a>
+            </li>
+            <li>
+                <a href="assign-hod.php">
+                    <i class="fas fa-user-tie"></i>Assign HOD
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-chart-bar me-2"></i>Reports & Analytics
+            </li>
+            <li>
+                <a href="admin-reports.php">
+                    <i class="fas fa-chart-line"></i>Analytics Reports
+                </a>
+            </li>
+            <li>
+                <a href="attendance-reports.php">
+                    <i class="fas fa-calendar-check"></i>Attendance Reports
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-cog me-2"></i>System
+            </li>
+            <li>
+                <a href="system-logs.php">
+                    <i class="fas fa-file-code"></i>System Logs
+                </a>
+            </li>
+            <li>
+                <a href="hod-leave-management.php">
+                    <i class="fas fa-clipboard-list"></i>Leave Management
+                </a>
+            </li>
+
+            <li class="nav-section">
+                <i class="fas fa-sign-out-alt me-2"></i>Account
+            </li>
+            <li>
+                <a href="logout.php" class="text-danger">
+                    <i class="fas fa-sign-out-alt"></i>Logout
+                </a>
+            </li>
+        </ul>
     </div>
 
     <!-- Main Content -->
@@ -1137,6 +1077,56 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
         </div>
     </div>
 
+    <!-- Change HOD Modal -->
+    <div class="modal fade" id="changeHodModal" tabindex="-1" aria-labelledby="changeHodModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="changeHodModalLabel">
+                        <i class="fas fa-user-tie me-2"></i>Change Head of Department
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Current HOD Display -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Current Head of Department</label>
+                        <div class="bg-light p-3 rounded" id="currentHodDisplay">
+                            <i class="fas fa-user-tie me-2 text-primary"></i>
+                            <span id="currentHodName">Loading...</span>
+                        </div>
+                    </div>
+
+                    <form id="changeHodForm">
+                        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                        <input type="hidden" id="modalDeptId" name="department_id">
+                        <div class="mb-3">
+                            <label for="hodSelectModal" class="form-label fw-semibold">Select New Head of Department</label>
+                            <select class="form-select" id="hodSelectModal" name="hod_id">
+                                <option value="">-- Unassign HOD (Remove Current Assignment) --</option>
+                                <!-- Available lecturers will be loaded here -->
+                            </select>
+                        </div>
+                        <div class="alert alert-info small">
+                            <i class="fas fa-info-circle me-1"></i>
+                            <strong>To assign a new HOD:</strong> Select a lecturer from the dropdown.<br>
+                            <strong>To remove the current HOD:</strong> Select "Unassign HOD" option.<br>
+                            <small class="text-muted">Only lecturers assigned to this department can be selected as HOD.</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" id="saveHodChange">
+                        <i class="fas fa-save me-2"></i>Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         class DepartmentsManager {
@@ -1149,6 +1139,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             init() {
                 this.setupEventHandlers();
+                this.setupCrossPageListeners();
                 this.loadInitialData();
             }
 
@@ -1173,6 +1164,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                         this.viewProgramDetails(e.target.dataset.programId);
                     } else if (e.target.classList.contains('debug-program')) {
                         this.debugProgram(e.target.dataset.programId, e.target.dataset.programName);
+                    } else if (e.target.classList.contains('change-hod')) {
+                        this.openChangeHodModal(e.target.dataset.deptId, e.target.dataset.deptName, e.target.dataset.currentHodId);
                     }
                 });
 
@@ -1185,6 +1178,20 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
                 // Form validation on input
                 document.getElementById('departmentName').addEventListener('input', (e) => this.validateDepartmentName(e.target));
+
+                // Save HOD change button
+                document.getElementById('saveHodChange').addEventListener('click', () => this.saveHodChange());
+            }
+
+            setupCrossPageListeners() {
+                // Listen for user-related changes from other pages
+                window.addEventListener('storage', (e) => {
+                    if (e.key === 'user_role_changed' || e.key === 'user_status_changed' || e.key === 'user_changed') {
+                        console.log('User change detected from another page, refreshing department data...');
+                        this.loadDepartments();
+                        this.loadStatistics();
+                    }
+                });
             }
 
             async apiCall(action, data = null, method = 'POST', retryCount = 0) {
@@ -1384,6 +1391,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                         </div>
 
                         <div class="d-flex gap-2 justify-content-end">
+                            <button class="btn btn-sm ${dept.hod_id ? 'btn-outline-warning' : 'btn-outline-success'} change-hod"
+                                    data-dept-id="${dept.dept_id}"
+                                    data-dept-name="${this.escapeHtml(dept.dept_name)}"
+                                    data-current-hod-id="${dept.hod_id || ''}"
+                                    data-current-hod-name="${this.escapeHtml(dept.hod_name)}">
+                                <i class="fas fa-user-tie me-1"></i>${dept.hod_id ? 'Change HOD' : 'Assign HOD'}
+                            </button>
                             <button class="btn btn-sm btn-outline-danger delete-department"
                                     data-dept-id="${dept.dept_id}"
                                     data-dept-name="${this.escapeHtml(dept.dept_name)}">
@@ -1497,6 +1511,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                         this.clearProgramFields();
                         await this.loadDepartments();
                         await this.loadStatistics(); // Refresh statistics too
+                        // Trigger cross-page update for user management
+                        this.triggerCrossPageUpdate('department_changed', { timestamp: Date.now() });
                     } else {
                         this.showAlert('danger', result.message || 'Failed to create department');
                     }
@@ -1592,6 +1608,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                     });
                     this.showAlert('success', result.message);
                     await this.loadDepartments();
+                    await this.loadStatistics();
+                    // Trigger cross-page update for user management
+                    this.triggerCrossPageUpdate('department_changed', { timestamp: Date.now() });
                 } catch (error) {
                     this.showAlert('danger', error.message);
                 }
@@ -1620,6 +1639,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                         this.showAlert('success', result.message);
                         inputField.value = ''; // Clear the input
                         await this.loadDepartments();
+                        await this.loadStatistics();
+                        // Trigger cross-page update for user management
+                        this.triggerCrossPageUpdate('department_changed', { timestamp: Date.now() });
                     } else {
                         this.showAlert('danger', result.message || 'Failed to add program');
                     }
@@ -1860,6 +1882,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                         this.showAlert('success', result.message);
                         await this.loadDepartments();
                         await this.loadStatistics(); // Refresh statistics too
+                        // Trigger cross-page update for user management
+                        this.triggerCrossPageUpdate('department_changed', { timestamp: Date.now() });
                     } else {
                         this.showAlert('danger', result.message || 'Failed to delete program');
                     }
@@ -1899,6 +1923,136 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
             removeProgramField(button) {
                 const container = document.getElementById('programsContainer');
                 if (container.children.length > 1) button.closest('.input-group').remove();
+            }
+
+            async openChangeHodModal(deptId, deptName, currentHodId) {
+                // Set department ID in the form
+                document.getElementById('modalDeptId').value = deptId;
+
+                // Update modal title
+                document.getElementById('changeHodModalLabel').innerHTML =
+                    `<i class="fas fa-user-tie me-2"></i>Change HOD for ${this.escapeHtml(deptName)}`;
+
+                // Display current HOD information
+                const currentHodDisplay = document.getElementById('currentHodName');
+                if (currentHodId && currentHodId !== '') {
+                    // Find the current HOD name from the department data
+                    const deptItem = document.querySelector(`[data-dept-id="${deptId}"]`);
+                    if (deptItem) {
+                        const hodElement = deptItem.querySelector('.text-muted strong');
+                        if (hodElement && hodElement.nextSibling) {
+                            const hodName = hodElement.nextSibling.textContent.trim();
+                            currentHodDisplay.innerHTML = `<strong>${this.escapeHtml(hodName)}</strong>`;
+                        } else {
+                            currentHodDisplay.innerHTML = `<em class="text-muted">Unknown</em>`;
+                        }
+                    } else {
+                        currentHodDisplay.innerHTML = `<em class="text-muted">Loading...</em>`;
+                    }
+                } else {
+                    currentHodDisplay.innerHTML = `<em class="text-warning">Not Assigned</em>`;
+                }
+
+                // Load available HODs for this department
+                await this.loadAvailableHods(deptId, currentHodId);
+
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('changeHodModal'));
+                modal.show();
+            }
+
+            async loadAvailableHods(deptId, currentHodId) {
+                try {
+                    const result = await this.apiCall('get_available_hods', { department_id: deptId }, 'GET');
+                    if (result.status === 'success') {
+                        const select = document.getElementById('hodSelectModal');
+                        // Clear existing options except the first one
+                        select.innerHTML = '<option value="">-- Unassign HOD --</option>';
+
+                        // Add HOD options
+                        result.data.hods.forEach(hod => {
+                            const option = document.createElement('option');
+                            option.value = hod.id;
+                            option.textContent = hod.username;
+                            if (hod.id == currentHodId) {
+                                option.selected = true;
+                            }
+                            select.appendChild(option);
+                        });
+                    } else {
+                        this.showAlert('danger', 'Failed to load available HODs');
+                    }
+                } catch (error) {
+                    console.error('Load HODs error:', error);
+                    this.showAlert('danger', 'Failed to load available HODs');
+                }
+            }
+
+            async saveHodChange() {
+                const form = document.getElementById('changeHodForm');
+                const formData = new FormData(form);
+                const deptId = formData.get('department_id');
+                const hodId = formData.get('hod_id');
+
+                // Get selected option text for confirmation
+                const selectElement = document.getElementById('hodSelectModal');
+                const selectedOption = selectElement.options[selectElement.selectedIndex];
+                const selectedText = selectedOption.text;
+
+                // Confirmation for unassignment
+                if (!hodId || hodId === '') {
+                    const confirmUnassign = confirm(`Are you sure you want to remove the current Head of Department assignment?\n\nThis will unassign the HOD and change their role back to lecturer if they're not HOD for any other department.`);
+                    if (!confirmUnassign) {
+                        return;
+                    }
+                }
+
+                // Show loading state
+                const saveBtn = document.getElementById('saveHodChange');
+                const originalText = saveBtn.innerHTML;
+                saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
+                saveBtn.disabled = true;
+
+                try {
+                    const result = await this.apiCall('update_department_hod', {
+                        department_id: deptId,
+                        hod_id: hodId,
+                        csrf_token: this.csrfToken
+                    });
+
+                    if (result.status === 'success') {
+                        const action = hodId ? `assigned ${selectedText} as HOD` : 'unassigned the current HOD';
+                        this.showAlert('success', `Department HOD ${action} successfully!`);
+                        // Close modal
+                        const modal = bootstrap.Modal.getInstance(document.getElementById('changeHodModal'));
+                        modal.hide();
+                        // Refresh departments
+                        await this.loadDepartments();
+                        await this.loadStatistics();
+
+                        // Trigger cross-page update for user management
+                        this.triggerCrossPageUpdate('department_hod_changed', { timestamp: Date.now() });
+                    } else {
+                        this.showAlert('danger', result.message || 'Failed to update department HOD');
+                    }
+                } catch (error) {
+                    console.error('Save HOD change error:', error);
+                    this.showAlert('danger', `Failed to update department HOD: ${error.message}`);
+                } finally {
+                    // Restore button
+                    saveBtn.innerHTML = originalText;
+                    saveBtn.disabled = false;
+                }
+            }
+
+            triggerCrossPageUpdate(eventType, data) {
+                try {
+                    localStorage.setItem(eventType, JSON.stringify(data));
+                    // Immediately remove to trigger storage event in other tabs
+                    setTimeout(() => localStorage.removeItem(eventType), 100);
+                } catch (e) {
+                    console.warn('Cross-page update failed:', e);
+                }
             }
 
             showAlert(type, message) {

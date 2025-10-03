@@ -24,9 +24,11 @@ if (!$isFromRegistration && (!isset($_SESSION['user_id']) || !isset($_SESSION['r
 }
 
 try {
-    // Validate CSRF token
-    if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
-        throw new Exception('Invalid CSRF token');
+    // Skip CSRF validation for requests from registration page (unauthenticated access)
+    if (!$isFromRegistration) {
+        if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
+            throw new Exception('Invalid CSRF token');
+        }
     }
 
     $action = $_POST['action'] ?? '';

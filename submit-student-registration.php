@@ -4,30 +4,80 @@
  * Processes student registration form data
  */
 
-require_once 'session_check.php';
 require_once 'config.php';
 require_once 'security_utils.php';
 require_once 'backend/classes/Logger.php';
+
+// Allow demo access for student registration when called from registration page
+$referer = $_SERVER['HTTP_REFERER'] ?? '';
+$isFromRegistration = strpos($referer, 'register-student.php') !== false;
+
+if (!$isFromRegistration) {
+    require_once 'session_check.php';
+} else {
+    // For registration page access, initialize session and CSRF token
+    session_start();
+    if (!isset($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+}
 
 header('Content-Type: application/json');
 
 try {
     // Initialize logger
-    $logger = new Logger([
-        'file' => 'logs/student_registration.log',
-        'level' => Logger::INFO,
-        'database' => true,
-        'pdo' => $pdo
-    ]);
+    $logger = new Logger('logs/student_registration.log', Logger::INFO);
 
-    // Validate CSRF token
-    if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
-        throw new Exception('Invalid CSRF token');
+    // Process the registration
+    $result = processStudentRegistration($pdo, $logger, $isFromRegistration);
+    echo json_encode($result);
+
+} catch (Exception $e) {
+    handleRegistrationError($e, $logger ?? null);
+}
+
+/**
+ * Main function to process student registration
+ */
+function processStudentRegistration($pdo, $logger, $isFromRegistration) {
+    // Validate CSRF token if not from registration page
+    if (!$isFromRegistration && !validate_csrf_token($_POST['csrf_token'] ?? '')) {
+        return createErrorResponse('Invalid CSRF token', 403);
     }
 
+    // Validate input data
+    $validationResult = validateStudentInput($_POST, $logger);
+    if (!$validationResult['valid']) {
+        return $validationResult['response'];
+    }
 
-    // Use InputValidator for robust validation
-    $validator = new InputValidator($_POST);
+    $studentData = $validationResult['data'];
+
+    // Check for duplicates
+    $duplicateCheck = checkForDuplicateStudent($pdo, $studentData, $logger);
+    if ($duplicateCheck) {
+        return $duplicateCheck;
+    }
+
+    // Validate department and option relationships
+    $relationshipCheck = validateDepartmentOptionRelationship($pdo, $studentData, $logger);
+    if ($relationshipCheck) {
+        return $relationshipCheck;
+    }
+
+    // Handle file uploads
+    $photoPath = handlePhotoUploadSafely($_FILES['photo'] ?? null);
+    $fingerprintData = handleFingerprintDataSafely($_POST['fingerprint_data'] ?? null, $studentData['reg_no']);
+
+    // Create user and student records
+    return createStudentRecords($pdo, $studentData, $photoPath, $fingerprintData, $logger, $isFromRegistration);
+}
+
+/**
+ * Validate student input data
+ */
+function validateStudentInput($postData, $logger) {
+    $validator = new InputValidator($postData);
     $validator
         ->required(['first_name', 'last_name', 'email', 'telephone', 'department_id', 'option_id', 'reg_no', 'sex', 'year_level'])
         ->length('first_name', 2, 50)
@@ -35,31 +85,26 @@ try {
         ->email('email')
         ->phone('telephone')
         ->length('reg_no', 5, 20)
-        // Validate select options are not left as default/empty
         ->custom('department_id', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid department')
         ->custom('option_id', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid program')
         ->custom('year_level', fn($v) => in_array($v, ['1','2','3']), 'Please select a valid year level')
         ->custom('sex', fn($v) => in_array($v, ['Male','Female']), 'Please select a valid gender');
 
-    // Optional: validate location selects if provided
-    if (!empty($_POST['province'])) {
+    // Optional validations
+    if (!empty($postData['province'])) {
         $validator->custom('province', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid province');
     }
-    if (!empty($_POST['district'])) {
+    if (!empty($postData['district'])) {
         $validator->custom('district', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid district');
     }
-    if (!empty($_POST['sector'])) {
+    if (!empty($postData['sector'])) {
         $validator->custom('sector', fn($v) => !empty($v) && $v !== '' && $v !== '0', 'Please select a valid sector');
     }
-
-    // Optional: validate parent contact if provided
-    if (!empty($_POST['parent_contact'])) {
+    if (!empty($postData['parent_contact'])) {
         $validator->phone('parent_contact');
     }
-
-    // Optional: validate date of birth (age 16-60)
-    if (!empty($_POST['dob'])) {
-        $dob = $_POST['dob'];
+    if (!empty($postData['dob'])) {
+        $dob = $postData['dob'];
         $birthDate = DateTime::createFromFormat('Y-m-d', $dob);
         $today = new DateTime();
         $age = $birthDate ? $today->diff($birthDate)->y : null;
@@ -71,202 +116,312 @@ try {
     if ($validator->fails()) {
         $logger->warning('StudentRegistration', 'Validation failed for student registration', [
             'errors' => $validator->errors(),
-            'email' => $_POST['email'] ?? 'unknown'
+            'email' => $postData['email'] ?? 'unknown'
         ]);
 
-        http_response_code(422);
-        echo json_encode([
-            'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $validator->errors()
-        ]);
-        exit;
+        return [
+            'valid' => false,
+            'response' => createErrorResponse('Validation failed', 422, $validator->errors())
+        ];
     }
 
-    // Sanitize input data
+    // Sanitize and return data
     $studentData = [
-        'first_name' => DataSanitizer::string($_POST['first_name']),
-        'last_name' => DataSanitizer::string($_POST['last_name']),
-        'email' => DataSanitizer::email($_POST['email']),
-        'telephone' => DataSanitizer::string($_POST['telephone']),
-        'department_id' => (int)$_POST['department_id'],
-        'option_id' => (int)$_POST['option_id'],
-        'reg_no' => DataSanitizer::string($_POST['reg_no']),
-        'student_id' => DataSanitizer::string($_POST['studentIdNumber'] ?? ''),
-        'province' => DataSanitizer::string($_POST['province'] ?? ''),
-        'district' => DataSanitizer::string($_POST['district'] ?? ''),
-        'sector' => DataSanitizer::string($_POST['sector'] ?? ''),
-        'cell' => DataSanitizer::string($_POST['cell'] ?? ''),
-        'parent_first_name' => DataSanitizer::string($_POST['parent_first_name'] ?? ''),
-        'parent_last_name' => DataSanitizer::string($_POST['parent_last_name'] ?? ''),
-        'parent_contact' => DataSanitizer::string($_POST['parent_contact'] ?? ''),
-        'dob' => DataSanitizer::string($_POST['dob'] ?? ''),
-        'sex' => DataSanitizer::string($_POST['sex'] ?? ''),
-        'year_level' => (int)($_POST['year_level'] ?? 1),
-        'registration_date' => date('Y-m-d H:i:s')
+        'first_name' => DataSanitizer::string($postData['first_name']),
+        'last_name' => DataSanitizer::string($postData['last_name']),
+        'email' => DataSanitizer::email($postData['email']),
+        'telephone' => DataSanitizer::string($postData['telephone']),
+        'department_id' => (int)$postData['department_id'],
+        'option_id' => (int)$postData['option_id'],
+        'reg_no' => DataSanitizer::string($postData['reg_no']),
+        'student_id' => DataSanitizer::string($postData['studentIdNumber'] ?? ''),
+        'province' => DataSanitizer::string($postData['province'] ?? ''),
+        'district' => DataSanitizer::string($postData['district'] ?? ''),
+        'sector' => DataSanitizer::string($postData['sector'] ?? ''),
+        'cell' => DataSanitizer::string($postData['cell'] ?? ''),
+        'parent_first_name' => DataSanitizer::string($postData['parent_first_name'] ?? ''),
+        'parent_last_name' => DataSanitizer::string($postData['parent_last_name'] ?? ''),
+        'parent_contact' => DataSanitizer::string($postData['parent_contact'] ?? ''),
+        'dob' => DataSanitizer::string($postData['dob'] ?? ''),
+        'sex' => DataSanitizer::string($postData['sex'] ?? ''),
+        'year_level' => (int)($postData['year_level'] ?? 1)
     ];
 
+    return ['valid' => true, 'data' => $studentData];
+}
 
-    // Check for unique reg_no and email
-    $existingStudent = $pdo->prepare("
-        SELECT id FROM students
-        WHERE email = ? OR reg_no = ?
-    ");
-    $existingStudent->execute([
-        $studentData['email'],
-        $studentData['reg_no']
-    ]);
-    if ($existingStudent->fetch()) {
-        $logger->warning('StudentRegistration', 'Duplicate student registration attempt', [
+/**
+ * Check for duplicate students
+ */
+function checkForDuplicateStudent($pdo, $studentData, $logger) {
+    try {
+        // Check both users and students tables for duplicates
+        $stmt = $pdo->prepare("
+            SELECT 'email' as type, COUNT(*) as count FROM users WHERE email = ?
+            UNION ALL
+            SELECT 'reg_no' as type, COUNT(*) as count FROM users WHERE username = ?
+            UNION ALL
+            SELECT 'email_student' as type, COUNT(*) as count FROM students WHERE email = ?
+            UNION ALL
+            SELECT 'reg_no_student' as type, COUNT(*) as count FROM students WHERE reg_no = ?
+        ");
+        $stmt->execute([
+            $studentData['email'],
+            $studentData['reg_no'],
+            $studentData['email'],
+            $studentData['reg_no']
+        ]);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Debug logging
+        $logger->info('StudentRegistration', 'Duplicate check results', [
+            'email' => $studentData['email'],
+            'reg_no' => $studentData['reg_no'],
+            'results' => $results
+        ]);
+
+        $userEmailExists = $results[0]['count'] > 0;
+        $userRegNoExists = $results[1]['count'] > 0;
+        $studentEmailExists = $results[2]['count'] > 0;
+        $studentRegNoExists = $results[3]['count'] > 0;
+
+        if ($userEmailExists || $userRegNoExists || $studentEmailExists || $studentRegNoExists) {
+            $duplicateTypes = [];
+            if ($userEmailExists || $studentEmailExists) $duplicateTypes[] = 'email';
+            if ($userRegNoExists || $studentRegNoExists) $duplicateTypes[] = 'registration number';
+
+            $duplicateType = implode(' and ', $duplicateTypes);
+
+            $logger->warning('StudentRegistration', 'Duplicate student registration attempt', [
+                'email' => $studentData['email'],
+                'reg_no' => $studentData['reg_no'],
+                'duplicate_type' => $duplicateType,
+                'user_email_exists' => $userEmailExists,
+                'user_regno_exists' => $userRegNoExists,
+                'student_email_exists' => $studentEmailExists,
+                'student_regno_exists' => $studentRegNoExists
+            ]);
+
+            return createErrorResponse("Student with this $duplicateType already exists.", 409);
+        }
+
+        return null;
+    } catch (Exception $e) {
+        $logger->error('StudentRegistration', 'Error in duplicate check', [
+            'error' => $e->getMessage(),
             'email' => $studentData['email'],
             'reg_no' => $studentData['reg_no']
         ]);
-
-        http_response_code(409);
-        echo json_encode([
-            'success' => false,
-            'message' => 'Student with this email or registration number already exists.'
-        ]);
-        exit;
+        throw $e;
     }
+}
 
-    // Validate department exists
-    $deptCheck = $pdo->prepare("SELECT id FROM departments WHERE id = ?");
-    $deptCheck->execute([$studentData['department_id']]);
-    if (!$deptCheck->fetch()) {
+/**
+ * Validate department and option relationships
+ */
+function validateDepartmentOptionRelationship($pdo, $studentData, $logger) {
+    // Validate department and option in a single query for better performance
+    $stmt = $pdo->prepare("
+        SELECT
+            (SELECT COUNT(*) FROM departments WHERE id = ?) as dept_exists,
+            (SELECT COUNT(*) FROM options WHERE id = ? AND department_id = ?) as option_exists
+    ");
+    $stmt->execute([
+        $studentData['department_id'],
+        $studentData['option_id'],
+        $studentData['department_id']
+    ]);
+
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($result['dept_exists'] == 0) {
         $logger->warning('StudentRegistration', 'Invalid department ID', [
             'department_id' => $studentData['department_id']
         ]);
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'message' => 'Invalid department selected.'
-        ]);
-        exit;
+        return createErrorResponse('Invalid department selected.', 400);
     }
 
-    // Validate option exists and belongs to department
-    $optionCheck = $pdo->prepare("SELECT id FROM department_options WHERE id = ? AND department_id = ?");
-    $optionCheck->execute([$studentData['option_id'], $studentData['department_id']]);
-    if (!$optionCheck->fetch()) {
+    if ($result['option_exists'] == 0) {
         $logger->warning('StudentRegistration', 'Invalid program option', [
             'option_id' => $studentData['option_id'],
             'department_id' => $studentData['department_id']
         ]);
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'message' => 'Invalid program selected for the chosen department.'
+        return createErrorResponse('Invalid program selected for the chosen department.', 400);
+    }
+
+    return null;
+}
+
+/**
+ * Handle photo upload safely
+ */
+function handlePhotoUploadSafely($file) {
+    if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+        return null;
+    }
+
+    return handlePhotoUpload($file);
+}
+
+/**
+ * Handle fingerprint data safely
+ */
+function handleFingerprintDataSafely($fingerprintData, $regNo) {
+    if (empty($fingerprintData)) {
+        return ['path' => null, 'quality' => 0];
+    }
+
+    return processFingerprintData($fingerprintData, $regNo);
+}
+
+/**
+ * Create user and student records
+ */
+function createStudentRecords($pdo, $studentData, $photoPath, $fingerprintData, $logger, $isFromRegistration) {
+    try {
+        // Begin transaction before any inserts
+        $pdo->beginTransaction();
+
+        // Create user account first
+        $defaultPassword = password_hash($studentData['reg_no'], PASSWORD_BCRYPT);
+
+        $insertUser = $pdo->prepare("
+            INSERT INTO users (username, email, password, role, status, created_at)
+            VALUES (:username, :email, :password, 'student', 'active', NOW())
+        ");
+        $insertUser->execute([
+            ':username' => $studentData['reg_no'],
+            ':email' => $studentData['email'],
+            ':password' => $defaultPassword
         ]);
-        exit;
+        $userId = $pdo->lastInsertId();
+
+        // Insert student record
+        $insertStudent = $pdo->prepare("
+            INSERT INTO students (
+                user_id, first_name, last_name, email, telephone, department_id, option_id,
+                reg_no, student_id_number, province, district, sector, cell, parent_first_name,
+                parent_last_name, parent_contact, dob, sex, year_level, photo, fingerprint,
+                password, fingerprint_path, fingerprint_quality
+            ) VALUES (
+                :user_id, :first_name, :last_name, :email, :telephone, :department_id, :option_id,
+                :reg_no, :student_id, :province, :district, :sector, :cell, :parent_first_name,
+                :parent_last_name, :parent_contact, :dob, :sex, :year_level, :photo_path,
+                :fingerprint_hash, :password, :fingerprint_path, :fingerprint_quality
+            )
+        ");
+
+        $insertStudent->execute([
+            ':user_id' => $userId,
+            ':first_name' => $studentData['first_name'],
+            ':last_name' => $studentData['last_name'],
+            ':email' => $studentData['email'],
+            ':telephone' => $studentData['telephone'],
+            ':department_id' => $studentData['department_id'],
+            ':option_id' => $studentData['option_id'],
+            ':reg_no' => $studentData['reg_no'],
+            ':student_id' => $studentData['student_id'],
+            ':province' => $studentData['province'],
+            ':district' => $studentData['district'],
+            ':sector' => $studentData['sector'],
+            ':cell' => $studentData['cell'],
+            ':parent_first_name' => $studentData['parent_first_name'],
+            ':parent_last_name' => $studentData['parent_last_name'],
+            ':parent_contact' => $studentData['parent_contact'],
+            ':dob' => $studentData['dob'],
+            ':sex' => $studentData['sex'],
+            ':year_level' => $studentData['year_level'],
+            ':photo_path' => $photoPath,
+            ':fingerprint_hash' => $fingerprintData['path'] ? password_hash($fingerprintData['path'], PASSWORD_BCRYPT) : null,
+            ':password' => $defaultPassword,
+            ':fingerprint_path' => $fingerprintData['path'],
+            ':fingerprint_quality' => $fingerprintData['quality']
+        ]);
+
+        $studentId = $pdo->lastInsertId();
+
+        // Log the registration
+        $logger->info('StudentRegistration', 'New student registered successfully', [
+            'student_name' => $studentData['first_name'] . ' ' . $studentData['last_name'],
+            'reg_no' => $studentData['reg_no'],
+            'email' => $studentData['email'],
+            'user_id' => $userId,
+            'student_id' => $studentId,
+            'registered_by' => $_SESSION['user_id'] ?? null,
+            'fingerprint_enrolled' => !empty($fingerprintData['path'])
+        ]);
+
+        $pdo->commit();
+
+        $message = 'Student registered successfully!';
+        if ($fingerprintData['path']) {
+            $message .= ' Fingerprint enrolled successfully!';
+        }
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'student_id' => $studentId,
+            'fingerprint_enrolled' => !empty($fingerprintData['path']),
+            'redirect' => 'admin-dashboard.php'
+        ];
+
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+
+        // Handle specific database constraint violations
+        if ($e->getCode() == 23000) { // Integrity constraint violation
+            if (strpos($e->getMessage(), 'email') !== false) {
+                $logger->error('StudentRegistration', 'Duplicate email constraint violation', [
+                    'email' => $studentData['email'],
+                    'error' => $e->getMessage()
+                ]);
+                return createErrorResponse('A user with this email address already exists.', 409);
+            } elseif (strpos($e->getMessage(), 'username') !== false) {
+                $logger->error('StudentRegistration', 'Duplicate username constraint violation', [
+                    'reg_no' => $studentData['reg_no'],
+                    'error' => $e->getMessage()
+                ]);
+                return createErrorResponse('A user with this registration number already exists.', 409);
+            }
+        }
+
+        // Log and re-throw other database errors
+        $logger->error('StudentRegistration', 'Database error during student creation', [
+            'error' => $e->getMessage(),
+            'code' => $e->getCode(),
+            'email' => $studentData['email'],
+            'reg_no' => $studentData['reg_no']
+        ]);
+        throw $e;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
     }
+}
 
-
-    // Handle photo upload (optional)
-    $photoPath = null;
-    if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
-        $photoPath = handlePhotoUpload($_FILES['photo']);
+/**
+ * Create error response
+ */
+function createErrorResponse($message, $statusCode = 400, $errors = null) {
+    http_response_code($statusCode);
+    $response = ['success' => false, 'message' => $message];
+    if ($errors) {
+        $response['errors'] = $errors;
     }
+    return $response;
+}
 
-
-    // Handle fingerprint data (optional)
-    $fingerprintPath = null;
-    $fingerprintQuality = null;
-    if (isset($_POST['fingerprint_data']) && !empty($_POST['fingerprint_data'])) {
-        $fingerprintResult = processFingerprintData($_POST['fingerprint_data'], $studentData['reg_no']);
-        $fingerprintPath = $fingerprintResult['path'];
-        $fingerprintQuality = $fingerprintResult['quality'];
-    }
-
-    // Create user account first
-    $defaultPassword = password_hash($studentData['reg_no'], PASSWORD_BCRYPT); // Use reg_no as default password
-
-    $insertUser = $pdo->prepare("
-        INSERT INTO users (username, email, password, role, status, created_at)
-        VALUES (:username, :email, :password, 'student', 'active', NOW())
-    ");
-    $insertUser->execute([
-        ':username' => $studentData['reg_no'], // Use reg_no as username
-        ':email' => $studentData['email'],
-        ':password' => $defaultPassword
-    ]);
-    $userId = $pdo->lastInsertId();
-
-    // Insert student record
-    $pdo->beginTransaction();
-
-    $insertStudent = $pdo->prepare("
-        INSERT INTO students (
-            user_id, first_name, last_name, email, telephone, department_id, option_id,
-            reg_no, student_id_number, province, district, sector, cell, parent_first_name, parent_last_name, parent_contact, dob, sex, year_level, photo, fingerprint, password, fingerprint_path, fingerprint_quality, registration_date, created_at
-        ) VALUES (
-            :user_id, :first_name, :last_name, :email, :telephone, :department_id, :option_id,
-            :reg_no, :student_id, :province, :district, :sector, :cell, :parent_first_name, :parent_last_name, :parent_contact, :dob, :sex, :year_level, :photo_path, :fingerprint_hash, :password, :fingerprint_path, :fingerprint_quality, :registration_date, NOW()
-        )
-    ");
-
-    $insertStudent->execute([
-        ':user_id' => $userId,
-        ':first_name' => $studentData['first_name'],
-        ':last_name' => $studentData['last_name'],
-        ':email' => $studentData['email'],
-        ':telephone' => $studentData['telephone'],
-        ':department_id' => $studentData['department_id'],
-        ':option_id' => $studentData['option_id'],
-        ':reg_no' => $studentData['reg_no'],
-        ':student_id' => $studentData['student_id'],
-        ':province' => $studentData['province'],
-        ':district' => $studentData['district'],
-        ':sector' => $studentData['sector'],
-        ':cell' => $studentData['cell'],
-        ':parent_first_name' => $studentData['parent_first_name'],
-        ':parent_last_name' => $studentData['parent_last_name'],
-        ':parent_contact' => $studentData['parent_contact'],
-        ':dob' => $studentData['dob'],
-        ':sex' => $studentData['sex'],
-        ':year_level' => $studentData['year_level'],
-        ':photo_path' => $photoPath,
-        ':fingerprint_hash' => $fingerprintPath ? password_hash($fingerprintPath, PASSWORD_BCRYPT) : null, // Store hash of fingerprint data or NULL
-        ':password' => $defaultPassword,
-        ':fingerprint_path' => $fingerprintPath,
-        ':fingerprint_quality' => $fingerprintQuality,
-        ':registration_date' => $studentData['registration_date']
-    ]);
-
-    $studentId = $pdo->lastInsertId();
-
-    // Log the registration
-    $logger->info('StudentRegistration', 'New student registered successfully', [
-        'student_name' => $studentData['first_name'] . ' ' . $studentData['last_name'],
-        'reg_no' => $studentData['reg_no'],
-        'email' => $studentData['email'],
-        'user_id' => $userId,
-        'registered_by' => $_SESSION['user_id'] ?? null,
-        'fingerprint_enrolled' => !empty($fingerprintPath)
-    ]);
-
-    $pdo->commit();
-
-    $message = 'Student registered successfully!';
-    if ($fingerprintPath) {
-        $message .= ' Fingerprint enrolled successfully!';
-    }
-
-    echo json_encode([
-        'success' => true,
-        'message' => $message,
-        'student_id' => $studentId,
-        'fingerprint_enrolled' => !empty($fingerprintPath),
-        'redirect' => 'admin-dashboard.php'
-    ]);
-
-} catch (Exception $e) {
-    if (isset($pdo) && $pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
-
+/**
+ * Handle registration errors
+ */
+function handleRegistrationError($e, $logger = null) {
     // Log the error
-    if (isset($logger)) {
+    if ($logger) {
         $logger->error('StudentRegistration', 'Student registration failed', [
             'error' => $e->getMessage(),
             'email' => $_POST['email'] ?? 'unknown',

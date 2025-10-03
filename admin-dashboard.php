@@ -612,6 +612,11 @@ $last_updated = $dashboard_stats['last_updated'];
                 </a>
             </li>
             <li>
+                <a href="manage-users.php?role=lecturer">
+                    <i class="fas fa-chalkboard-teacher"></i>Register Lecturer
+                </a>
+            </li>
+            <li>
                 <a href="manage-users.php">
                     <i class="fas fa-users-cog"></i>Manage Users
                 </a>
@@ -807,17 +812,22 @@ $last_updated = $dashboard_stats['last_updated'];
                                 </a>
                             </div>
                             <div class="col-md-6">
+                                <a href="manage-users.php?role=lecturer" class="btn btn-outline-info w-100">
+                                    <i class="fas fa-chalkboard-teacher me-2"></i>Register Lecturer
+                                </a>
+                            </div>
+                            <div class="col-md-6">
                                 <a href="manage-departments.php" class="btn btn-outline-success w-100">
                                     <i class="fas fa-building me-2"></i>Manage Departments
                                 </a>
                             </div>
                             <div class="col-md-6">
-                                <a href="admin-reports.php" class="btn btn-outline-info w-100">
+                                <a href="admin-reports.php" class="btn btn-outline-warning w-100">
                                     <i class="fas fa-chart-bar me-2"></i>View Reports
                                 </a>
                             </div>
                             <div class="col-md-6">
-                                <a href="assign-hod.php" class="btn btn-outline-warning w-100">
+                                <a href="assign-hod.php" class="btn btn-outline-danger w-100">
                                     <i class="fas fa-user-tie me-2"></i>Assign HOD
                                 </a>
                             </div>

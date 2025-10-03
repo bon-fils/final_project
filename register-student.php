@@ -8,10 +8,12 @@
 
 session_start();
 require_once "config.php";
-require_once "session_check.php";
 
-// Generate CSRF token
-$csrf_token = generate_csrf_token();
+// Initialize CSRF token for unauthenticated access
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 
 // Get departments for dropdown
 try {
@@ -926,6 +928,7 @@ class StudentRegistration {
             this.initializeFormState();
             this.showWelcomeMessage();
             this.setupGlobalErrorHandler();
+            this.checkServerConnectivity();
         } catch (error) {
             console.error('Initialization error:', error);
             this.showAlert('System initialization failed. Please refresh the page.', 'error', false);
@@ -972,6 +975,31 @@ class StudentRegistration {
                 this.showAlert('A system error occurred. Please refresh if issues persist.', 'error');
             }
         });
+    }
+
+    async checkServerConnectivity() {
+        try {
+            // Quick connectivity check to a lightweight endpoint
+            const response = await fetch('api/location-api.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: `action=get_provinces&csrf_token=${this.csrfToken}`,
+                signal: AbortSignal.timeout(5000) // 5 second timeout
+            });
+
+            if (response.ok) {
+                console.log('✅ Server connectivity check passed');
+            } else {
+                console.warn('⚠️ Server connectivity check failed with status:', response.status);
+                this.showAlert('⚠️ Server connection may be unstable. Please check your internet connection.', 'warning');
+            }
+        } catch (error) {
+            console.error('❌ Server connectivity check failed:', error);
+            this.showAlert('⚠️ Unable to connect to server. Please check your internet connection and try refreshing the page.', 'warning');
+        }
     }
 
     setupEventListeners() {
@@ -1144,27 +1172,68 @@ class StudentRegistration {
                 const isLastAttempt = i === retries - 1;
                 const errorMessage = this.getErrorMessage(error);
 
+                // Enhanced error logging with attempt information
+                console.error(`=== AJAX ATTEMPT ${i + 1}/${retries} FAILED ===`);
+                console.error('URL:', finalOptions.url);
+                console.error('Method:', finalOptions.method);
+                console.error('Error message:', errorMessage);
+                console.error('HTTP Status:', error.status);
+                console.error('Status Text:', error.statusText);
+                console.error('Ready State:', error.readyState);
+                console.error('Response Text (truncated):', error.responseText ? error.responseText.substring(0, 200) + '...' : 'No response');
+                console.error('Response JSON:', error.responseJSON);
+                console.error('Full error object:', error);
+                console.error('=== END AJAX ATTEMPT FAILURE ===');
+
                 if (isLastAttempt) {
                     console.error(`AJAX request failed after ${retries} attempts:`, errorMessage);
-                    throw new Error(`Request failed: ${errorMessage}`);
+                    throw error; // Throw the original error for better handling
                 }
 
                 // Exponential backoff with jitter
                 const delay = this.retryDelay * Math.pow(2, i) + Math.random() * 1000;
+                console.log(`Retrying in ${Math.round(delay)}ms... (attempt ${i + 2}/${retries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
     }
 
     getErrorMessage(error) {
+        // Enhanced error message extraction
         if (error.responseJSON && error.responseJSON.message) {
-            return error.responseJSON.message;
+            return `Server error: ${error.responseJSON.message}`;
+        } else if (error.responseJSON && error.responseJSON.errors) {
+            const errors = Object.values(error.responseJSON.errors).flat();
+            return `Validation errors: ${errors.join('; ')}`;
         } else if (error.status) {
-            return `HTTP ${error.status}: ${error.statusText}`;
+            let statusMessage = `HTTP ${error.status}`;
+            if (error.statusText) {
+                statusMessage += `: ${error.statusText}`;
+            }
+
+            // Add specific guidance for common HTTP errors
+            switch (error.status) {
+                case 0:
+                    return `${statusMessage} - Network connection failed. Check your internet connection.`;
+                case 403:
+                    return `${statusMessage} - Access denied. Please refresh the page and try again.`;
+                case 404:
+                    return `${statusMessage} - Service not found. The requested endpoint may not exist.`;
+                case 500:
+                    return `${statusMessage} - Server error. Please try again later.`;
+                case 503:
+                    return `${statusMessage} - Service temporarily unavailable. Please try again later.`;
+                default:
+                    return statusMessage;
+            }
         } else if (error.message) {
-            return error.message;
+            return `Request error: ${error.message}`;
+        } else if (typeof error === 'string') {
+            return error;
         }
-        return 'Unknown error occurred';
+
+        // Fallback with more details
+        return `Unknown error occurred. Error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`;
     }
 
     validateImage(file) {
@@ -1307,27 +1376,67 @@ class StudentRegistration {
     }
 
     showSuccess(response) {
-        this.showAlert(response.message, 'success');
+        // Show success alert prominently at the top
+        this.showAlert(`🎉 SUCCESS: ${response.message}`, 'success', false);
 
+        // Create enhanced success modal
         if ($('#successModal').length === 0) {
             $('body').append(`
-                <div class="modal fade" id="successModal" tabindex="-1">
-                    <div class="modal-dialog">
-                        <div class="modal-content">
+                <div class="modal fade" id="successModal" tabindex="-1" data-bs-backdrop="static">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content border-success">
                             <div class="modal-header bg-success text-white">
-                                <h5 class="modal-title">Registration Successful</h5>
+                                <h4 class="modal-title">
+                                    <i class="fas fa-check-circle me-2"></i>Registration Completed Successfully!
+                                </h4>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                             </div>
-                            <div class="modal-body text-center">
-                                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
-                                <p>${response.message}</p>
-                                <p><strong>Student ID:</strong> ${response.student_id}</p>
-                                ${response.fingerprint_enrolled ?
-                                    '<p><i class="fas fa-fingerprint text-success me-2"></i>Fingerprint enrolled successfully!</p>' :
-                                    '<p><i class="fas fa-exclamation-triangle text-warning me-2"></i>Fingerprint not enrolled</p>'
-                                }
+                            <div class="modal-body text-center p-4">
+                                <div class="mb-4">
+                                    <i class="fas fa-graduation-cap fa-4x text-success mb-3"></i>
+                                    <h5 class="text-success mb-3">Welcome to Rwanda Polytechnic!</h5>
+                                </div>
+
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <div class="alert alert-success border-success">
+                                            <i class="fas fa-user-check me-2"></i>
+                                            <strong>Student Registration Complete</strong><br>
+                                            ${response.message}
+                                        </div>
+                                    </div>
+
+                                    <div class="col-12">
+                                        <div class="card border-success">
+                                            <div class="card-body">
+                                                <h6 class="card-title text-success">
+                                                    <i class="fas fa-id-card me-2"></i>Student Information
+                                                </h6>
+                                                <p class="mb-1"><strong>Student ID:</strong> <code class="text-success">${response.student_id}</code></p>
+                                                <p class="mb-0"><strong>Status:</strong> <span class="badge bg-success">Active</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    ${response.fingerprint_enrolled ?
+                                        '<div class="col-12"><div class="alert alert-info border-info"><i class="fas fa-fingerprint me-2"></i><strong>Biometric Security:</strong> Fingerprint enrolled successfully for secure attendance tracking!</div></div>' :
+                                        '<div class="col-12"><div class="alert alert-warning border-warning"><i class="fas fa-exclamation-triangle me-2"></i><strong>Note:</strong> Fingerprint not enrolled. Student can enroll later through their dashboard.</div></div>'
+                                    }
+                                </div>
+
+                                <div class="mt-4 text-muted small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    Student account has been created with default password (registration number).
+                                    Please advise student to change password on first login.
+                                </div>
                             </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-primary" id="continueButton">Continue</button>
+                            <div class="modal-footer justify-content-center">
+                                <button type="button" class="btn btn-success btn-lg px-4" id="continueButton">
+                                    <i class="fas fa-tachometer-alt me-2"></i>Go to Dashboard
+                                </button>
+                                <button type="button" class="btn btn-outline-success" data-bs-dismiss="modal">
+                                    <i class="fas fa-times me-2"></i>Close
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -1335,12 +1444,18 @@ class StudentRegistration {
             `);
         }
 
-        const modal = new bootstrap.Modal(document.getElementById('successModal'));
+        const modal = new bootstrap.Modal(document.getElementById('successModal'), {
+            backdrop: 'static',
+            keyboard: false
+        });
         modal.show();
 
         $('#continueButton').off('click').on('click', function() {
             modal.hide();
-            window.location.href = response.redirect || 'admin-dashboard.php';
+            // Add a small delay to show transition
+            setTimeout(() => {
+                window.location.href = response.redirect || 'admin-dashboard.php';
+            }, 300);
         });
     }
 
@@ -2237,6 +2352,7 @@ class StudentRegistration {
         console.error('Submission error details:', response);
 
         let errorMessage = 'An unexpected error occurred during registration.';
+        let errorTitle = 'Registration Failed';
 
         if (response && response.message) {
             errorMessage = response.message;
@@ -2244,42 +2360,94 @@ class StudentRegistration {
             // Handle validation errors
             const errors = Object.values(response.errors).flat();
             errorMessage = errors.join('; ');
+            errorTitle = 'Validation Errors';
         } else if (typeof response === 'string') {
             errorMessage = response;
         }
 
-        this.showAlert(`Registration failed: ${errorMessage}`, 'error', false);
+        // Show prominent error alert
+        this.showAlert(`❌ ${errorTitle}: ${errorMessage}`, 'error', false);
+
+        // Scroll to top to show the error
+        $('html, body').animate({ scrollTop: 0 }, 500);
 
         // Re-enable form for retry
         this.disableForm(false);
     }
 
     handleNetworkError(error) {
-        console.error('Network error details:', error);
+        // Enhanced error logging with detailed information
+        console.error('=== NETWORK ERROR DETAILS ===');
+        console.error('Error status:', error.status);
+        console.error('Error statusText:', error.statusText);
+        console.error('Error readyState:', error.readyState);
+        console.error('Error responseText:', error.responseText ? error.responseText.substring(0, 500) : 'No response text');
+        console.error('Error responseJSON:', error.responseJSON);
+        console.error('Full error object:', error);
+        console.error('Error message:', error.message);
+        console.error('Error name:', error.name);
+        console.error('=== END NETWORK ERROR DETAILS ===');
 
         let errorMessage = 'Network connection error. Please check your internet connection.';
+        let errorTitle = 'Connection Error';
+        let troubleshooting = '';
 
         if (error.status === 0) {
-            errorMessage = 'Unable to connect to server. Please check if the server is running.';
+            errorMessage = 'Unable to connect to server. Please check if the server is running and your internet connection is working.';
+            errorTitle = 'Server Unreachable';
+            troubleshooting = ' Try refreshing the page or check your network settings.';
         } else if (error.status === 403) {
-            errorMessage = 'Access denied. Please refresh the page and try again.';
+            errorMessage = 'Access denied. Your session may have expired.';
+            errorTitle = 'Access Denied';
+            troubleshooting = ' Please refresh the page and login again.';
+        } else if (error.status === 404) {
+            errorMessage = 'The requested service was not found on the server.';
+            errorTitle = 'Service Not Found';
+            troubleshooting = ' Please contact support if this persists.';
         } else if (error.status === 422) {
             // Handle validation errors for 422
             if (error.responseJSON && error.responseJSON.errors) {
                 const errors = Object.values(error.responseJSON.errors).flat();
                 errorMessage = 'Validation failed: ' + errors.join('; ');
+                errorTitle = 'Validation Errors';
             } else if (error.responseJSON && error.responseJSON.message) {
                 errorMessage = error.responseJSON.message;
+                errorTitle = 'Validation Error';
             } else {
                 errorMessage = 'Validation failed. Please check all required fields.';
+                errorTitle = 'Validation Error';
             }
         } else if (error.status === 500) {
-            errorMessage = 'Server error occurred. Please try again later.';
+            errorMessage = 'Server error occurred. This is usually temporary.';
+            errorTitle = 'Server Error';
+            troubleshooting = ' Please try again in a few moments or contact support.';
+        } else if (error.status === 503) {
+            errorMessage = 'Server is temporarily unavailable. Please try again later.';
+            errorTitle = 'Service Unavailable';
+            troubleshooting = ' The server may be undergoing maintenance.';
         } else if (error.status >= 400) {
-            errorMessage = `Request error (${error.status}). Please try again.`;
+            errorMessage = `Request error (${error.status}: ${error.statusText}).`;
+            errorTitle = 'Request Error';
+            troubleshooting = ' Please try again or contact support if this persists.';
+        } else if (error.statusText) {
+            errorMessage = `Network error: ${error.statusText}`;
+            errorTitle = 'Network Error';
         }
 
-        this.showAlert(errorMessage, 'error', false);
+        // Add troubleshooting information
+        const fullErrorMessage = errorMessage + troubleshooting;
+
+        // Show prominent error alert with icon
+        this.showAlert(`🚫 ${errorTitle}: ${fullErrorMessage}`, 'error', false);
+
+        // Show additional technical details in console for debugging
+        if (error.responseJSON && error.responseJSON.message) {
+            console.error('Server response:', error.responseJSON.message);
+        }
+
+        // Scroll to top to show the error
+        $('html, body').animate({ scrollTop: 0 }, 500);
+
         this.disableForm(false);
     }
 }

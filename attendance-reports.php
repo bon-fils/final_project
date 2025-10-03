@@ -1,14 +1,19 @@
 <?php
+/**
+ * Enhanced Attendance Reports - Modern & Comprehensive
+ * Provides detailed attendance analytics with improved UI and functionality
+ */
+
 session_start();
-require_once "config.php"; // $pdo connection
+require_once "config.php";
 require_once "session_check.php";
 require_role(['lecturer', 'hod', 'admin']);
 
-// Get user_id from session
+// Get user information
 $user_id = $_SESSION['user_id'] ?? null;
 $user_role = $_SESSION['role'] ?? null;
 
-// Validate user_id
+// Validate user session
 if (!$user_id) {
     error_log("Invalid user_id in attendance-reports");
     session_destroy();
@@ -16,260 +21,1051 @@ if (!$user_id) {
     exit();
 }
 
-// Initialize variables
-$lecturer_dept = null;
-$lecturer_id = null;
+// Initialize user context
+$user_context = getUserContext($pdo, $user_id, $user_role);
+$lecturer_id = $user_context['lecturer_id'];
+$department_id = $user_context['department_id'];
+$is_admin = $user_role === 'admin';
 
-if ($user_role === 'admin') {
-    // Admin can see all data, no lecturer restriction
-    $lecturer_id = null;
-} else {
-    // For lecturer, get department and lecturer_id
+/**
+ * Get user context and permissions
+ */
+function getUserContext($pdo, $user_id, $user_role) {
     try {
-        $dept_stmt = $pdo->prepare("
-            SELECT l.department_id, l.id as lecturer_id
+        if ($user_role === 'admin') {
+            return ['lecturer_id' => null, 'department_id' => null];
+        }
+
+        // Get lecturer information
+        $stmt = $pdo->prepare("
+            SELECT l.id as lecturer_id, l.department_id, l.first_name, l.last_name
             FROM lecturers l
             INNER JOIN users u ON l.email = u.email
             WHERE u.id = :user_id AND u.role IN ('lecturer', 'hod')
         ");
-        $dept_stmt->execute(['user_id' => $user_id]);
-        $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        error_log("Error fetching lecturer department: " . $e->getMessage());
-        header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
-        exit;
-    }
+        $stmt->execute(['user_id' => $user_id]);
+        $lecturer_data = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
-        // Try to create a lecturer record if it doesn't exist
-        $create_lecturer_stmt = $pdo->prepare("
-            INSERT INTO lecturers (first_name, last_name, email, department_id, role, password)
+        if (!$lecturer_data) {
+            // Try to create lecturer record if missing
+            createLecturerRecord($pdo, $user_id);
+            // Retry fetch
+            $stmt->execute(['user_id' => $user_id]);
+            $lecturer_data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lecturer_data) {
+                header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
+                exit();
+            }
+        }
+
+        $_SESSION['lecturer_id'] = $lecturer_data['lecturer_id'];
+        return $lecturer_data;
+
+    } catch (PDOException $e) {
+        error_log("Error getting user context: " . $e->getMessage());
+        header("Location: lecturer-dashboard.php?error=system_error");
+        exit();
+    }
+}
+
+/**
+ * Create lecturer record if missing
+ */
+function createLecturerRecord($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO lecturers (first_name, last_name, email, department_id, role, password, created_at)
             SELECT
-                CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
-                CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
-                email, 7, u.role, '12345'
+                CASE WHEN LOCATE(' ', username) > 0 THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
+                CASE WHEN LOCATE(' ', username) > 0 THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
+                email, 1, u.role, 'default_password', NOW()
             FROM users u
             WHERE id = :user_id AND role IN ('lecturer', 'hod')
             ON DUPLICATE KEY UPDATE email = email
         ");
-        $create_lecturer_stmt->execute(['user_id' => $user_id]);
+        $stmt->execute(['user_id' => $user_id]);
+    } catch (PDOException $e) {
+        error_log("Error creating lecturer record: " . $e->getMessage());
+    }
+}
 
-        // Try again to get the department
-        $dept_stmt->execute(['user_id' => $user_id]);
-        $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+/**
+ * Ensure database schema is up to date
+ */
+function ensureDatabaseSchema($pdo) {
+    try {
+        // Add lecturer_id column to courses if it doesn't exist
+        $pdo->exec("ALTER TABLE courses ADD COLUMN IF NOT EXISTS lecturer_id INT NULL AFTER department_id");
+        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_lecturer_id ON courses(lecturer_id)");
+        $pdo->exec("ALTER TABLE courses ADD CONSTRAINT IF NOT EXISTS fk_courses_lecturer FOREIGN KEY (lecturer_id) REFERENCES lecturers(id) ON DELETE SET NULL");
+    } catch (PDOException $e) {
+        error_log("Schema update warning: " . $e->getMessage());
+    }
+}
 
-        if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
-            // If still not found, redirect with error
-            header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
-            exit;
+/**
+ * Get available departments for the current user
+ */
+function getAvailableDepartments($pdo, $lecturer_id, $is_admin) {
+    try {
+        if ($is_admin) {
+            // Admin can see all departments
+            $stmt = $pdo->query("SELECT id, name FROM departments ORDER BY name ASC");
+        } else {
+            // Lecturer can only see their department
+            $stmt = $pdo->prepare("
+                SELECT d.id, d.name
+                FROM departments d
+                INNER JOIN lecturers l ON d.id = l.department_id
+                WHERE l.id = :lecturer_id
+                ORDER BY d.name ASC
+            ");
+            $stmt->execute(['lecturer_id' => $lecturer_id]);
         }
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error fetching departments: " . $e->getMessage());
+        return [];
     }
-
-    $lecturer_id = $lecturer_dept['lecturer_id'];
-    // Store lecturer_id in session for other pages to use
-    $_SESSION['lecturer_id'] = $lecturer_id;
 }
 
-// First, add lecturer_id column to courses table if it doesn't exist
-try {
-    $pdo->query("ALTER TABLE courses ADD COLUMN lecturer_id INT NULL AFTER department_id");
-    $pdo->query("CREATE INDEX idx_lecturer_id ON courses(lecturer_id)");
-} catch (PDOException $e) {
-    // Column might already exist, continue
-}
+/**
+ * Get options for a specific department
+ */
+function getOptionsForDepartment($pdo, $department_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "SELECT id, name FROM options WHERE department_id = :department_id";
+        $params = ['department_id' => $department_id];
 
-// Update courses to assign them to the current lecturer if not already assigned (only for lecturers)
-if ($lecturer_id) {
-    $update_stmt = $pdo->prepare("
-        UPDATE courses
-        SET lecturer_id = :lecturer_id
-        WHERE lecturer_id IS NULL AND department_id = :department_id
-    ");
-    $update_stmt->execute([
-        'lecturer_id' => $lecturer_id,
-        'department_id' => $lecturer_dept['department_id']
-    ]);
-}
+        if (!$is_admin && $lecturer_id) {
+            // Additional check if needed for lecturer permissions
+        }
 
-// Fetch year levels from students in courses
-try {
-    $query = "
-        SELECT DISTINCT s.year_level
-        FROM students s
-        INNER JOIN courses c ON s.option_id = c.id
-    ";
-    $params = [];
-    if ($lecturer_id) {
-        $query .= " WHERE c.lecturer_id = :lecturer_id";
-        $params['lecturer_id'] = $lecturer_id;
+        $query .= " ORDER BY name ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error fetching options: " . $e->getMessage());
+        return [];
     }
-    $query .= " ORDER BY s.year_level ASC";
-
-    $stmtClasses = $pdo->prepare($query);
-    $stmtClasses->execute($params);
-    $classRows = $stmtClasses->fetchAll(PDO::FETCH_ASSOC);
-
-    $classes = [];
-    foreach ($classRows as $row) {
-        $classes[] = ['id' => $row['year_level'], 'name' => $row['year_level']];
-    }
-} catch (PDOException $e) {
-    error_log("Error fetching classes: " . $e->getMessage());
-    $classes = [];
 }
 
-// Fetch courses for selected class
-$selectedClassId = $_GET['class_id'] ?? null;
-$selectedCourseId = $_GET['course_id'] ?? null;
-$courses = [];
-if ($selectedClassId) {
+/**
+ * Get available classes (year levels) for the current user
+ */
+function getAvailableClasses($pdo, $lecturer_id, $is_admin) {
+    try {
+        if ($is_admin) {
+            // Admin can see all classes
+            $stmt = $pdo->query("
+                SELECT DISTINCT year_level as id, CONCAT('Year ', year_level) as name
+                FROM students
+                WHERE year_level IS NOT NULL
+                ORDER BY year_level ASC
+            ");
+        } else {
+            // Lecturer can only see classes in their department
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT s.year_level as id, CONCAT('Year ', s.year_level) as name
+                FROM students s
+                INNER JOIN lecturers l ON s.department_id = l.department_id
+                WHERE l.id = :lecturer_id AND s.year_level IS NOT NULL
+                ORDER BY s.year_level ASC
+            ");
+            $stmt->execute(['lecturer_id' => $lecturer_id]);
+        }
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error fetching classes: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get courses for a specific class/year level
+ */
+function getCoursesForClass($pdo, $class_id, $lecturer_id, $is_admin) {
     try {
         $query = "
-            SELECT c.id, c.name
+            SELECT DISTINCT c.id, c.course_name as name, c.course_code
             FROM courses c
-            INNER JOIN students s ON s.option_id = c.id
+            INNER JOIN options o ON c.option_id = o.id
+            INNER JOIN students s ON o.id = s.option_id
             WHERE s.year_level = :year_level
         ";
-        $params = ['year_level' => $selectedClassId];
-        if ($lecturer_id) {
+
+        $params = ['year_level' => $class_id];
+
+        if (!$is_admin && $lecturer_id) {
             $query .= " AND c.lecturer_id = :lecturer_id";
             $params['lecturer_id'] = $lecturer_id;
         }
-        $query .= " GROUP BY c.id, c.name ORDER BY c.name ASC";
 
-        $stmtCourses = $pdo->prepare($query);
-        $stmtCourses->execute($params);
-        $courses = $stmtCourses->fetchAll(PDO::FETCH_ASSOC);
+        $query .= " ORDER BY c.course_name ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (PDOException $e) {
         error_log("Error fetching courses: " . $e->getMessage());
-        $courses = [];
+        return [];
     }
 }
 
-// Fetch attendance data
+/**
+ * Assign courses to lecturer if not already assigned
+ */
+function assignCoursesToLecturer($pdo, $lecturer_id, $department_id) {
+    if (!$lecturer_id || !$department_id) return;
+
+    try {
+        $stmt = $pdo->prepare("
+            UPDATE courses
+            SET lecturer_id = :lecturer_id
+            WHERE lecturer_id IS NULL AND department_id = :department_id
+        ");
+        $stmt->execute([
+            'lecturer_id' => $lecturer_id,
+            'department_id' => $department_id
+        ]);
+    } catch (PDOException $e) {
+        error_log("Error assigning courses: " . $e->getMessage());
+    }
+}
+
+// Initialize database and get parameters
+ensureDatabaseSchema($pdo);
+if (!$is_admin) {
+    assignCoursesToLecturer($pdo, $lecturer_id, $department_id);
+}
+
+// Get filter parameters
+$reportType = $_GET['report_type'] ?? 'class'; // department, option, class, course
+$selectedDepartmentId = $_GET['department_id'] ?? null;
+$selectedOptionId = $_GET['option_id'] ?? null;
+$selectedClassId = $_GET['class_id'] ?? null;
+$selectedCourseId = $_GET['course_id'] ?? null;
 $startDate = $_GET['start_date'] ?? null;
 $endDate = $_GET['end_date'] ?? null;
-$attendanceData = [];
-$attendanceDetailsData = [];
-if ($selectedClassId && $selectedCourseId) {
+
+// Get available data based on user role
+$departments = getAvailableDepartments($pdo, $lecturer_id, $is_admin);
+$options = $selectedDepartmentId ? getOptionsForDepartment($pdo, $selectedDepartmentId, $lecturer_id, $is_admin) : [];
+$classes = getAvailableClasses($pdo, $lecturer_id, $is_admin);
+$courses = $selectedClassId ? getCoursesForClass($pdo, $selectedClassId, $lecturer_id, $is_admin) : [];
+
+/**
+ * Generate comprehensive attendance report based on report type
+ */
+function generateAttendanceReport($pdo, $report_type, $filters, $lecturer_id, $is_admin) {
     try {
-        // Main report - get students and their attendance for this course
-        $query = "
-            SELECT
-                s.id AS student_id,
-                CONCAT(s.first_name, ' ', s.last_name) AS student_name,
-                COUNT(CASE WHEN ar.status = 'present' THEN 1 END) AS present_count,
-                COUNT(ar.id) AS total_count
-            FROM students s
-            LEFT JOIN attendance_records ar ON s.id = ar.student_id
-            LEFT JOIN attendance_sessions sess ON ar.session_id = sess.id
-            INNER JOIN courses c ON sess.course_id = c.id
-            WHERE s.year_level = :year_level AND sess.course_id = :course_id
-        ";
-        $params = [
-            'year_level' => $selectedClassId,
-            'course_id' => $selectedCourseId
-        ];
-        if ($lecturer_id) {
-            $query .= " AND c.lecturer_id = :lecturer_id";
-            $params['lecturer_id'] = $lecturer_id;
-        }
-        if ($startDate && $endDate) {
-            $query .= " AND sess.session_date BETWEEN :start_date AND :end_date";
-            $params['start_date'] = $startDate;
-            $params['end_date'] = $endDate;
-        }
-        $query .= " GROUP BY s.id, s.first_name, s.last_name ORDER BY s.first_name, s.last_name ASC";
+        $start_date = $filters['start_date'] ?? null;
+        $end_date = $filters['end_date'] ?? null;
 
-        $stmtAttendance = $pdo->prepare($query);
-        $stmtAttendance->execute($params);
-        $attendanceRows = $stmtAttendance->fetchAll(PDO::FETCH_ASSOC);
-
-        // Collect student IDs for batch query
-        $studentIds = array_column($attendanceRows, 'student_id');
-        $studentNames = [];
-        foreach ($attendanceRows as $row) {
-            $percent = $row['total_count'] > 0 ? ($row['present_count'] / $row['total_count']) * 100 : 0;
-            $attendanceData[] = [
-                'student' => $row['student_name'],
-                'attendance_percent' => round($percent)
-            ];
-            $studentNames[$row['student_id']] = $row['student_name'];
+        switch ($report_type) {
+            case 'department':
+                return generateDepartmentReport($pdo, $filters['department_id'], $start_date, $end_date, $lecturer_id, $is_admin);
+            case 'option':
+                return generateOptionReport($pdo, $filters['option_id'], $start_date, $end_date, $lecturer_id, $is_admin);
+            case 'class':
+                return generateClassReport($pdo, $filters['class_id'], $start_date, $end_date, $lecturer_id, $is_admin);
+            case 'course':
+                return generateCourseReport($pdo, $filters['course_id'], $start_date, $end_date, $lecturer_id, $is_admin);
+            default:
+                return ['error' => 'Invalid report type'];
         }
 
-        // Modal: detailed attendance - get all session dates and build complete attendance map
-        if (!empty($studentIds)) {
-            // Get all sessions for the course
-            $sessionQuery = "SELECT id, DATE(session_date) as date FROM attendance_sessions WHERE course_id = :course_id";
-            $sessionParams = ['course_id' => $selectedCourseId];
-            if ($startDate && $endDate) {
-                $sessionQuery .= " AND session_date BETWEEN :start_date AND :end_date";
-                $sessionParams['start_date'] = $startDate;
-                $sessionParams['end_date'] = $endDate;
-            }
-            $sessionQuery .= " ORDER BY session_date ASC";
-            $stmtSessions = $pdo->prepare($sessionQuery);
-            $stmtSessions->execute($sessionParams);
-            $sessions = $stmtSessions->fetchAll(PDO::FETCH_ASSOC);
-
-            // Get all attendance records for these sessions and students
-            $sessionIds = array_column($sessions, 'id');
-            if (!empty($sessionIds)) {
-                $sessionPlaceholders = str_repeat('?,', count($sessionIds) - 1) . '?';
-                $studentPlaceholders = str_repeat('?,', count($studentIds) - 1) . '?';
-                $stmtAttendance = $pdo->prepare("
-                    SELECT session_id, student_id, status
-                    FROM attendance_records
-                    WHERE session_id IN ($sessionPlaceholders) AND student_id IN ($studentPlaceholders)
-                ");
-                $stmtAttendance->execute(array_merge($sessionIds, $studentIds));
-                $attendanceRows = $stmtAttendance->fetchAll(PDO::FETCH_ASSOC);
-
-                // Build attendance map
-                $attendanceMap = [];
-                foreach ($attendanceRows as $row) {
-                    $attendanceMap[$row['student_id']][$row['session_id']] = $row['status'];
-                }
-
-                // Build details data
-                foreach ($studentIds as $studentId) {
-                    $studentName = $studentNames[$studentId];
-                    foreach ($sessions as $session) {
-                        $status = $attendanceMap[$studentId][$session['id']] ?? 'absent';
-                        $attendanceDetailsData[$studentName][$session['date']] = $status;
-                    }
-                }
-            }
-        }
     } catch (PDOException $e) {
-        error_log("Error fetching attendance data: " . $e->getMessage());
-        $attendanceData = [];
-        $attendanceDetailsData = [];
+        error_log("Error generating attendance report: " . $e->getMessage());
+        return ['error' => 'Database error occurred'];
     }
 }
 
-// Handle CSV export
-if (isset($_GET['export']) && $_GET['export'] === 'csv' && !empty($attendanceData)) {
+/**
+ * Generate department-wide attendance report
+ */
+function generateDepartmentReport($pdo, $department_id, $start_date, $end_date, $lecturer_id, $is_admin) {
+    // Get all students in the department
+    $students = getStudentsForDepartment($pdo, $department_id, $lecturer_id, $is_admin);
+    if (empty($students)) {
+        return ['students' => [], 'sessions' => [], 'attendance' => [], 'summary' => []];
+    }
+
+    // Get all courses in the department
+    $courses = getCoursesForDepartment($pdo, $department_id, $lecturer_id, $is_admin);
+
+    // Get all sessions for these courses
+    $sessions = getSessionsForCourses($pdo, array_keys($courses), $start_date, $end_date);
+
+    // Get attendance records
+    $attendance_records = getAttendanceRecordsForCourses($pdo, array_keys($courses), array_keys($students), $start_date, $end_date);
+
+    return [
+        'department_info' => ['id' => $department_id, 'name' => getDepartmentName($pdo, $department_id)],
+        'students' => $students,
+        'courses' => $courses,
+        'sessions' => $sessions,
+        'attendance' => processAttendanceData($students, $sessions, $attendance_records),
+        'summary' => calculateAttendanceSummary($students, $sessions, $attendance_records),
+        'date_range' => ['start' => $start_date, 'end' => $end_date]
+    ];
+}
+
+/**
+ * Generate option-specific attendance report
+ */
+function generateOptionReport($pdo, $option_id, $start_date, $end_date, $lecturer_id, $is_admin) {
+    // Get all students in the option
+    $students = getStudentsForOption($pdo, $option_id, $lecturer_id, $is_admin);
+    if (empty($students)) {
+        return ['students' => [], 'sessions' => [], 'attendance' => [], 'summary' => []];
+    }
+
+    // Get all courses for this option
+    $courses = getCoursesForOption($pdo, $option_id, $lecturer_id, $is_admin);
+
+    // Get all sessions for these courses
+    $sessions = getSessionsForCourses($pdo, array_keys($courses), $start_date, $end_date);
+
+    // Get attendance records
+    $attendance_records = getAttendanceRecordsForCourses($pdo, array_keys($courses), array_keys($students), $start_date, $end_date);
+
+    return [
+        'option_info' => ['id' => $option_id, 'name' => getOptionName($pdo, $option_id)],
+        'students' => $students,
+        'courses' => $courses,
+        'sessions' => $sessions,
+        'attendance' => processAttendanceData($students, $sessions, $attendance_records),
+        'summary' => calculateAttendanceSummary($students, $sessions, $attendance_records),
+        'date_range' => ['start' => $start_date, 'end' => $end_date]
+    ];
+}
+
+/**
+ * Generate class-specific attendance report
+ */
+function generateClassReport($pdo, $class_id, $start_date, $end_date, $lecturer_id, $is_admin) {
+    // Get all students in the class
+    $students = getStudentsForClass($pdo, $class_id, $lecturer_id, $is_admin);
+    if (empty($students)) {
+        return ['students' => [], 'sessions' => [], 'attendance' => [], 'summary' => []];
+    }
+
+    // Get all courses for this class
+    $courses = getCoursesForClass($pdo, $class_id, $lecturer_id, $is_admin);
+
+    // Get all sessions for these courses
+    $sessions = getSessionsForCourses($pdo, array_keys($courses), $start_date, $end_date);
+
+    // Get attendance records
+    $attendance_records = getAttendanceRecordsForCourses($pdo, array_keys($courses), array_keys($students), $start_date, $end_date);
+
+    return [
+        'class_info' => ['id' => $class_id, 'name' => "Year {$class_id}"],
+        'students' => $students,
+        'courses' => $courses,
+        'sessions' => $sessions,
+        'attendance' => processAttendanceData($students, $sessions, $attendance_records),
+        'summary' => calculateAttendanceSummary($students, $sessions, $attendance_records),
+        'date_range' => ['start' => $start_date, 'end' => $end_date]
+    ];
+}
+
+/**
+ * Generate course-specific attendance report (original functionality)
+ */
+function generateCourseReport($pdo, $course_id, $start_date, $end_date, $lecturer_id, $is_admin) {
+    // Get course information
+    $course_info = getCourseInfo($pdo, $course_id);
+    if (!$course_info) {
+        return ['error' => 'Course not found'];
+    }
+
+    // Get all students who should attend this course (based on their class/year)
+    $students = getStudentsForCourse($pdo, $course_info['year_level'] ?? null, $course_id, $lecturer_id, $is_admin);
+    if (empty($students)) {
+        return ['students' => [], 'sessions' => [], 'attendance' => [], 'summary' => []];
+    }
+
+    // Get all attendance sessions for the course within date range
+    $sessions = getAttendanceSessions($pdo, $course_id, $start_date, $end_date);
+
+    // Get attendance records
+    $attendance_records = getAttendanceRecords($pdo, $course_id, array_keys($students), $start_date, $end_date);
+
+    // Build comprehensive report
+    return [
+        'course_info' => $course_info,
+        'students' => $students,
+        'sessions' => $sessions,
+        'attendance' => processAttendanceData($students, $sessions, $attendance_records),
+        'summary' => calculateAttendanceSummary($students, $sessions, $attendance_records),
+        'date_range' => ['start' => $start_date, 'end' => $end_date]
+    ];
+}
+
+/**
+ * Get course information
+ */
+function getCourseInfo($pdo, $course_id) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT c.id, c.course_name, c.course_code, d.name as department_name,
+                   CONCAT(l.first_name, ' ', l.last_name) as lecturer_name
+            FROM courses c
+            LEFT JOIN departments d ON c.department_id = d.id
+            LEFT JOIN lecturers l ON c.lecturer_id = l.id
+            WHERE c.id = :course_id
+        ");
+        $stmt->execute(['course_id' => $course_id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        return null;
+    }
+}
+
+/**
+ * Get students for a department
+ */
+function getStudentsForDepartment($pdo, $department_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "
+            SELECT s.id, CONCAT(s.first_name, ' ', s.last_name) as full_name,
+                    s.reg_no, s.student_id_number, d.name as department_name, s.year_level
+            FROM students s
+            INNER JOIN departments d ON s.department_id = d.id
+            WHERE s.department_id = :department_id
+        ";
+
+        $params = ['department_id' => $department_id];
+
+        if (!$is_admin && $lecturer_id) {
+            // Additional permission check if needed
+        }
+
+        $query .= " ORDER BY s.year_level, s.first_name, s.last_name";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $students = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $students[$row['id']] = $row;
+        }
+
+        return $students;
+    } catch (PDOException $e) {
+        error_log("Error fetching students for department: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get students for an option
+ */
+function getStudentsForOption($pdo, $option_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "
+            SELECT s.id, CONCAT(s.first_name, ' ', s.last_name) as full_name,
+                    s.reg_no, s.student_id_number, d.name as department_name, s.year_level
+            FROM students s
+            INNER JOIN departments d ON s.department_id = d.id
+            WHERE s.option_id = :option_id
+        ";
+
+        $params = ['option_id' => $option_id];
+
+        $query .= " ORDER BY s.first_name, s.last_name";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $students = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $students[$row['id']] = $row;
+        }
+
+        return $students;
+    } catch (PDOException $e) {
+        error_log("Error fetching students for option: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get students for a class
+ */
+function getStudentsForClass($pdo, $class_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "
+            SELECT s.id, CONCAT(s.first_name, ' ', s.last_name) as full_name,
+                    s.reg_no, s.student_id_number, d.name as department_name
+            FROM students s
+            INNER JOIN departments d ON s.department_id = d.id
+            WHERE s.year_level = :year_level
+        ";
+
+        $params = ['year_level' => $class_id];
+
+        if (!$is_admin && $lecturer_id) {
+            $query .= " AND s.department_id = (SELECT department_id FROM lecturers WHERE id = :lecturer_id)";
+            $params['lecturer_id'] = $lecturer_id;
+        }
+
+        $query .= " ORDER BY s.first_name, s.last_name";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $students = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $students[$row['id']] = $row;
+        }
+
+        return $students;
+    } catch (PDOException $e) {
+        error_log("Error fetching students for class: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get students enrolled in a specific course and class
+ */
+function getStudentsForCourse($pdo, $class_id, $course_id, $lecturer_id, $is_admin) {
+    try {
+        // First get the course details to determine which students should attend
+        $courseStmt = $pdo->prepare("SELECT * FROM courses WHERE id = :course_id");
+        $courseStmt->execute(['course_id' => $course_id]);
+        $course = $courseStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$course) return [];
+
+        $query = "
+            SELECT s.id, CONCAT(s.first_name, ' ', s.last_name) as full_name,
+                    s.reg_no, s.student_id_number, d.name as department_name
+            FROM students s
+            INNER JOIN departments d ON s.department_id = d.id
+            WHERE s.year_level = :year_level
+        ";
+
+        $params = ['year_level' => $class_id];
+
+        if (!$is_admin && $lecturer_id) {
+            $query .= " AND s.department_id = (SELECT department_id FROM lecturers WHERE id = :lecturer_id)";
+            $params['lecturer_id'] = $lecturer_id;
+        }
+
+        $query .= " ORDER BY s.first_name, s.last_name";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $students = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $students[$row['id']] = $row;
+        }
+
+        return $students;
+    } catch (PDOException $e) {
+        error_log("Error fetching students: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get courses for a department
+ */
+function getCoursesForDepartment($pdo, $department_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "SELECT id, course_name as name, course_code FROM courses WHERE department_id = :department_id";
+        $params = ['department_id' => $department_id];
+
+        if (!$is_admin && $lecturer_id) {
+            $query .= " AND lecturer_id = :lecturer_id";
+            $params['lecturer_id'] = $lecturer_id;
+        }
+
+        $query .= " ORDER BY course_name ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $courses = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $courses[$row['id']] = $row;
+        }
+
+        return $courses;
+    } catch (PDOException $e) {
+        error_log("Error fetching courses for department: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get courses for an option
+ */
+function getCoursesForOption($pdo, $option_id, $lecturer_id, $is_admin) {
+    try {
+        $query = "SELECT id, course_name as name, course_code FROM courses WHERE option_id = :option_id";
+        $params = ['option_id' => $option_id];
+
+        if (!$is_admin && $lecturer_id) {
+            $query .= " AND lecturer_id = :lecturer_id";
+            $params['lecturer_id'] = $lecturer_id;
+        }
+
+        $query .= " ORDER BY course_name ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $courses = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $courses[$row['id']] = $row;
+        }
+
+        return $courses;
+    } catch (PDOException $e) {
+        error_log("Error fetching courses for option: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get sessions for multiple courses
+ */
+function getSessionsForCourses($pdo, $course_ids, $start_date, $end_date) {
+    if (empty($course_ids)) return [];
+
+    try {
+        $placeholders = str_repeat('?,', count($course_ids) - 1) . '?';
+
+        $query = "SELECT id, course_id, session_date, start_time, end_time FROM attendance_sessions WHERE course_id IN ($placeholders)";
+        $params = $course_ids;
+
+        if ($start_date && $end_date) {
+            $query .= " AND session_date BETWEEN ? AND ?";
+            $params[] = $start_date;
+            $params[] = $end_date;
+        }
+
+        $query .= " ORDER BY session_date ASC, start_time ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $sessions = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $sessions[$row['id']] = $row;
+        }
+
+        return $sessions;
+    } catch (PDOException $e) {
+        error_log("Error fetching sessions for courses: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get attendance records for multiple courses
+ */
+function getAttendanceRecordsForCourses($pdo, $course_ids, $student_ids, $start_date, $end_date) {
+    if (empty($course_ids) || empty($student_ids)) return [];
+
+    try {
+        $course_placeholders = str_repeat('?,', count($course_ids) - 1) . '?';
+        $student_placeholders = str_repeat('?,', count($student_ids) - 1) . '?';
+
+        $query = "
+            SELECT ar.student_id, ar.session_id, ar.status, ar.recorded_at
+            FROM attendance_records ar
+            INNER JOIN attendance_sessions sess ON ar.session_id = sess.id
+            WHERE sess.course_id IN ($course_placeholders) AND ar.student_id IN ($student_placeholders)
+        ";
+
+        $params = array_merge($course_ids, $student_ids);
+
+        if ($start_date && $end_date) {
+            $query .= " AND sess.session_date BETWEEN ? AND ?";
+            $params[] = $start_date;
+            $params[] = $end_date;
+        }
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $records = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $records[$row['student_id']][$row['session_id']] = $row;
+        }
+
+        return $records;
+    } catch (PDOException $e) {
+        error_log("Error fetching attendance records for courses: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get department name
+ */
+function getDepartmentName($pdo, $department_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT name FROM departments WHERE id = :id");
+        $stmt->execute(['id' => $department_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result ? $result['name'] : 'Unknown Department';
+    } catch (PDOException $e) {
+        return 'Unknown Department';
+    }
+}
+
+/**
+ * Get option name
+ */
+function getOptionName($pdo, $option_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT name FROM options WHERE id = :id");
+        $stmt->execute(['id' => $option_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result ? $result['name'] : 'Unknown Option';
+    } catch (PDOException $e) {
+        return 'Unknown Option';
+    }
+}
+
+/**
+ * Get attendance sessions for a course
+ */
+function getAttendanceSessions($pdo, $course_id, $start_date, $end_date) {
+    try {
+        $query = "SELECT id, session_date, start_time, end_time FROM attendance_sessions WHERE course_id = :course_id";
+        $params = ['course_id' => $course_id];
+
+        if ($start_date && $end_date) {
+            $query .= " AND session_date BETWEEN :start_date AND :end_date";
+            $params['start_date'] = $start_date;
+            $params['end_date'] = $end_date;
+        }
+
+        $query .= " ORDER BY session_date ASC, start_time ASC";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $sessions = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $sessions[$row['id']] = $row;
+        }
+
+        return $sessions;
+    } catch (PDOException $e) {
+        error_log("Error fetching sessions: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Get attendance records for students and sessions
+ */
+function getAttendanceRecords($pdo, $course_id, $student_ids, $start_date, $end_date) {
+    if (empty($student_ids)) return [];
+
+    try {
+        $student_placeholders = str_repeat('?,', count($student_ids) - 1) . '?';
+
+        $query = "
+            SELECT ar.student_id, ar.session_id, ar.status, ar.recorded_at
+            FROM attendance_records ar
+            INNER JOIN attendance_sessions sess ON ar.session_id = sess.id
+            WHERE sess.course_id = :course_id AND ar.student_id IN ($student_placeholders)
+        ";
+
+        $params = array_merge(['course_id' => $course_id], $student_ids);
+
+        if ($start_date && $end_date) {
+            $query .= " AND sess.session_date BETWEEN :start_date AND :end_date";
+            $params['start_date'] = $start_date;
+            $params['end_date'] = $end_date;
+        }
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+
+        $records = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $records[$row['student_id']][$row['session_id']] = $row;
+        }
+
+        return $records;
+    } catch (PDOException $e) {
+        error_log("Error fetching attendance records: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Process attendance data into comprehensive format
+ */
+function processAttendanceData($students, $sessions, $attendance_records) {
+    $processed_data = [];
+
+    foreach ($students as $student_id => $student) {
+        $student_attendance = [
+            'student_info' => $student,
+            'sessions' => [],
+            'summary' => [
+                'total_sessions' => count($sessions),
+                'present_count' => 0,
+                'absent_count' => 0,
+                'percentage' => 0
+            ]
+        ];
+
+        foreach ($sessions as $session_id => $session) {
+            $record = $attendance_records[$student_id][$session_id] ?? null;
+            $status = $record ? $record['status'] : 'absent';
+
+            $student_attendance['sessions'][$session_id] = [
+                'session_info' => $session,
+                'status' => $status,
+                'recorded_at' => $record ? $record['recorded_at'] : null
+            ];
+
+            if ($status === 'present') {
+                $student_attendance['summary']['present_count']++;
+            } else {
+                $student_attendance['summary']['absent_count']++;
+            }
+        }
+
+        // Calculate percentage
+        if ($student_attendance['summary']['total_sessions'] > 0) {
+            $student_attendance['summary']['percentage'] =
+                round(($student_attendance['summary']['present_count'] / $student_attendance['summary']['total_sessions']) * 100, 1);
+        }
+
+        $processed_data[$student_id] = $student_attendance;
+    }
+
+    return $processed_data;
+}
+
+/**
+ * Calculate attendance summary statistics
+ */
+function calculateAttendanceSummary($students, $sessions, $attendance_records) {
+    $total_students = count($students);
+    $total_sessions = count($sessions);
+
+    $summary = [
+        'total_students' => $total_students,
+        'total_sessions' => $total_sessions,
+        'total_possible_attendances' => $total_students * $total_sessions,
+        'total_actual_attendances' => 0,
+        'average_attendance_rate' => 0,
+        'students_above_85_percent' => 0,
+        'students_below_85_percent' => 0,
+        'perfect_attendance' => 0,
+        'zero_attendance' => 0
+    ];
+
+    $total_percentage = 0;
+
+    foreach ($students as $student_id => $student) {
+        $present_count = 0;
+
+        foreach ($sessions as $session_id => $session) {
+            $record = $attendance_records[$student_id][$session_id] ?? null;
+            if ($record && $record['status'] === 'present') {
+                $present_count++;
+                $summary['total_actual_attendances']++;
+            }
+        }
+
+        $percentage = $total_sessions > 0 ? ($present_count / $total_sessions) * 100 : 0;
+        $total_percentage += $percentage;
+
+        if ($percentage >= 85) {
+            $summary['students_above_85_percent']++;
+        } else {
+            $summary['students_below_85_percent']++;
+        }
+
+        if ($percentage == 100) {
+            $summary['perfect_attendance']++;
+        } elseif ($percentage == 0) {
+            $summary['zero_attendance']++;
+        }
+    }
+
+    if ($total_students > 0) {
+        $summary['average_attendance_rate'] = round($total_percentage / $total_students, 1);
+    }
+
+    return $summary;
+}
+
+// Generate report data
+$report_data = [];
+$filters = [
+    'department_id' => $selectedDepartmentId,
+    'option_id' => $selectedOptionId,
+    'class_id' => $selectedClassId,
+    'course_id' => $selectedCourseId,
+    'start_date' => $startDate,
+    'end_date' => $endDate
+];
+
+$hasRequiredFilters = false;
+switch ($reportType) {
+    case 'department':
+        $hasRequiredFilters = !empty($selectedDepartmentId);
+        break;
+    case 'option':
+        $hasRequiredFilters = !empty($selectedOptionId);
+        break;
+    case 'class':
+        $hasRequiredFilters = !empty($selectedClassId);
+        break;
+    case 'course':
+        $hasRequiredFilters = !empty($selectedCourseId);
+        break;
+}
+
+if ($hasRequiredFilters) {
+    $report_data = generateAttendanceReport($pdo, $reportType, $filters, $lecturer_id, $is_admin);
+}
+
+// Legacy variables for backward compatibility
+$attendanceData = [];
+$attendanceDetailsData = [];
+
+if (!isset($report_data['error']) && !empty($report_data['attendance'])) {
+    foreach ($report_data['attendance'] as $student_id => $data) {
+        $attendanceData[] = [
+            'student' => $data['student_info']['full_name'],
+            'attendance_percent' => $data['summary']['percentage']
+        ];
+
+        // Build details data for modal
+        foreach ($data['sessions'] as $session_id => $session_data) {
+            $session_date = date('Y-m-d', strtotime($session_data['session_info']['session_date']));
+            $attendanceDetailsData[$data['student_info']['full_name']][$session_date] = $session_data['status'];
+        }
+    }
+}
+
+/**
+ * Handle various export formats
+ */
+function handleExport($report_data, $format) {
+    if (empty($report_data) || isset($report_data['error'])) {
+        return;
+    }
+
+    $filename = 'attendance_report_' . date('Y-m-d_H-i-s');
+
+    switch ($format) {
+        case 'csv':
+            exportToCSV($report_data, $filename);
+            break;
+        case 'pdf':
+            exportToPDF($report_data, $filename);
+            break;
+        case 'excel':
+            exportToExcel($report_data, $filename);
+            break;
+    }
+}
+
+/**
+ * Export attendance data to CSV
+ */
+function exportToCSV($report_data, $filename) {
     header('Content-Type: text/csv');
-    header('Content-Disposition: attachment; filename="attendance_report_' . date('Y-m-d') . '.csv"');
+    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+    header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+    header('Expires: 0');
 
     $output = fopen('php://output', 'w');
 
     // CSV headers
-    fputcsv($output, ['Student Name', 'Attendance %', 'Status']);
+    fputcsv($output, ['Student Name', 'Registration No', 'Department', 'Attendance %', 'Present', 'Total Sessions', 'Status']);
 
-    // Data
-    foreach ($attendanceData as $record) {
-        $status = $record['attendance_percent'] >= 85 ? 'Allowed' : 'Not Allowed';
+    // Data rows
+    foreach ($report_data['attendance'] as $student_id => $data) {
+        $student = $data['student_info'];
+        $summary = $data['summary'];
+        $status = $summary['percentage'] >= 85 ? 'Allowed to Exam' : 'Not Allowed to Exam';
+
         fputcsv($output, [
-            $record['student'],
-            $record['attendance_percent'] . '%',
+            $student['full_name'],
+            $student['reg_no'],
+            $student['department_name'],
+            $summary['percentage'] . '%',
+            $summary['present_count'],
+            $summary['total_sessions'],
             $status
         ]);
     }
 
     fclose($output);
     exit;
+}
+
+/**
+ * Export to PDF (basic implementation)
+ */
+function exportToPDF($report_data, $filename) {
+    // For now, redirect to CSV - can be enhanced with proper PDF library
+    header('Location: ?' . http_build_query(array_merge($_GET, ['export' => 'csv'])));
+    exit;
+}
+
+/**
+ * Export to Excel (basic implementation)
+ */
+function exportToExcel($report_data, $filename) {
+    // For now, use CSV format with Excel headers
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="' . $filename . '.xls"');
+    header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+    header('Expires: 0');
+
+    echo "<table border='1'>";
+    echo "<tr><th>Student Name</th><th>Registration No</th><th>Department</th><th>Attendance %</th><th>Present</th><th>Total Sessions</th><th>Status</th></tr>";
+
+    foreach ($report_data['attendance'] as $student_id => $data) {
+        $student = $data['student_info'];
+        $summary = $data['summary'];
+        $status = $summary['percentage'] >= 85 ? 'Allowed to Exam' : 'Not Allowed to Exam';
+
+        echo "<tr>";
+        echo "<td>{$student['full_name']}</td>";
+        echo "<td>{$student['reg_no']}</td>";
+        echo "<td>{$student['department_name']}</td>";
+        echo "<td>{$summary['percentage']}%</td>";
+        echo "<td>{$summary['present_count']}</td>";
+        echo "<td>{$summary['total_sessions']}</td>";
+        echo "<td>{$status}</td>";
+        echo "</tr>";
+    }
+
+    echo "</table>";
+    exit;
+}
+
+// Handle export requests
+if (isset($_GET['export']) && !empty($report_data)) {
+    handleExport($report_data, $_GET['export']);
 }
 ?>
 <!DOCTYPE html>
@@ -695,6 +1491,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && !empty($attendanceDat
 </head>
 
 <body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <div class="mt-2">Generating report...</div>
+    </div>
+
     <!-- Mobile Menu Toggle -->
     <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()">
         <i class="fas fa-bars"></i>
@@ -712,270 +1516,327 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && !empty($attendanceDat
                 <i class="fas fa-th-large me-2"></i>Main Dashboard
             </li>
             <?php if ($user_role === 'admin') : ?>
-                <li>
-                    <a href="admin-dashboard.php">
-                        <i class="fas fa-tachometer-alt"></i>Dashboard Overview
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-users me-2"></i>User Management
-                </li>
-                <li>
-                    <a href="manage-users.php">
-                        <i class="fas fa-users-cog"></i>Manage Users
-                    </a>
-                </li>
-                <li>
-                    <a href="register-student.php">
-                        <i class="fas fa-user-plus"></i>Register Student
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-sitemap me-2"></i>Organization
-                </li>
-                <li>
-                    <a href="manage-departments.php">
-                        <i class="fas fa-building"></i>Departments
-                    </a>
-                </li>
-                <li>
-                    <a href="assign-hod.php">
-                        <i class="fas fa-user-tie"></i>Assign HOD
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-chart-bar me-2"></i>Reports & Analytics
-                </li>
-                <li>
-                    <a href="admin-reports.php">
-                        <i class="fas fa-chart-line"></i>Analytics Reports
-                    </a>
-                </li>
-                <li>
-                    <a href="attendance-reports.php" class="active">
-                        <i class="fas fa-calendar-check"></i>Attendance Reports
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-cog me-2"></i>System
-                </li>
-                <li>
-                    <a href="system-logs.php">
-                        <i class="fas fa-file-code"></i>System Logs
-                    </a>
-                </li>
-                <li>
-                    <a href="hod-leave-management.php">
-                        <i class="fas fa-clipboard-list"></i>Leave Management
-                    </a>
-                </li>
+                <li><a href="admin-dashboard.php"><i class="fas fa-tachometer-alt"></i>Dashboard Overview</a></li>
+                <li class="nav-section"><i class="fas fa-users me-2"></i>User Management</li>
+                <li><a href="manage-users.php"><i class="fas fa-users-cog"></i>Manage Users</a></li>
+                <li><a href="register-student.php"><i class="fas fa-user-plus"></i>Register Student</a></li>
+                <li class="nav-section"><i class="fas fa-sitemap me-2"></i>Organization</li>
+                <li><a href="manage-departments.php"><i class="fas fa-building"></i>Departments</a></li>
+                <li><a href="assign-hod.php"><i class="fas fa-user-tie"></i>Assign HOD</a></li>
+                <li class="nav-section"><i class="fas fa-chart-bar me-2"></i>Reports & Analytics</li>
+                <li><a href="admin-reports.php"><i class="fas fa-chart-line"></i>Analytics Reports</a></li>
+                <li><a href="attendance-reports.php" class="active"><i class="fas fa-calendar-check"></i>Attendance Reports</a></li>
+                <li class="nav-section"><i class="fas fa-cog me-2"></i>System</li>
+                <li><a href="system-logs.php"><i class="fas fa-file-code"></i>System Logs</a></li>
+                <li><a href="hod-leave-management.php"><i class="fas fa-clipboard-list"></i>Leave Management</a></li>
             <?php else : ?>
-                <li>
-                    <a href="lecturer-dashboard.php">
-                        <i class="fas fa-tachometer-alt"></i>Dashboard
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-graduation-cap me-2"></i>Academic
-                </li>
-                <li>
-                    <a href="lecturer-my-courses.php">
-                        <i class="fas fa-book"></i>My Courses
-                    </a>
-                </li>
-                <li>
-                    <a href="attendance-session.php">
-                        <i class="fas fa-video"></i>Attendance Session
-                    </a>
-                </li>
-                <li>
-                    <a href="attendance-reports.php" class="active">
-                        <i class="fas fa-chart-bar"></i>Attendance Reports
-                    </a>
-                </li>
-
-                <li class="nav-section">
-                    <i class="fas fa-cog me-2"></i>Management
-                </li>
-                <li>
-                    <a href="leave-requests.php">
-                        <i class="fas fa-clipboard-list"></i>Leave Requests
-                    </a>
-                </li>
+                <li><a href="lecturer-dashboard.php"><i class="fas fa-tachometer-alt"></i>Dashboard</a></li>
+                <li class="nav-section"><i class="fas fa-graduation-cap me-2"></i>Academic</li>
+                <li><a href="lecturer-my-courses.php"><i class="fas fa-book"></i>My Courses</a></li>
+                <li><a href="attendance-session.php"><i class="fas fa-video"></i>Attendance Session</a></li>
+                <li><a href="attendance-reports.php" class="active"><i class="fas fa-chart-bar"></i>Attendance Reports</a></li>
+                <li class="nav-section"><i class="fas fa-cog me-2"></i>Management</li>
+                <li><a href="leave-requests.php"><i class="fas fa-clipboard-list"></i>Leave Requests</a></li>
             <?php endif; ?>
-
-            <li class="nav-section">
-                <i class="fas fa-sign-out-alt me-2"></i>Account
-            </li>
-            <li>
-                <a href="logout.php" class="text-danger">
-                    <i class="fas fa-sign-out-alt"></i>Logout
-                </a>
-            </li>
+            <li class="nav-section"><i class="fas fa-sign-out-alt me-2"></i>Account</li>
+            <li><a href="logout.php" class="text-danger"><i class="fas fa-sign-out-alt"></i>Logout</a></li>
         </ul>
     </div>
 
-    <!-- Topbar -->
-    <div class="topbar">
-        <h5 class="m-0 fw-bold">Attendance Reports</h5>
-        <span>RP Attendance System | <?php echo $user_role === 'admin' ? 'Admin' : 'Lecturer'; ?> Panel</span>
-    </div>
-
     <!-- Main Content -->
-    <div class="main-content container-fluid">
-        <!-- Buttons -->
-        <div class="btn-group-custom">
-            <button id="printReport" class="btn btn-outline-primary">
-                <i class="fas fa-print me-2"></i> Print Report
-            </button>
-            <?php if (!empty($attendanceData)) : ?>
-                <a href="?class_id=<?= urlencode($selectedClassId) ?>&course_id=<?= urlencode($selectedCourseId) ?>&start_date=<?= urlencode($startDate ?? '') ?>&end_date=<?= urlencode($endDate ?? '') ?>&export=csv" class="btn btn-success">
-                    <i class="fas fa-download me-2"></i> Export CSV
-                </a>
-            <?php endif; ?>
-            <button id="viewAllAttendanceBtn" class="btn btn-info">
-                <i class="fas fa-list me-2"></i> View All Attendance Details
-            </button>
+    <div class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <div>
+                <h2><i class="fas fa-chart-bar me-3"></i>Advanced Attendance Reports</h2>
+                <p>Comprehensive attendance analytics and reporting system</p>
+            </div>
+            <div class="d-flex gap-2">
+                <?php if (!empty($report_data) && !isset($report_data['error'])) : ?>
+                <div class="export-buttons">
+                    <a href="?<?= http_build_query(array_merge($_GET, ['export' => 'csv'])) ?>" class="btn btn-success btn-sm">
+                        <i class="fas fa-file-csv me-1"></i>CSV
+                    </a>
+                    <a href="?<?= http_build_query(array_merge($_GET, ['export' => 'excel'])) ?>" class="btn btn-info btn-sm">
+                        <i class="fas fa-file-excel me-1"></i>Excel
+                    </a>
+                    <button onclick="window.print()" class="btn btn-primary btn-sm">
+                        <i class="fas fa-print me-1"></i>Print
+                    </button>
+                    <button onclick="exportToPDF()" class="btn btn-danger btn-sm">
+                        <i class="fas fa-file-pdf me-1"></i>PDF
+                    </button>
+                </div>
+                <?php endif; ?>
+            </div>
         </div>
 
         <!-- Filter Section -->
-        <form id="filterForm" method="GET" class="row g-3 mb-4 align-items-end">
-            <div class="col-md-4">
-                <label for="class_id" class="form-label">Select Class</label>
-                <select id="class_id" name="class_id" class="form-select" onchange="this.form.submit()" required>
-                    <option value="">-- Choose Class --</option>
-                    <?php foreach ($classes as $class) : ?>
-                        <option value="<?= $class['id'] ?>" <?= (isset($_GET['class_id']) && $_GET['class_id'] == $class['id']) ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($class['name']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
+        <div class="filter-section">
+            <form method="GET" class="filter-row">
+                <div>
+                    <label class="form-label fw-bold">Report Type</label>
+                    <select name="report_type" class="form-select" onchange="updateFilters(this.value)">
+                        <option value="department" <?= ($reportType == 'department') ? 'selected' : '' ?>>🏢 Department Report</option>
+                        <option value="option" <?= ($reportType == 'option') ? 'selected' : '' ?>>📚 Option/Program Report</option>
+                        <option value="class" <?= ($reportType == 'class') ? 'selected' : '' ?>>🎓 Class/Year Report</option>
+                        <option value="course" <?= ($reportType == 'course') ? 'selected' : '' ?>>📖 Course Report</option>
+                    </select>
+                </div>
 
-            <?php if (!empty($courses)) : ?>
-                <div class="col-md-3">
-                    <label for="course_id" class="form-label">Select Course</label>
-                    <select id="course_id" name="course_id" class="form-select" required>
-                        <option value="">-- Choose Course --</option>
-                        <?php foreach ($courses as $course) : ?>
-                            <option value="<?= $course['id'] ?>" <?= (isset($_GET['course_id']) && $_GET['course_id'] == $course['id']) ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($course['name']) ?>
+                <div id="departmentFilter" style="display: <?= ($reportType == 'department' || $reportType == 'option') ? 'block' : 'none' ?>">
+                    <label class="form-label fw-bold">Department</label>
+                    <select name="department_id" class="form-select" onchange="this.form.submit()">
+                        <option value="">🏢 Select Department</option>
+                        <?php foreach ($departments as $dept) : ?>
+                            <option value="<?= $dept['id'] ?>" <?= ($selectedDepartmentId == $dept['id']) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($dept['name']) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="col-md-2">
-                    <label for="start_date" class="form-label">Start Date</label>
-                    <input type="date" id="start_date" name="start_date" class="form-control" value="<?= htmlspecialchars($startDate ?? '') ?>">
-                </div>
-                <div class="col-md-2">
-                    <label for="end_date" class="form-label">End Date</label>
-                    <input type="date" id="end_date" name="end_date" class="form-control" value="<?= htmlspecialchars($endDate ?? '') ?>">
-                </div>
-                <div class="col-md-2 d-flex justify-content-md-start justify-content-center align-items-end">
-                    <button type="submit" class="btn btn-primary w-100 w-md-auto">View Report</button>
-                </div>
-            <?php endif; ?>
-        </form>
 
-        <!-- Summary Statistics -->
-        <?php if (!empty($attendanceData)) : ?>
-            <div class="row mb-4">
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-primary"><?= count($attendanceData) ?></h5>
-                            <p class="card-text">Total Students</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-success">
-                                <?= count(array_filter($attendanceData, fn($r) => $r['attendance_percent'] >= 85)) ?>
-                            </h5>
-                            <p class="card-text">Allowed to Exam</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-danger">
-                                <?= count(array_filter($attendanceData, fn($r) => $r['attendance_percent'] < 85)) ?>
-                            </h5>
-                            <p class="card-text">Not Allowed to Exam</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card text-center">
-                        <div class="card-body">
-                            <h5 class="card-title text-info">
-                                <?= round(array_sum(array_column($attendanceData, 'attendance_percent')) / count($attendanceData), 1) ?>%
-                            </h5>
-                            <p class="card-text">Average Attendance</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        <?php endif; ?>
-
-        <!-- Attendance Report Table -->
-        <?php if (!empty($attendanceData)) : ?>
-            <div class="table-responsive">
-                <table class="table table-bordered table-striped align-middle">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Student Name</th>
-                            <th>Attendance %</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($attendanceData as $record) :
-                            $statusClass = $record['attendance_percent'] >= 85 ? 'text-success' : 'text-danger';
-                            $statusText = $record['attendance_percent'] >= 85 ? 'Allowed' : 'Not Allowed';
-                        ?>
-                            <tr>
-                                <td><?= htmlspecialchars($record['student']) ?></td>
-                                <td><?= $record['attendance_percent'] ?>%</td>
-                                <td class="<?= $statusClass ?> fw-bold"><?= $statusText ?></td>
-                            </tr>
+                <div id="optionFilter" style="display: <?= ($reportType == 'option') ? 'block' : 'none' ?>">
+                    <label class="form-label fw-bold">Program/Option</label>
+                    <select name="option_id" class="form-select">
+                        <option value="">📚 Select Program</option>
+                        <?php foreach ($options as $opt) : ?>
+                            <option value="<?= $opt['id'] ?>" <?= ($selectedOptionId == $opt['id']) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($opt['name']) ?>
+                            </option>
                         <?php endforeach; ?>
-                    </tbody>
-                </table>
+                    </select>
+                </div>
+
+                <div id="classFilter" style="display: <?= ($reportType == 'class' || $reportType == 'course') ? 'block' : 'none' ?>">
+                    <label class="form-label fw-bold">Class/Year Level</label>
+                    <select name="class_id" class="form-select" onchange="this.form.submit()">
+                        <option value="">🎓 Select Class</option>
+                        <?php foreach ($classes as $class) : ?>
+                            <option value="<?= $class['id'] ?>" <?= ($selectedClassId == $class['id']) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($class['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div id="courseFilter" style="display: <?= ($reportType == 'course') ? 'block' : 'none' ?>">
+                    <label class="form-label fw-bold">Course</label>
+                    <select name="course_id" class="form-select">
+                        <option value="">📖 Select Course</option>
+                        <?php foreach ($courses as $course) : ?>
+                            <option value="<?= $course['id'] ?>" <?= ($selectedCourseId == $course['id']) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($course['name']) ?> (<?= htmlspecialchars($course['course_code']) ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="form-label fw-bold">Start Date</label>
+                    <input type="date" name="start_date" class="form-control" value="<?= htmlspecialchars($startDate ?? '') ?>">
+                </div>
+
+                <div>
+                    <label class="form-label fw-bold">End Date</label>
+                    <input type="date" name="end_date" class="form-control" value="<?= htmlspecialchars($endDate ?? '') ?>">
+                </div>
+
+                <div class="d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-search me-2"></i>Generate Report
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <?php if (!empty($report_data) && !isset($report_data['error'])) : ?>
+            <!-- Report Information -->
+            <div class="course-info">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5><i class="fas fa-info-circle me-2"></i>Report Details</h5>
+                        <?php if (isset($report_data['course_info'])) : ?>
+                            <p><strong>Course:</strong> <?= htmlspecialchars($report_data['course_info']['course_name']) ?> (<?= htmlspecialchars($report_data['course_info']['course_code']) ?>)</p>
+                            <p><strong>Department:</strong> <?= htmlspecialchars($report_data['course_info']['department_name']) ?></p>
+                            <p><strong>Lecturer:</strong> <?= htmlspecialchars($report_data['course_info']['lecturer_name'] ?? 'Not Assigned') ?></p>
+                        <?php elseif (isset($report_data['department_info'])) : ?>
+                            <p><strong>Department:</strong> <?= htmlspecialchars($report_data['department_info']['name']) ?></p>
+                            <p><strong>Report Type:</strong> Department-wide Attendance</p>
+                            <p><strong>Courses Included:</strong> <?= count($report_data['courses']) ?></p>
+                        <?php elseif (isset($report_data['option_info'])) : ?>
+                            <p><strong>Program:</strong> <?= htmlspecialchars($report_data['option_info']['name']) ?></p>
+                            <p><strong>Report Type:</strong> Program-specific Attendance</p>
+                            <p><strong>Courses Included:</strong> <?= count($report_data['courses']) ?></p>
+                        <?php elseif (isset($report_data['class_info'])) : ?>
+                            <p><strong>Class:</strong> <?= htmlspecialchars($report_data['class_info']['name']) ?></p>
+                            <p><strong>Report Type:</strong> Class-wide Attendance</p>
+                            <p><strong>Courses Included:</strong> <?= count($report_data['courses']) ?></p>
+                        <?php endif; ?>
+                    </div>
+                    <div class="col-md-6">
+                        <h5><i class="fas fa-calendar me-2"></i>Report Period</h5>
+                        <p><strong>From:</strong> <?= $report_data['date_range']['start'] ? date('M d, Y', strtotime($report_data['date_range']['start'])) : 'All time' ?></p>
+                        <p><strong>To:</strong> <?= $report_data['date_range']['end'] ? date('M d, Y', strtotime($report_data['date_range']['end'])) : 'All time' ?></p>
+                        <p><strong>Total Sessions:</strong> <?= count($report_data['sessions']) ?></p>
+                        <p><strong>Total Students:</strong> <?= count($report_data['students']) ?></p>
+                    </div>
+                </div>
             </div>
-        <?php elseif (isset($_GET['course_id'])) : ?>
-            <p class="text-center text-muted">No attendance data available for this course.</p>
+
+            <!-- Statistics Dashboard -->
+            <?php $summary = $report_data['summary']; ?>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: var(--primary-gradient);">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="stat-value"><?= $summary['total_students'] ?></div>
+                    <div class="stat-label">Total Students</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: var(--success-gradient);">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-value"><?= $summary['students_above_85_percent'] ?></div>
+                    <div class="stat-label">Above 85%</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: var(--warning-gradient);">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                    <div class="stat-value"><?= $summary['students_below_85_percent'] ?></div>
+                    <div class="stat-label">Below 85%</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: var(--info-gradient);">
+                        <i class="fas fa-percentage"></i>
+                    </div>
+                    <div class="stat-value"><?= $summary['average_attendance_rate'] ?>%</div>
+                    <div class="stat-label">Average Rate</div>
+                </div>
+            </div>
+
+            <!-- Detailed Attendance Table -->
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="fas fa-table me-2"></i>Student Attendance Details</h5>
+                    <button class="btn btn-outline-primary btn-sm" onclick="toggleDetailedView()">
+                        <i class="fas fa-eye me-1"></i>Toggle Details
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Student Name</th>
+                                    <th>Registration No</th>
+                                    <th>Department</th>
+                                    <th>Attendance Rate</th>
+                                    <th>Status</th>
+                                    <th>Present/Absent</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($report_data['attendance'] as $student_id => $data) :
+                                    $student = $data['student_info'];
+                                    $summary = $data['summary'];
+                                    $percentage = $summary['percentage'];
+
+                                    // Determine status and colors
+                                    if ($percentage >= 85) {
+                                        $status = 'Allowed to Exam';
+                                        $statusClass = 'status-allowed';
+                                        $barClass = 'attendance-high';
+                                    } elseif ($percentage >= 70) {
+                                        $status = 'Warning';
+                                        $statusClass = 'bg-warning text-dark';
+                                        $barClass = 'attendance-medium';
+                                    } else {
+                                        $status = 'Not Allowed to Exam';
+                                        $statusClass = 'status-not-allowed';
+                                        $barClass = 'attendance-low';
+                                    }
+                                ?>
+                                <tr>
+                                    <td>
+                                        <div class="fw-bold"><?= htmlspecialchars($student['full_name']) ?></div>
+                                    </td>
+                                    <td><?= htmlspecialchars($student['reg_no']) ?></td>
+                                    <td><?= htmlspecialchars($student['department_name']) ?></td>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <div class="me-2 fw-bold"><?= $percentage ?>%</div>
+                                            <div class="attendance-bar">
+                                                <div class="attendance-fill <?= $barClass ?>" style="width: <?= $percentage ?>%"></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="status-badge <?= $statusClass ?>"><?= $status ?></span></td>
+                                    <td><span class="badge bg-success"><?= $summary['present_count'] ?></span> / <span class="badge bg-danger"><?= $summary['absent_count'] ?></span></td>
+                                    <td>
+                                        <button class="btn btn-outline-info btn-sm" onclick="showStudentDetails(<?= $student_id ?>)">
+                                            <i class="fas fa-eye"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Attendance Distribution</h6>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="attendanceChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Performance Overview</h6>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="performanceChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        <?php elseif ($selectedClassId && $selectedCourseId) : ?>
+            <div class="card">
+                <div class="card-body text-center py-5">
+                    <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
+                    <h5>No Attendance Data Found</h5>
+                    <p class="text-muted">No attendance records found for the selected course and date range.</p>
+                </div>
+            </div>
         <?php endif; ?>
     </div>
 
-    <!-- Footer -->
-    <div class="footer">
-        &copy; <?= date('Y') ?> Rwanda Polytechnic | <?php echo $user_role === 'admin' ? 'Admin Panel' : 'Lecturer Panel'; ?>
-    </div>
-
-    <!-- Modal: All Attendance Details -->
-    <div class="modal fade" id="attendanceDetailsModal" tabindex="-1" aria-labelledby="attendanceDetailsLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered modal-xl" style="max-height: 90vh; overflow-y: auto;">
+    <!-- Student Details Modal -->
+    <div class="modal fade" id="studentDetailsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="attendanceDetailsLabel">All Students Attendance Details</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <h5 class="modal-title"><i class="fas fa-user me-2"></i>Student Attendance Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body" id="allAttendanceDetailsBody"></div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="printAllDetailsBtn">
-                        <i class="fas fa-print me-2"></i> Print Details
-                    </button>
+                <div class="modal-body" id="studentDetailsContent">
+                    <!-- Content will be populated by JavaScript -->
                 </div>
             </div>
         </div>
@@ -983,119 +1844,210 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv' && !empty($attendanceDat
 
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/js/all.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        // Mobile sidebar toggle functions
+        // Global variables
+        const reportData = <?= json_encode($report_data ?? []) ?>;
+        let detailedView = false;
+
+        // Sidebar toggle
         function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('show');
+            document.getElementById('sidebar').classList.toggle('show');
         }
 
-        // Close sidebar when clicking outside on mobile
-        document.addEventListener('click', function(event) {
-            const sidebar = document.getElementById('sidebar');
-            const toggleBtn = document.querySelector('.mobile-menu-toggle');
+        // Update filter visibility based on report type
+        function updateFilters(reportType) {
+            const departmentFilter = document.getElementById('departmentFilter');
+            const optionFilter = document.getElementById('optionFilter');
+            const classFilter = document.getElementById('classFilter');
+            const courseFilter = document.getElementById('courseFilter');
 
-            if (window.innerWidth <= 768) {
-                if (!sidebar.contains(event.target) && !toggleBtn.contains(event.target)) {
-                    sidebar.classList.remove('show');
+            // Hide all filters first
+            departmentFilter.style.display = 'none';
+            optionFilter.style.display = 'none';
+            classFilter.style.display = 'none';
+            courseFilter.style.display = 'none';
+
+            // Show relevant filters based on report type
+            switch(reportType) {
+                case 'department':
+                    departmentFilter.style.display = 'block';
+                    break;
+                case 'option':
+                    departmentFilter.style.display = 'block';
+                    optionFilter.style.display = 'block';
+                    break;
+                case 'class':
+                    classFilter.style.display = 'block';
+                    break;
+                case 'course':
+                    classFilter.style.display = 'block';
+                    courseFilter.style.display = 'block';
+                    break;
+            }
+        }
+
+        // Initialize filters on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const reportTypeSelect = document.querySelector('select[name="report_type"]');
+            if (reportTypeSelect) {
+                updateFilters(reportTypeSelect.value);
+            }
+        });
+
+        // Show student details
+        function showStudentDetails(studentId) {
+            if (!reportData.attendance || !reportData.attendance[studentId]) return;
+
+            const student = reportData.attendance[studentId];
+            const studentInfo = student.student_info;
+            const sessions = student.sessions;
+
+            let html = `
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6>Student Information</h6>
+                        <p><strong>Name:</strong> ${studentInfo.full_name}</p>
+                        <p><strong>Registration No:</strong> ${studentInfo.reg_no}</p>
+                        <p><strong>Department:</strong> ${studentInfo.department_name}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Attendance Summary</h6>
+                        <p><strong>Overall Rate:</strong> ${student.summary.percentage}%</p>
+                        <p><strong>Present:</strong> ${student.summary.present_count}</p>
+                        <p><strong>Absent:</strong> ${student.summary.absent_count}</p>
+                    </div>
+                </div>
+                <h6>Session Details</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Time</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+
+            Object.values(sessions).forEach(session => {
+                const sessionInfo = session.session_info;
+                const status = session.status;
+                const statusBadge = status === 'present'
+                    ? '<span class="badge bg-success">Present</span>'
+                    : '<span class="badge bg-danger">Absent</span>';
+
+                html += `
+                    <tr>
+                        <td>${new Date(sessionInfo.session_date).toLocaleDateString()}</td>
+                        <td>${sessionInfo.start_time} - ${sessionInfo.end_time}</td>
+                        <td>${statusBadge}</td>
+                    </tr>`;
+            });
+
+            html += `
+                        </tbody>
+                    </table>
+                </div>`;
+
+            document.getElementById('studentDetailsContent').innerHTML = html;
+            new bootstrap.Modal(document.getElementById('studentDetailsModal')).show();
+        }
+
+        // Toggle detailed view
+        function toggleDetailedView() {
+            detailedView = !detailedView;
+            // Implementation for toggling detailed view
+        }
+
+        // Initialize charts when data is available
+        <?php if (!empty($report_data) && !isset($report_data['error'])) : ?>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Attendance Distribution Chart
+            const attendanceCtx = document.getElementById('attendanceChart').getContext('2d');
+            const summary = <?= json_encode($report_data['summary']) ?>;
+
+            new Chart(attendanceCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Above 85%', 'Below 85%', 'Perfect Attendance', 'Zero Attendance'],
+                    datasets: [{
+                        data: [
+                            summary.students_above_85_percent,
+                            summary.students_below_85_percent,
+                            summary.perfect_attendance,
+                            summary.zero_attendance
+                        ],
+                        backgroundColor: [
+                            '#10b981',
+                            '#ef4444',
+                            '#3b82f6',
+                            '#6b7280'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
                 }
-            }
+            });
+
+            // Performance Chart
+            const performanceCtx = document.getElementById('performanceChart').getContext('2d');
+            const attendanceRates = Object.values(<?= json_encode($report_data['attendance']) ?>).map(s => s.summary.percentage);
+
+            new Chart(performanceCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['0-25%', '26-50%', '51-75%', '76-85%', '86-100%'],
+                    datasets: [{
+                        label: 'Number of Students',
+                        data: [
+                            attendanceRates.filter(r => r <= 25).length,
+                            attendanceRates.filter(r => r > 25 && r <= 50).length,
+                            attendanceRates.filter(r => r > 50 && r <= 75).length,
+                            attendanceRates.filter(r => r > 75 && r <= 85).length,
+                            attendanceRates.filter(r => r > 85).length
+                        ],
+                        backgroundColor: '#0066cc'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
         });
+        <?php endif; ?>
 
-        // Handle window resize
-        window.addEventListener('resize', function() {
-            const sidebar = document.getElementById('sidebar');
-            if (window.innerWidth > 768) {
-                sidebar.classList.remove('show');
-            }
-        });
-
-        const attendanceDetailsData = <?= json_encode($attendanceDetailsData); ?>;
-
-        function getAllDates(data) {
-            const datesSet = new Set();
-            for (const student in data) {
-                Object.keys(data[student]).forEach(date => datesSet.add(date));
-            }
-            return Array.from(datesSet).sort();
+        // Loading overlay functions
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.remove('d-none');
         }
 
-        function calculateAttendancePercent(attendanceObj) {
-            const total = Object.keys(attendanceObj).length;
-            const presentCount = Object.values(attendanceObj).filter(status => status === 'present').length;
-            return total === 0 ? 0 : (presentCount / total) * 100;
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.add('d-none');
         }
 
-        const modal = new bootstrap.Modal(document.getElementById('attendanceDetailsModal'));
-        const modalBody = document.getElementById('allAttendanceDetailsBody');
+        // Auto-hide loading on page load
+        window.addEventListener('load', hideLoading);
 
-        document.getElementById('viewAllAttendanceBtn').addEventListener('click', () => {
-            modalBody.innerHTML = '';
-            const allDates = getAllDates(attendanceDetailsData);
-
-            const table = document.createElement('table');
-            table.id = "attendanceTableAll";
-            table.className = 'table table-bordered table-hover table-sm';
-
-            const thead = document.createElement('thead');
-            thead.innerHTML = `<tr><th>Student Name</th><th>Decision</th>${allDates.map(date => `<th>${date}</th>`).join('')}</tr>`;
-            table.appendChild(thead);
-
-            const tbody = document.createElement('tbody');
-            for (const student in attendanceDetailsData) {
-                const attendance = attendanceDetailsData[student];
-                const percent = calculateAttendancePercent(attendance);
-
-                let row = `<td>${student}</td>`;
-                row += percent < 85 ?
-                    `<td><span class="badge bg-danger">Not Allowed to Do Exam</span></td>` :
-                    `<td><span class="badge bg-success">Allowed</span></td>`;
-
-                allDates.forEach(date => {
-                    const status = attendance[date];
-                    row += status === 'present' ?
-                        `<td><span class="badge bg-success">Present</span></td>` :
-                        status === 'absent' ?
-                        `<td><span class="badge bg-danger">Absent</span></td>` :
-                        `<td><span class="text-muted">-</span></td>`;
-                });
-
-                const tr = document.createElement('tr');
-                tr.innerHTML = row;
-                tbody.appendChild(tr);
-            }
-
-            table.appendChild(tbody);
-            modalBody.appendChild(table);
-            modal.show();
-        });
-
-        document.getElementById('printReport').addEventListener('click', () => window.print());
-
-        document.getElementById('printAllDetailsBtn').addEventListener('click', () => {
-            const printContents = document.getElementById('allAttendanceDetailsBody').innerHTML;
-            const printWindow = window.open('', '', 'width=900,height=600');
-            printWindow.document.write(`
-                <html>
-                  <head>
-                    <title>Print Attendance Details</title>
-                    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-                  </head>
-                  <body>
-                    <h3 class="text-center mb-4">All Students Attendance Details</h3>
-                    ${printContents}
-                  </body>
-                </html>
-            `);
-            printWindow.document.close();
-            printWindow.focus();
-
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 300);
-        });
+        // PDF Export function
+        function exportToPDF() {
+            // For now, trigger CSV download with PDF headers
+            // In a real implementation, you'd use a PDF library like jsPDF or server-side PDF generation
+            const csvUrl = "?<?= http_build_query(array_merge($_GET, ['export' => 'csv'])) ?>";
+            window.open(csvUrl, '_blank');
+            alert('PDF export would generate a formatted PDF report. Currently downloading CSV format.');
+        }
     </script>
 </body>
 </html>

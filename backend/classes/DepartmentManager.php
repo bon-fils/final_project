@@ -389,7 +389,103 @@ class DepartmentManager {
     }
 
     /**
-     * Get available HoDs for selection
+     * Update department HOD
+     */
+    public function updateDepartmentHod($deptId, $hodId) {
+        try {
+            $deptId = (int)$deptId;
+
+            // Validate department exists
+            $deptInfo = $this->getDepartmentById($deptId);
+            if (!$deptInfo) {
+                return ['success' => false, 'message' => 'Department not found'];
+            }
+
+            // If hodId is provided, validate constraints
+            if ($hodId !== null && $hodId !== '') {
+                $hodId = (int)$hodId;
+
+                // Check if the user is assigned as lecturer to this department
+                $stmt = $this->db->prepare("
+                    SELECT u.id FROM users u
+                    JOIN lecturers l ON u.email = l.email
+                    WHERE u.id = ? AND l.department_id = ? AND u.role IN ('lecturer', 'hod')
+                ");
+                $stmt->execute([$hodId, $deptId]);
+                if (!$stmt->fetch()) {
+                    return ['success' => false, 'message' => 'Selected user is not assigned to this department'];
+                }
+
+                // Check if the user is already HOD for another department
+                $stmt = $this->db->prepare("SELECT id FROM departments WHERE hod_id = ? AND id != ?");
+                $stmt->execute([$hodId, $deptId]);
+                if ($stmt->fetch()) {
+                    return ['success' => false, 'message' => 'Selected lecturer is already HOD for another department'];
+                }
+            } else {
+                $hodId = null; // Unassign HOD
+            }
+
+            // Get current HOD before updating (for role management)
+            $stmt = $this->db->prepare("SELECT hod_id FROM departments WHERE id = ?");
+            $stmt->execute([$deptId]);
+            $currentHodId = $stmt->fetchColumn();
+
+            // Update department
+            $stmt = $this->db->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
+            $stmt->execute([$hodId, $deptId]);
+
+            if ($stmt->rowCount() === 0) {
+                return ['success' => false, 'message' => 'No changes made'];
+            }
+
+            // Update user roles based on HOD assignment
+            if ($hodId !== null && $hodId !== '') {
+                // Assigning HOD - change role to 'hod' in both users and lecturers tables
+                $stmt = $this->db->prepare("UPDATE users SET role = 'hod' WHERE id = ? AND role = 'lecturer'");
+                $stmt->execute([$hodId]);
+
+                $stmt = $this->db->prepare("UPDATE lecturers SET role = 'hod' WHERE email = (SELECT email FROM users WHERE id = ?) AND role = 'lecturer'");
+                $stmt->execute([$hodId]);
+            }
+
+            // Handle role change for previously assigned HOD (if different from new HOD)
+            if ($currentHodId && $currentHodId != $hodId) {
+                // Check if the previous HOD is still assigned to any other department
+                $stmt = $this->db->prepare("SELECT COUNT(*) FROM departments WHERE hod_id = ?");
+                $stmt->execute([$currentHodId]);
+                $otherHodCount = $stmt->fetchColumn();
+
+                // If not HOD for any other department, change role back to 'lecturer' in both tables
+                if ($otherHodCount == 0) {
+                    $stmt = $this->db->prepare("UPDATE users SET role = 'lecturer' WHERE id = ? AND role = 'hod'");
+                    $stmt->execute([$currentHodId]);
+
+                    $stmt = $this->db->prepare("UPDATE lecturers SET role = 'lecturer' WHERE email = (SELECT email FROM users WHERE id = ?) AND role = 'hod'");
+                    $stmt->execute([$currentHodId]);
+                }
+            }
+
+            $action = $hodId ? 'assigned' : 'unassigned';
+            $this->logger->info("HOD $action for department: {$deptInfo['name']} (ID: $deptId)");
+
+            return [
+                'success' => true,
+                'message' => 'Department HOD updated successfully',
+                'data' => [
+                    'dept_id' => $deptId,
+                    'hod_id' => $hodId
+                ]
+            ];
+
+        } catch (PDOException $e) {
+            $this->logger->error("Error updating department HOD: " . $e->getMessage());
+            return ['success' => false, 'message' => 'Failed to update department HOD'];
+        }
+    }
+
+    /**
+     * Get available HoDs for selection (general - for new departments)
      */
     public function getAvailableHoDs() {
         try {
@@ -398,6 +494,31 @@ class DepartmentManager {
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
             $this->logger->error("Error retrieving HoDs: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Get available HoDs for a specific department
+     * Only lecturers/HODs assigned to the department who are not already HOD elsewhere
+     */
+    public function getAvailableHoDsForDepartment($deptId) {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT u.id, u.username
+                FROM users u
+                JOIN lecturers l ON u.email = l.email
+                WHERE l.department_id = ?
+                AND u.role IN ('lecturer', 'hod')
+                AND u.id NOT IN (
+                    SELECT hod_id FROM departments WHERE hod_id IS NOT NULL AND id != ?
+                )
+                ORDER BY u.username
+            ");
+            $stmt->execute([$deptId, $deptId]);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $this->logger->error("Error retrieving department-specific HoDs: " . $e->getMessage());
             return [];
         }
     }
