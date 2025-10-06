@@ -294,25 +294,47 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 $stmt->execute();
                 $analytics['course_performance'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-                // HOD Reports
-                $stmt = $pdo->prepare("
-                    SELECT
-                        d.name as department_name,
-                        CONCAT(l.first_name, ' ', l.last_name) as hod_name,
-                        COUNT(DISTINCT c.id) as courses_count,
-                        COUNT(DISTINCT s.id) as students_count,
-                        COUNT(DISTINCT ar.id) as attendance_records
-                    FROM departments d
-                    LEFT JOIN lecturers l ON d.hod_id = l.id
-                    LEFT JOIN courses c ON d.id = c.department_id
-                    LEFT JOIN students s ON d.id = s.department_id
-                    LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
-                    LEFT JOIN attendance_records ar ON sess.id = ar.session_id
-                    GROUP BY d.id, d.name, l.first_name, l.last_name
-                    ORDER BY d.name
-                ");
-                $stmt->execute();
-                $analytics['hod_reports'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                // HOD Reports - handle different lecturer table structures
+                try {
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            d.name as department_name,
+                            CONCAT(l.first_name, ' ', l.last_name) as hod_name,
+                            COUNT(DISTINCT c.id) as courses_count,
+                            COUNT(DISTINCT s.id) as students_count,
+                            COUNT(DISTINCT ar.id) as attendance_records
+                        FROM departments d
+                        LEFT JOIN lecturers l ON d.hod_id = l.id
+                        LEFT JOIN courses c ON d.id = c.department_id
+                        LEFT JOIN students s ON d.id = s.department_id
+                        LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
+                        LEFT JOIN attendance_records ar ON sess.id = ar.session_id
+                        GROUP BY d.id, d.name, l.first_name, l.last_name
+                        ORDER BY d.name
+                    ");
+                    $stmt->execute();
+                    $analytics['hod_reports'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                } catch (PDOException $e) {
+                    // Fallback for different lecturer table structure
+                    error_log("HOD reports query failed, using fallback: " . $e->getMessage());
+                    $stmt = $pdo->prepare("
+                        SELECT
+                            d.name as department_name,
+                            'Not Assigned' as hod_name,
+                            COUNT(DISTINCT c.id) as courses_count,
+                            COUNT(DISTINCT s.id) as students_count,
+                            COUNT(DISTINCT ar.id) as attendance_records
+                        FROM departments d
+                        LEFT JOIN courses c ON d.id = c.department_id
+                        LEFT JOIN students s ON d.id = s.department_id
+                        LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
+                        LEFT JOIN attendance_records ar ON sess.id = ar.session_id
+                        GROUP BY d.id, d.name
+                        ORDER BY d.name
+                    ");
+                    $stmt->execute();
+                    $analytics['hod_reports'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
 
                 // Ensure we have valid data structure
                 $analytics = array_merge([

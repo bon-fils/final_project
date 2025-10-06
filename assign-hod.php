@@ -29,6 +29,34 @@ if (empty($_SESSION['csrf_token'])) {
 }
 $csrf_token = $_SESSION['csrf_token'];
 
+// Rate limiting for API requests
+function checkApiRateLimit() {
+    $max_requests_per_minute = 30; // Reasonable limit for HOD assignment operations
+    $time_window = 60; // 1 minute in seconds
+
+    $user_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $current_time = time();
+
+    // Use session to track API requests (more reliable than static variables)
+    if (!isset($_SESSION['api_requests'])) {
+        $_SESSION['api_requests'] = [];
+    }
+
+    // Clean old requests
+    $_SESSION['api_requests'] = array_filter($_SESSION['api_requests'], function($timestamp) use ($current_time, $time_window) {
+        return ($current_time - $timestamp) < $time_window;
+    });
+
+    // Check if under limit
+    if (count($_SESSION['api_requests']) >= $max_requests_per_minute) {
+        return false;
+    }
+
+    // Add current request
+    $_SESSION['api_requests'][] = $current_time;
+    return true;
+}
+
 // Validate CSRF token for POST requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
     if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'])) {
@@ -51,37 +79,62 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         exit;
     }
 
+    // Rate limiting check
+    if (!checkApiRateLimit()) {
+        http_response_code(429);
+        echo json_encode(['status' => 'error', 'message' => 'Too many requests. Please wait before trying again.']);
+        exit;
+    }
+
     header('Content-Type: application/json');
+    header('Cache-Control: no-cache, must-revalidate');
+    header('X-Robots-Tag: noindex, nofollow');
+
     $action = $_GET['action'] ?? '';
     
     try {
+        // Log API request for debugging
+        error_log("HOD Assignment API Request: Action '{$action}' by user ID: " . ($_SESSION['user_id'] ?? 'unknown') .
+                 " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+
         switch ($action) {
             case 'get_lecturers':
-                // Get all lecturers (including HODs)
+                // Get all lecturers (including HODs) with improved query
                 $stmt = $pdo->prepare("
-                    SELECT l.id, l.first_name, l.last_name, l.email, l.role, l.phone, l.department_id,
-                        CONCAT(l.first_name, ' ', l.last_name) as full_name,
-                        u.username, u.status, u.created_at, u.updated_at
+                    SELECT l.id, u.first_name, u.last_name, u.email, u.role, u.phone, l.department_id,
+                        CONCAT(u.first_name, ' ', u.last_name) as full_name,
+                        u.username, u.status, u.created_at, u.updated_at,
+                        d.name as department_name
                     FROM lecturers l
-                    LEFT JOIN users u ON u.email = l.email AND u.role = l.role
-                    WHERE l.role IN ('lecturer', 'hod')
-                    ORDER BY l.first_name, l.last_name
+                    LEFT JOIN users u ON l.user_id = u.id
+                    LEFT JOIN departments d ON l.department_id = d.id
+                    WHERE u.role IN ('lecturer', 'hod')
+                    ORDER BY u.first_name, u.last_name
                 ");
                 $stmt->execute();
                 $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                echo json_encode(['status' => 'success', 'data' => $lecturers]);
+
+                // Validate data integrity
+                foreach ($lecturers as &$lecturer) {
+                    if (empty($lecturer['username']) && !empty($lecturer['email'])) {
+                        $lecturer['data_integrity'] = 'warning';
+                        $lecturer['data_integrity_message'] = 'User account not found';
+                    }
+                }
+
+                echo json_encode(['status' => 'success', 'data' => $lecturers, 'count' => count($lecturers)]);
                 break;
                 
             case 'get_hods':
                 // Get only HODs
                 $stmt = $pdo->prepare("
-                    SELECT l.id, l.first_name, l.last_name, l.email, l.role, l.phone, l.department_id,
-                        CONCAT(l.first_name, ' ', l.last_name) as full_name,
+                    SELECT l.id, u.first_name, u.last_name, u.email, u.role, u.phone, l.department_id,
+                        CONCAT(u.first_name, ' ', u.last_name) as full_name,
                         u.username, u.status, u.created_at, u.updated_at
                     FROM lecturers l
-                    LEFT JOIN users u ON u.email = l.email AND u.role = l.role
-                    WHERE l.role = 'hod'
-                    ORDER BY l.first_name, l.last_name
+                    LEFT JOIN users u ON l.user_id = u.id
+                    WHERE u.role = 'hod'
+                    ORDER BY u.first_name, u.last_name
                 ");
                 $stmt->execute();
                 $hods = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -89,20 +142,46 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 break;
                 
             case 'get_departments':
-                // Get departments with HOD information
+                // Get departments with HOD information and data integrity checks
                 $stmt = $pdo->prepare("
                     SELECT d.id, d.name, d.hod_id,
-                        l.first_name AS hod_first_name, 
-                        l.last_name AS hod_last_name, 
-                        CONCAT(l.first_name, ' ', l.last_name) as hod_name,
-                        l.email AS hod_email
+                        u.first_name AS hod_first_name,
+                        u.last_name AS hod_last_name,
+                        CONCAT(u.first_name, ' ', u.last_name) as hod_name,
+                        u.email AS hod_email,
+                        u.role AS hod_role,
+                        CASE
+                            WHEN d.hod_id IS NULL THEN 'unassigned'
+                            WHEN d.hod_id IS NOT NULL AND l.id IS NULL THEN 'invalid'
+                            WHEN d.hod_id IS NOT NULL AND u.role != 'hod' THEN 'invalid_role'
+                            ELSE 'assigned'
+                        END as assignment_status
                     FROM departments d
                     LEFT JOIN lecturers l ON d.hod_id = l.id
+                    LEFT JOIN users u ON l.user_id = u.id
                     ORDER BY d.name
                 ");
                 $stmt->execute();
                 $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                echo json_encode(['status' => 'success', 'data' => $departments]);
+
+                // Add data integrity warnings
+                $integrity_issues = 0;
+                foreach ($departments as &$dept) {
+                    if ($dept['assignment_status'] === 'invalid' || $dept['assignment_status'] === 'invalid_role') {
+                        $integrity_issues++;
+                        $dept['data_integrity'] = 'warning';
+                        $dept['data_integrity_message'] = $dept['assignment_status'] === 'invalid' ?
+                            'HOD ID exists but lecturer not found' :
+                            'Assigned lecturer is not marked as HOD';
+                    }
+                }
+
+                echo json_encode([
+                    'status' => 'success',
+                    'data' => $departments,
+                    'count' => count($departments),
+                    'integrity_issues' => $integrity_issues
+                ]);
                 break;
                 
             case 'get_assignment_stats':
@@ -115,7 +194,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 $stmt->execute();
                 $assignedDepts = $stmt->fetchColumn();
                 
-                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM lecturers WHERE role IN ('lecturer', 'hod')");
+                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM lecturers l LEFT JOIN users u ON l.user_id = u.id WHERE u.role IN ('lecturer', 'hod') AND u.id IS NOT NULL");
                 $stmt->execute();
                 $totalLecturers = $stmt->fetchColumn();
                 
@@ -131,69 +210,143 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 break;
                 
             case 'assign_hod':
-                // Handle HOD assignment
+                // Handle HOD assignment with comprehensive validation
                 $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
                 $hod_id = filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT);
-                
-                if (!$department_id) {
-                    echo json_encode(['status' => 'error', 'message' => 'Invalid department ID']);
+
+                // Validate department ID
+                if (!$department_id || $department_id <= 0) {
+                    echo json_encode(['status' => 'error', 'message' => 'Invalid department ID provided']);
                     exit;
                 }
-                
-                // Verify department exists
-                $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id = ?");
+
+                // Verify department exists and get current assignment
+                $stmt = $pdo->prepare("SELECT id, name, hod_id FROM departments WHERE id = ?");
                 $stmt->execute([$department_id]);
-                $department = $stmt->fetch();
-                
+                $department = $stmt->fetch(PDO::FETCH_ASSOC);
+
                 if (!$department) {
-                    echo json_encode(['status' => 'error', 'message' => 'Department not found']);
+                    echo json_encode(['status' => 'error', 'message' => 'Department not found in database']);
                     exit;
                 }
-                
-                if ($hod_id) {
-                    // Verify lecturer exists and can be HOD
-                    $stmt = $pdo->prepare("SELECT id, first_name, last_name, email FROM lecturers WHERE id = ?");
-                    $stmt->execute([$hod_id]);
-                    $lecturer = $stmt->fetch();
-                    
-                    if (!$lecturer) {
-                        echo json_encode(['status' => 'error', 'message' => 'Lecturer not found']);
-                        exit;
-                    }
-                    
-                    // Update lecturer role to HOD if not already
-                    $stmt = $pdo->prepare("UPDATE lecturers SET role = 'hod' WHERE id = ?");
-                    $stmt->execute([$hod_id]);
-                    
-                    // Create or update user account for HOD
-                    $stmt = $pdo->prepare("
-                        INSERT INTO users (username, email, password, role, status, created_at) 
-                        VALUES (?, ?, ?, 'hod', 'active', NOW())
-                        ON DUPLICATE KEY UPDATE 
-                        role = 'hod', status = 'active', updated_at = NOW()
-                    ");
-                    $username = strtolower($lecturer['first_name'] . '.' . $lecturer['last_name']);
-                    $default_password = password_hash('password123', PASSWORD_DEFAULT);
-                    $stmt->execute([$username, $lecturer['email'], $default_password]);
+
+                // Check if this is actually a change
+                $current_hod_id = $department['hod_id'];
+                if ($current_hod_id == $hod_id) {
+                    echo json_encode([
+                        'status' => 'info',
+                        'message' => 'No changes made - same HOD assignment already exists'
+                    ]);
+                    exit;
                 }
-                
-                // Update department HOD
-                $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
-                $stmt->execute([$hod_id ?: null, $department_id]);
-                
-                $action = $hod_id ? 'assigned' : 'removed';
-                echo json_encode([
-                    'status' => 'success', 
-                    'message' => "HOD {$action} successfully for {$department['name']}"
-                ]);
+
+                $pdo->beginTransaction();
+
+                try {
+                    if ($hod_id) {
+                        // Validate lecturer exists and get details
+                        $stmt = $pdo->prepare("
+                            SELECT l.id, u.first_name, u.last_name, u.email, u.role, l.department_id
+                            FROM lecturers l
+                            LEFT JOIN users u ON l.user_id = u.id
+                            WHERE l.id = ?
+                        ");
+                        $stmt->execute([$hod_id]);
+                        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                        if (!$lecturer) {
+                            throw new Exception('Lecturer not found in database');
+                        }
+
+                        // Check if lecturer is already HOD for another department
+                        if ($lecturer['role'] === 'hod' && $current_hod_id != $hod_id) {
+                            $stmt = $pdo->prepare("SELECT name FROM departments WHERE hod_id = ? AND id != ?");
+                            $stmt->execute([$hod_id, $department_id]);
+                            $other_dept = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                            if ($other_dept) {
+                                throw new Exception("Lecturer is already HOD for department: {$other_dept['name']}");
+                            }
+                        }
+
+                        // Note: Role is stored in users table, not lecturers table
+                        // The user creation/update query below handles role assignment
+
+                        // Create or update user account for HOD
+                        $username = strtolower($lecturer['first_name'] . '.' . $lecturer['last_name']);
+                        $default_password = password_hash('Welcome123!', PASSWORD_DEFAULT);
+
+                        $stmt = $pdo->prepare("
+                            INSERT INTO users (username, email, password, role, status, created_at)
+                            VALUES (?, ?, ?, 'hod', 'active', NOW())
+                            ON DUPLICATE KEY UPDATE
+                            role = 'hod', status = 'active', updated_at = NOW()
+                        ");
+                        $stmt->execute([$username, $lecturer['email'], $default_password]);
+
+                        // Log the assignment
+                        error_log("HOD Assignment: {$lecturer['first_name']} {$lecturer['last_name']} assigned to {$department['name']}");
+
+                    } else {
+                        // Removing HOD assignment - log this action
+                        error_log("HOD Removal: Assignment removed from {$department['name']}");
+                    }
+
+                    // Update department HOD (this is the critical operation)
+                    $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
+                    $stmt->execute([$hod_id ?: null, $department_id]);
+
+                    $pdo->commit();
+
+                    $action = $hod_id ? 'assigned' : 'removed';
+                    $hod_name = $hod_id ? "{$lecturer['first_name']} {$lecturer['last_name']}" : 'None';
+
+                    echo json_encode([
+                        'status' => 'success',
+                        'message' => "HOD {$action} successfully for {$department['name']}",
+                        'details' => [
+                            'department' => $department['name'],
+                            'hod_name' => $hod_name,
+                            'action' => $action,
+                            'previous_hod_id' => $current_hod_id,
+                            'new_hod_id' => $hod_id
+                        ]
+                    ]);
+
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("HOD Assignment Error: " . $e->getMessage());
+                    echo json_encode([
+                        'status' => 'error',
+                        'message' => 'Assignment failed: ' . $e->getMessage()
+                    ]);
+                }
                 break;
                 
             default:
                 echo json_encode(['status' => 'error', 'message' => 'Invalid action']);
         }
+    } catch (PDOException $e) {
+        error_log("HOD Assignment Database Error: " . $e->getMessage() .
+                 " | Action: {$action} | User: " . ($_SESSION['user_id'] ?? 'unknown') .
+                 " | IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+
+        // Don't expose database details to client
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Database operation failed. Please try again or contact administrator if the problem persists.',
+            'error_code' => 'DB_ERROR'
+        ]);
     } catch (Exception $e) {
-        error_log("HOD Assignment API Error: " . $e->getMessage());
-        echo json_encode(['status' => 'error', 'message' => 'Database error occurred: ' . $e->getMessage()]);
+        error_log("HOD Assignment General Error: " . $e->getMessage() .
+                 " | Action: {$action} | User: " . ($_SESSION['user_id'] ?? 'unknown') .
+                 " | IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'An unexpected error occurred: ' . htmlspecialchars($e->getMessage()),
+            'error_code' => 'GENERAL_ERROR'
+        ]);
     }
     exit;
 }
@@ -788,46 +941,56 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         <div class="row mb-4">
                             <div class="col-md-6">
                                 <label for="departmentSearch" class="form-label fw-semibold">
-                                    <i class="fas fa-search me-1"></i>Search Departments
+                                    <i class="fas fa-search me-1" aria-hidden="true"></i>Search Departments
                                 </label>
                                 <div class="input-group">
-                                    <span class="input-group-text bg-light"><i class="fas fa-search text-muted"></i></span>
-                                    <input type="text" class="form-control" id="departmentSearch" 
-                                           placeholder="Type to search departments..." aria-describedby="departmentSearchHelp">
+                                    <span class="input-group-text bg-light" aria-hidden="true"><i class="fas fa-search text-muted"></i></span>
+                                    <input type="text" class="form-control" id="departmentSearch"
+                                           placeholder="Type to search departments..." aria-describedby="departmentSearchHelp"
+                                           autocomplete="off" spellcheck="false">
                                 </div>
-                                <div id="departmentSearchHelp" class="form-text">Start typing to filter departments</div>
+                                <div id="departmentSearchHelp" class="form-text text-muted">
+                                    <i class="fas fa-info-circle me-1" aria-hidden="true"></i>Start typing to filter departments (case-insensitive)
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <label for="lecturerSearch" class="form-label fw-semibold">
-                                    <i class="fas fa-search me-1"></i>Search Lecturers
+                                    <i class="fas fa-search me-1" aria-hidden="true"></i>Search Lecturers
                                 </label>
                                 <div class="input-group">
-                                    <span class="input-group-text bg-light"><i class="fas fa-search text-muted"></i></span>
-                                    <input type="text" class="form-control" id="lecturerSearch" 
-                                           placeholder="Type to search lecturers..." aria-describedby="lecturerSearchHelp">
+                                    <span class="input-group-text bg-light" aria-hidden="true"><i class="fas fa-search text-muted"></i></span>
+                                    <input type="text" class="form-control" id="lecturerSearch"
+                                           placeholder="Type to search lecturers..." aria-describedby="lecturerSearchHelp"
+                                           autocomplete="off" spellcheck="false">
                                 </div>
-                                <div id="lecturerSearchHelp" class="form-text">Start typing to filter lecturers</div>
+                                <div id="lecturerSearchHelp" class="form-text text-muted">
+                                    <i class="fas fa-info-circle me-1" aria-hidden="true"></i>Start typing to filter lecturers (case-insensitive)
+                                </div>
                             </div>
                         </div>
 
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="departmentSelect" class="form-label fw-semibold">
-                                    <i class="fas fa-building me-1"></i>Department *
+                                    <i class="fas fa-building me-1" aria-hidden="true"></i>Department <span class="text-danger">*</span>
                                 </label>
-                                <select class="form-select" id="departmentSelect" name="department_id" required aria-describedby="departmentSelectFeedback">
+                                <select class="form-select" id="departmentSelect" name="department_id" required
+                                        aria-describedby="departmentSelectFeedback" aria-required="true">
                                     <option value="">-- Select Department --</option>
                                 </select>
-                                <div id="departmentSelectFeedback" class="form-text mt-2"></div>
+                                <div id="departmentSelectFeedback" class="form-text mt-2" role="status" aria-live="polite"></div>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="lecturerSelect" class="form-label fw-semibold">
-                                    <i class="fas fa-user-graduate me-1"></i>Head of Department
+                                    <i class="fas fa-user-graduate me-1" aria-hidden="true"></i>Head of Department
                                 </label>
-                                <select class="form-select" id="lecturerSelect" name="hod_id" aria-describedby="lecturerSelectFeedback">
-                                    <option value="">-- Select Lecturer --</option>
+                                <select class="form-select" id="lecturerSelect" name="hod_id"
+                                        aria-describedby="lecturerSelectFeedback">
+                                    <option value="">-- Select Lecturer (Optional) --</option>
                                 </select>
-                                <div id="lecturerSelectFeedback" class="form-text mt-2"></div>
+                                <div id="lecturerSelectFeedback" class="form-text mt-2 text-info" role="status" aria-live="polite">
+                                    <i class="fas fa-info-circle me-1" aria-hidden="true"></i>Leave empty to remove current HOD assignment
+                                </div>
                             </div>
                         </div>
 

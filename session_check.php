@@ -16,6 +16,10 @@ if (!headers_sent()) {
 
 session_start();
 
+// Detect AJAX requests early
+$is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+$current_page = basename($_SERVER['PHP_SELF']);
+
 // Security headers
 header("X-Content-Type-Options: nosniff");
 header("X-Frame-Options: DENY");
@@ -33,6 +37,11 @@ header("Expires: 0");
 if (!isset($_SESSION['initiated']) && !$is_ajax) {
     session_regenerate_id(true);
     $_SESSION['initiated'] = true;
+}
+
+// Initialize session activity tracking
+if (!isset($_SESSION['last_activity'])) {
+    $_SESSION['last_activity'] = time();
 }
 
 // Session timeout using configuration constant
@@ -66,8 +75,6 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 
 // Check if user is logged in (allow register-student.php and login.php for demo)
-$current_page = basename($_SERVER['PHP_SELF']);
-$is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     // Allow access to registration and login pages
@@ -88,7 +95,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
         } else {
             // For regular requests, use HTML redirect
             echo "<script>window.location.href='login.php';</script>";
-            echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+            echo "<p>If you are not redirected, click this link <a href='login.php'>click here</a>.</p>";
             exit;
         }
     }

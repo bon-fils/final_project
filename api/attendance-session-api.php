@@ -75,6 +75,10 @@ try {
             $response = handleGetSessionStatus($pdo);
             break;
 
+        case 'get_user_active_session':
+            $response = handleGetUserActiveSession($pdo);
+            break;
+
         case 'get_session_stats':
             $response = handleGetSessionStats($pdo);
             break;
@@ -85,6 +89,10 @@ try {
 
         case 'get_attendance_history':
             $response = handleGetAttendanceHistory($pdo);
+            break;
+
+        case 'process_face_recognition':
+            $response = handleProcessFaceRecognition($pdo);
             break;
 
         case 'test_database':
@@ -160,9 +168,8 @@ function handleGetDepartments(PDO $pdo): array {
         $stmt = $pdo->prepare("
             SELECT l.id as lecturer_id, l.department_id, d.name
             FROM lecturers l
-            JOIN users u ON l.email = u.email
             JOIN departments d ON l.department_id = d.id
-            WHERE u.id = ? AND u.role = 'lecturer'
+            WHERE l.user_id = ?
         ");
         $stmt->execute([$user_id]);
         $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -221,47 +228,49 @@ function handleGetOptions(PDO $pdo): array {
     $user_id = $_SESSION['user_id'];
     $user_role = $_SESSION['role'];
 
-    if ($user_role === 'hod') {
-        // For HODs, get department from departments table where they are assigned as HOD
-        $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
-        $stmt->execute([$user_id]);
-        $department = $stmt->fetch(PDO::FETCH_ASSOC);
+    // For admins, skip department validation - they can access all departments
+    if ($user_role !== 'admin') {
+        if ($user_role === 'hod') {
+            // For HODs, get department from departments table where they are assigned as HOD
+            $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
+            $stmt->execute([$user_id]);
+            $department = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$department) {
-            return [
-                'status' => 'error',
-                'message' => 'No department assigned to this HOD'
-            ];
+            if (!$department) {
+                return [
+                    'status' => 'error',
+                    'message' => 'No department assigned to this HOD'
+                ];
+            }
+
+            $lecturer_department_id = $department['department_id'];
+        } else {
+            // For lecturers, get department from lecturers table
+            $stmt = $pdo->prepare("
+                SELECT l.department_id
+                FROM lecturers l
+                WHERE l.user_id = ?
+            ");
+            $stmt->execute([$user_id]);
+            $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lecturer || !$lecturer['department_id']) {
+                return [
+                    'status' => 'error',
+                    'message' => 'No department assigned to this lecturer'
+                ];
+            }
+
+            $lecturer_department_id = $lecturer['department_id'];
         }
 
-        $lecturer_department_id = $department['department_id'];
-    } else {
-        // For lecturers, get department from lecturers table
-        $stmt = $pdo->prepare("
-            SELECT l.department_id
-            FROM lecturers l
-            JOIN users u ON l.email = u.email
-            WHERE u.id = ? AND u.role = 'lecturer'
-        ");
-        $stmt->execute([$user_id]);
-        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$lecturer || !$lecturer['department_id']) {
+        // Verify that the requested department matches the user's department
+        if ($department_id != $lecturer_department_id) {
             return [
                 'status' => 'error',
-                'message' => 'No department assigned to this lecturer'
+                'message' => 'You can only access options from your assigned department'
             ];
         }
-
-        $lecturer_department_id = $lecturer['department_id'];
-    }
-
-    // Verify that the requested department matches the lecturer's department (unless admin)
-    if ($_SESSION['role'] !== 'admin' && $department_id != $lecturer_department_id) {
-        return [
-            'status' => 'error',
-            'message' => 'You can only access options from your assigned department'
-        ];
     }
 
     $stmt = $pdo->prepare("SELECT id, name FROM options WHERE department_id = ? ORDER BY name");
@@ -292,13 +301,11 @@ function handleGetStudents(PDO $pdo): array {
     $query = "
         SELECT
             s.id,
-            s.student_id,
-            s.first_name,
-            s.last_name,
+            s.reg_no as student_id,
             CONCAT(s.first_name, ' ', s.last_name) as full_name,
-            s.email,
-            s.phone,
-            s.profile_image,
+            '' as email,
+            '' as phone,
+            '' as profile_image,
             s.year_level,
             d.name as department_name,
             o.name as option_name
@@ -340,6 +347,14 @@ function handleGetCourses(PDO $pdo): array {
     $option_id = filter_input(INPUT_GET, 'option_id', FILTER_VALIDATE_INT);
     $year_level = filter_input(INPUT_GET, 'year_level', FILTER_SANITIZE_STRING);
 
+    // Fallback for CLI testing
+    if ($department_id === null && isset($_GET['department_id'])) {
+        $department_id = (int)$_GET['department_id'];
+    }
+    if ($option_id === null && isset($_GET['option_id'])) {
+        $option_id = (int)$_GET['option_id'];
+    }
+
     if (!$department_id || $department_id <= 0) {
         throw new Exception('Invalid department ID');
     }
@@ -350,49 +365,51 @@ function handleGetCourses(PDO $pdo): array {
     $user_id = $_SESSION['user_id'];
     $user_role = $_SESSION['role'];
 
-    if ($user_role === 'hod') {
-        // For HODs, get department from departments table where they are assigned as HOD
-        $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
-        $stmt->execute([$user_id]);
-        $department = $stmt->fetch(PDO::FETCH_ASSOC);
+    // For admins, skip department validation - they can access all departments
+    if ($user_role !== 'admin') {
+        if ($user_role === 'hod') {
+            // For HODs, get department from departments table where they are assigned as HOD
+            $stmt = $pdo->prepare("SELECT id as department_id FROM departments WHERE hod_id = ?");
+            $stmt->execute([$user_id]);
+            $department = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$department) {
-            return [
-                'status' => 'error',
-                'message' => 'No department assigned to this HOD'
-            ];
+            if (!$department) {
+                return [
+                    'status' => 'error',
+                    'message' => 'No department assigned to this HOD'
+                ];
+            }
+
+            $lecturer_department_id = $department['id'];
+            $lecturer_id = null; // HODs don't have lecturer_id
+        } else {
+            // For lecturers, get department from lecturers table
+            $stmt = $pdo->prepare("
+                SELECT l.id as lecturer_id, l.department_id
+                FROM lecturers l
+                WHERE l.user_id = ?
+            ");
+            $stmt->execute([$user_id]);
+            $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lecturer || !$lecturer['department_id']) {
+                return [
+                    'status' => 'error',
+                    'message' => 'No department assigned to this lecturer'
+                ];
+            }
+
+            $lecturer_department_id = $lecturer['department_id'];
+            $lecturer_id = $lecturer['lecturer_id'];
         }
 
-        $lecturer_department_id = $department['id'];
-        $lecturer_id = null; // HODs don't have lecturer_id
-    } else {
-        // For lecturers, get department from lecturers table
-        $stmt = $pdo->prepare("
-            SELECT l.id as lecturer_id, l.department_id
-            FROM lecturers l
-            JOIN users u ON l.email = u.email
-            WHERE u.id = ? AND u.role = 'lecturer'
-        ");
-        $stmt->execute([$user_id]);
-        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$lecturer || !$lecturer['department_id']) {
+        // Verify that the requested department matches the user's department
+        if ($department_id != $lecturer_department_id) {
             return [
                 'status' => 'error',
-                'message' => 'No department assigned to this lecturer'
+                'message' => 'You can only access courses from your assigned department'
             ];
         }
-
-        $lecturer_department_id = $lecturer['department_id'];
-        $lecturer_id = $lecturer['lecturer_id'];
-    }
-
-    // Verify that the requested department matches the lecturer's department (unless admin)
-    if ($_SESSION['role'] !== 'admin' && $department_id != $lecturer_department_id) {
-        return [
-            'status' => 'error',
-            'message' => 'You can only access courses from your assigned department'
-        ];
     }
 
     // Debug: Check if tables exist and have data
@@ -456,166 +473,31 @@ function handleGetCourses(PDO $pdo): array {
 
     $params = [$department_id];
 
-    // First try to get courses that have attendance sessions
+    // Get courses for the department
     $query = "
         SELECT DISTINCT
             c.id,
             c.name,
             c.course_code,
             c.description,
-            c.semester,
             c.credits,
-            c.is_available,
-            COALESCE(l.first_name, 'Unknown') as first_name,
-            COALESCE(l.last_name, 'Lecturer') as last_name,
-            CASE
-                WHEN l.first_name IS NOT NULL AND l.last_name IS NOT NULL
-                THEN CONCAT(l.first_name, ' ', l.last_name)
-                ELSE 'Unknown Lecturer'
-            END as lecturer_name
+            c.status as is_available,
+            'Unknown Lecturer' as lecturer_name
         FROM courses c
-        LEFT JOIN lecturers l ON c.lecturer_id = l.id
-        LEFT JOIN attendance_sessions s ON c.id = s.course_id AND s.department_id = ?
+        WHERE c.department_id = ?
     ";
 
+    // Add option filtering if specified
     if ($option_id && $option_id > 0) {
-        $query .= " AND (s.option_id = ? OR s.option_id IS NULL)";
+        $query .= " AND c.option_id = ?";
         $params[] = $option_id;
     }
 
-    // Note: Courses don't have year_level - students do
-    // Year level filtering should be applied when getting students, not courses
-
     $query .= " ORDER BY c.name";
 
-    // If no courses found with attendance sessions, get all courses for the department
     $stmt = $pdo->prepare($query);
     $stmt->execute($params);
     $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // If no courses found and we have an option_id filter, try without the option filter
-    if (empty($courses) && $option_id && $option_id > 0) {
-        $params = [$department_id];
-        $query = "
-            SELECT DISTINCT
-                c.id,
-                c.name,
-                c.course_code,
-                c.description,
-                c.semester,
-                c.credits,
-                c.is_available,
-                COALESCE(l.first_name, 'Unknown') as first_name,
-                COALESCE(l.last_name, 'Lecturer') as last_name,
-                CASE
-                    WHEN l.first_name IS NOT NULL AND l.last_name IS NOT NULL
-                    THEN CONCAT(l.first_name, ' ', l.last_name)
-                    ELSE 'Unknown Lecturer'
-                END as lecturer_name
-            FROM courses c
-            LEFT JOIN lecturers l ON c.lecturer_id = l.id
-            LEFT JOIN attendance_sessions s ON c.id = s.course_id
-            WHERE (s.department_id = ? OR s.department_id IS NULL)
-        ";
-
-        // Note: Courses don't have year_level - students do
-        $query .= " ORDER BY c.name";
-
-        $stmt = $pdo->prepare($query);
-        $stmt->execute($params);
-        $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    // If still no courses, get all courses for the department regardless of sessions
-    if (empty($courses)) {
-        $params = [$department_id];
-        $query = "
-            SELECT DISTINCT
-                c.id,
-                c.name,
-                c.course_code,
-                c.description,
-                c.semester,
-                c.credits,
-                c.is_available,
-                COALESCE(l.first_name, 'Unknown') as first_name,
-                COALESCE(l.last_name, 'Lecturer') as last_name,
-                CASE
-                    WHEN l.first_name IS NOT NULL AND l.last_name IS NOT NULL
-                    THEN CONCAT(l.first_name, ' ', l.last_name)
-                    ELSE 'Unknown Lecturer'
-                END as lecturer_name
-            FROM courses c
-            LEFT JOIN lecturers l ON c.lecturer_id = l.id
-            WHERE c.department_id = ?
-        ";
-
-        // Note: Courses don't have year_level - students do
-        $query .= " ORDER BY c.name";
-
-        $stmt = $pdo->prepare($query);
-        $stmt->execute($params);
-        $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    // Final fallback: get all courses for the department without lecturer info
-    if (empty($courses)) {
-        $params = [$department_id];
-        $query = "
-            SELECT DISTINCT
-                c.id,
-                c.name,
-                c.course_code,
-                c.description,
-                c.semester,
-                c.credits,
-                c.is_available,
-                '' as first_name,
-                '' as last_name,
-                'Unknown Lecturer' as lecturer_name
-            FROM courses c
-            WHERE c.department_id = ?
-        ";
-
-        // Note: Courses don't have year_level - students do
-        // Year level filtering should be applied when getting students, not courses
-
-        $query .= " ORDER BY c.name";
-
-        $stmt = $pdo->prepare($query);
-        $stmt->execute($params);
-        $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        error_log("Using fallback query (no lecturer info) - found " . count($courses) . " courses for department $department_id");
-    }
-
-    // Last resort: get courses even without department filter
-    if (empty($courses)) {
-        $params = [];
-        $query = "
-            SELECT DISTINCT
-                c.id,
-                c.name,
-                c.course_code,
-                c.description,
-                c.semester,
-                c.credits,
-                c.is_available,
-                '' as first_name,
-                '' as last_name,
-                'Unknown Lecturer' as lecturer_name
-            FROM courses c
-        ";
-
-        // Note: Courses don't have year_level - students do
-        $query .= " ORDER BY c.name";
-
-        $stmt = $pdo->prepare($query);
-        $stmt->execute();
-        $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        error_log("Using last resort query - found " . count($courses) . " courses total");
-    }
 
     try {
         $stmt = $pdo->prepare($query);
@@ -671,22 +553,57 @@ function handleStartSession(PDO $pdo): array {
     $option_id = filter_input(INPUT_POST, 'option_id', FILTER_VALIDATE_INT);
     $course_id = filter_input(INPUT_POST, 'course_id', FILTER_VALIDATE_INT);
     $class_level = filter_input(INPUT_POST, 'classLevel', FILTER_SANITIZE_STRING);
+    $force_new = filter_input(INPUT_POST, 'force_new', FILTER_SANITIZE_STRING) === '1';
+
+    // Fallback for CLI testing
+    if ($department_id === null && isset($_POST['department_id'])) {
+        $department_id = (int)$_POST['department_id'];
+    }
+    if ($option_id === null && isset($_POST['option_id'])) {
+        $option_id = (int)$_POST['option_id'];
+    }
+    if ($course_id === null && isset($_POST['course_id'])) {
+        $course_id = (int)$_POST['course_id'];
+    }
+
     $lecturer_id = $_SESSION['user_id'];
 
     if (!$department_id || !$option_id || !$course_id) {
-        throw new Exception('Department, option, class level, and course are required');
+        throw new Exception('Department, option, and course are required');
     }
 
     // Check if there's already an active session for this course
     $stmt = $pdo->prepare("
-        SELECT id FROM attendance_sessions
-        WHERE course_id = ? AND option_id = ? AND department_id = ? AND end_time IS NULL
+        SELECT id, session_date, start_time FROM attendance_sessions
+        WHERE course_id = ? AND end_time IS NULL
     ");
-    $stmt->execute([$course_id, $option_id, $department_id]);
+    $stmt->execute([$course_id]);
     $existing_session = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($existing_session) {
-        throw new Exception('An active session already exists for this course');
+    if ($existing_session && !$force_new) {
+        // Instead of blocking, return information about the existing session
+        // This allows the frontend to handle resuming or forcing a new session
+        return [
+            'status' => 'existing_session',
+            'message' => 'An active session already exists for this course. You can resume it or start a new session.',
+            'existing_session' => [
+                'id' => $existing_session['id'],
+                'session_date' => $existing_session['session_date'],
+                'start_time' => $existing_session['start_time']
+            ],
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+    }
+
+    // If force_new is true, end the existing session first
+    if ($existing_session && $force_new) {
+        $stmt = $pdo->prepare("
+            UPDATE attendance_sessions
+            SET end_time = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$existing_session['id']]);
+        error_log("Ended existing session ID: " . $existing_session['id'] . " to start new session");
     }
 
     // Start transaction
@@ -695,11 +612,11 @@ function handleStartSession(PDO $pdo): array {
         // Create new session
         $stmt = $pdo->prepare("
             INSERT INTO attendance_sessions (
-                course_id, option_id, department_id, lecturer_id,
-                session_date, start_time, status, created_at
-            ) VALUES (?, ?, ?, ?, CURDATE(), NOW(), 'active', NOW())
+                lecturer_id, course_id, option_id,
+                session_date, start_time
+            ) VALUES (?, ?, ?, CURDATE(), NOW())
         ");
-        $stmt->execute([$course_id, $option_id, $department_id, $lecturer_id]);
+        $stmt->execute([$lecturer_id, $course_id, $option_id]);
         $session_id = $pdo->lastInsertId();
 
         // Get session details
@@ -710,13 +627,13 @@ function handleStartSession(PDO $pdo): array {
                 s.start_time,
                 c.name as course_name,
                 c.course_code,
-                CONCAT(l.first_name, ' ', l.last_name) as lecturer_name,
+                l.id_number as lecturer_name,
                 d.name as department_name,
                 o.name as option_name
             FROM attendance_sessions s
             INNER JOIN courses c ON s.course_id = c.id
-            INNER JOIN lecturers l ON s.lecturer_id = l.id
-            INNER JOIN departments d ON s.department_id = d.id
+            INNER JOIN lecturers l ON s.lecturer_id = l.user_id
+            INNER JOIN departments d ON c.department_id = d.id
             INNER JOIN options o ON s.option_id = o.id
             WHERE s.id = ?
         ");
@@ -763,7 +680,7 @@ function handleEndSession(PDO $pdo): array {
     // End the session
     $stmt = $pdo->prepare("
         UPDATE attendance_sessions
-        SET end_time = NOW(), status = 'completed', updated_at = NOW()
+        SET end_time = NOW()
         WHERE id = ?
     ");
     $stmt->execute([$session_id]);
@@ -860,6 +777,62 @@ function handleRecordAttendance(PDO $pdo): array {
 }
 
 /**
+ * Get user's active session (any active session for current user)
+ */
+function handleGetUserActiveSession(PDO $pdo): array {
+    $user_id = $_SESSION['user_id'];
+    $user_role = $_SESSION['role'];
+
+    // For admin, return no active session (admins don't typically run attendance sessions)
+    if ($user_role === 'admin') {
+        return [
+            'status' => 'success',
+            'message' => 'No active session found',
+            'data' => null
+        ];
+    }
+
+    // For lecturers and HODs, find active session by user_id (which is stored as lecturer_id in sessions table)
+    $stmt = $pdo->prepare("
+        SELECT
+            s.id,
+            s.session_date,
+            s.start_time,
+            c.name as course_name,
+            c.course_code,
+            'Unknown Lecturer' as lecturer_name,
+            d.name as department_name,
+            o.name as option_name,
+            s.course_id,
+            s.option_id,
+            c.department_id
+        FROM attendance_sessions s
+        INNER JOIN courses c ON s.course_id = c.id
+        INNER JOIN departments d ON c.department_id = d.id
+        INNER JOIN options o ON s.option_id = o.id
+        WHERE s.lecturer_id = ? AND s.end_time IS NULL
+        ORDER BY s.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$user_id]);
+    $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($session) {
+        return [
+            'status' => 'success',
+            'message' => 'Active session found',
+            'data' => $session
+        ];
+    }
+
+    return [
+        'status' => 'success',
+        'message' => 'No active session found',
+        'data' => null
+    ];
+}
+
+/**
  * Get current session status
  */
 function handleGetSessionStatus(PDO $pdo): array {
@@ -868,8 +841,8 @@ function handleGetSessionStatus(PDO $pdo): array {
     $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
     $class_level = filter_input(INPUT_GET, 'classLevel', FILTER_SANITIZE_STRING);
 
-    if (!$course_id || !$option_id || !$department_id) {
-        throw new Exception('Course ID, option ID, department ID, and class level are required');
+    if (!$course_id || !$option_id) {
+        throw new Exception('Course ID and option ID are required');
     }
 
     $stmt = $pdo->prepare("
@@ -878,18 +851,18 @@ function handleGetSessionStatus(PDO $pdo): array {
             s.session_date,
             s.start_time,
             s.end_time,
-            s.status,
+            CASE WHEN s.end_time IS NULL THEN 'active' ELSE 'completed' END as status,
             c.name as course_name,
             COUNT(ar.id) as attendance_count,
             COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count
         FROM attendance_sessions s
         INNER JOIN courses c ON s.course_id = c.id
         LEFT JOIN attendance_records ar ON s.id = ar.session_id
-        WHERE s.course_id = ? AND s.option_id = ? AND s.department_id = ?
-        ORDER BY s.created_at DESC
+        WHERE s.course_id = ? AND s.option_id = ?
+        ORDER BY s.start_time DESC
         LIMIT 1
     ");
-    $stmt->execute([$course_id, $option_id, $department_id]);
+    $stmt->execute([$course_id, $option_id]);
     $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$session) {
@@ -1032,11 +1005,9 @@ function handleGetAttendanceHistory(PDO $pdo): array {
             ar.status,
             'manual' as method,
             ar.recorded_at,
-            s.student_id,
-            s.first_name,
-            s.last_name,
-            CONCAT(s.first_name, ' ', s.last_name) as full_name,
-            s.photo as profile_image
+            s.reg_no as student_id,
+            s.reg_no as full_name,
+            '' as profile_image
         FROM attendance_records ar
         INNER JOIN students s ON ar.student_id = s.id
         WHERE ar.session_id = ?
@@ -1170,6 +1141,570 @@ function handleDebugCourses(PDO $pdo): array {
             'data' => $debug_info
         ];
     }
+}
+
+/**
+ * Process face recognition by comparing captured image with student photos
+ */
+function handleProcessFaceRecognition(PDO $pdo): array {
+    try {
+        // Get the captured image data (base64 encoded)
+        $imageData = $_POST['image_data'] ?? '';
+        if (empty($imageData)) {
+            throw new Exception('No image data provided');
+        }
+
+        // Get current session to filter students by department/option
+        $session_id = $_POST['session_id'] ?? null;
+        if (!$session_id) {
+            throw new Exception('Session ID is required');
+        }
+
+        // Get session details to determine which students to check
+        $stmt = $pdo->prepare("
+            SELECT s.department_id, s.option_id, s.course_id
+            FROM attendance_sessions s
+            WHERE s.id = ? AND s.end_time IS NULL
+        ");
+        $stmt->execute([$session_id]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$session) {
+            throw new Exception('Active session not found');
+        }
+
+        // Get students with photos for this department/option
+        $params = [$session['department_id']];
+        $query = "
+            SELECT s.id, s.reg_no, s.first_name, s.last_name, s.photo
+            FROM students s
+            WHERE s.department_id = ? AND s.photo IS NOT NULL AND s.photo != ''
+        ";
+
+        if ($session['option_id']) {
+            $query .= " AND s.option_id = ?";
+            $params[] = $session['option_id'];
+        }
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+        $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($students)) {
+            return [
+                'status' => 'success',
+                'message' => 'No students with photos found for face recognition',
+                'recognized' => false,
+                'student_id' => null
+            ];
+        }
+
+        // Process the captured image
+        $capturedImage = processBase64Image($imageData);
+        if (!$capturedImage) {
+            throw new Exception('Failed to process captured image');
+        }
+
+        $bestMatch = null;
+        $bestSimilarity = 0;
+        $recognitionResults = [];
+
+        // Compare with each student's photo
+        foreach ($students as $student) {
+            $studentPhotoPath = findStudentPhoto($student['photo']);
+
+            if (!$studentPhotoPath) {
+                continue; // Skip this student if photo not found
+            }
+
+            // Perform multiple comparison methods for better accuracy
+            $similarity = compareFaces($capturedImage, $studentPhotoPath);
+
+            $recognitionResults[] = [
+                'student_id' => $student['id'],
+                'student_name' => $student['first_name'] . ' ' . $student['last_name'],
+                'similarity' => $similarity
+            ];
+
+            if ($similarity > $bestSimilarity) {
+                $bestSimilarity = $similarity;
+                $bestMatch = $student;
+            }
+        }
+
+        // Sort results by similarity for debugging
+        usort($recognitionResults, function($a, $b) {
+            return $b['similarity'] <=> $a['similarity'];
+        });
+
+        // Enhanced confidence thresholds based on multiple factors
+        $confidence = round($bestSimilarity * 100, 1);
+        $isHighConfidence = $confidence >= 75;
+        $isMediumConfidence = $confidence >= 60;
+
+        if ($bestMatch && $isHighConfidence) {
+            return [
+                'status' => 'success',
+                'message' => 'Face recognized with high confidence',
+                'recognized' => true,
+                'student_id' => $bestMatch['id'],
+                'student_name' => $bestMatch['first_name'] . ' ' . $bestMatch['last_name'],
+                'student_reg' => $bestMatch['reg_no'],
+                'confidence' => $confidence,
+                'confidence_level' => 'high'
+            ];
+        } elseif ($bestMatch && $isMediumConfidence) {
+            return [
+                'status' => 'success',
+                'message' => 'Face recognized with medium confidence - manual verification recommended',
+                'recognized' => true,
+                'student_id' => $bestMatch['id'],
+                'student_name' => $bestMatch['first_name'] . ' ' . $bestMatch['last_name'],
+                'student_reg' => $bestMatch['reg_no'],
+                'confidence' => $confidence,
+                'confidence_level' => 'medium'
+            ];
+        } else {
+            // Return top 3 matches for debugging
+            $topMatches = array_slice($recognitionResults, 0, 3);
+
+            return [
+                'status' => 'success',
+                'message' => 'Face not recognized with sufficient confidence',
+                'recognized' => false,
+                'student_id' => null,
+                'confidence' => $confidence,
+                'top_matches' => $topMatches
+            ];
+        }
+
+    } catch (Exception $e) {
+        error_log('Face recognition error: ' . $e->getMessage());
+        return [
+            'status' => 'error',
+            'message' => 'Face recognition failed: ' . $e->getMessage(),
+            'recognized' => false,
+            'student_id' => null
+        ];
+    }
+}
+
+/**
+ * Find student photo path
+ */
+function findStudentPhoto($photoFilename) {
+    if (!$photoFilename) {
+        return false;
+    }
+
+    // Try different possible locations
+    $possiblePaths = [
+        __DIR__ . '/../uploads/students/' . $photoFilename,
+        __DIR__ . '/../uploads/' . $photoFilename,
+        __DIR__ . '/../uploads/lecturers/' . $photoFilename
+    ];
+
+    foreach ($possiblePaths as $path) {
+        if (file_exists($path)) {
+            return $path;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Process base64 image data
+ */
+function processBase64Image($base64Data) {
+    // Remove data URL prefix if present
+    if (strpos($base64Data, 'data:image') === 0) {
+        $parts = explode(',', $base64Data);
+        $base64Data = $parts[1];
+    }
+
+    $imageData = base64_decode($base64Data);
+    if (!$imageData) {
+        return false;
+    }
+
+    // Create temporary file
+    $tempFile = tempnam(sys_get_temp_dir(), 'face_recognition_');
+    file_put_contents($tempFile, $imageData);
+
+    return $tempFile;
+}
+
+/**
+ * Enhanced face comparison using multiple methods
+ */
+function compareFaces($image1Path, $image2Path) {
+    try {
+        // Load images
+        $img1 = @imagecreatefromstring(file_get_contents($image1Path));
+        $img2 = @imagecreatefromstring(file_get_contents($image2Path));
+
+        if (!$img1 || !$img2) {
+            return 0;
+        }
+
+        // Method 1: Color histogram similarity
+        $histSimilarity = compareImagesHistogram($img1, $img2);
+
+        // Method 2: Structural similarity (SSIM-like)
+        $ssimSimilarity = calculateSSIMSimilarity($img1, $img2);
+
+        // Method 3: Edge detection similarity
+        $edgeSimilarity = compareImagesEdges($img1, $img2);
+
+        // Method 4: Face region detection (simple skin color detection)
+        $faceSimilarity = compareFaceRegions($img1, $img2);
+
+        // Weighted combination of methods
+        $weights = [
+            'histogram' => 0.3,
+            'ssim' => 0.3,
+            'edges' => 0.2,
+            'face_region' => 0.2
+        ];
+
+        $combinedSimilarity = (
+            $histSimilarity * $weights['histogram'] +
+            $ssimSimilarity * $weights['ssim'] +
+            $edgeSimilarity * $weights['edges'] +
+            $faceSimilarity * $weights['face_region']
+        );
+
+        // Clean up
+        imagedestroy($img1);
+        imagedestroy($img2);
+
+        // Remove temporary file
+        if (strpos($image1Path, sys_get_temp_dir()) === 0) {
+            unlink($image1Path);
+        }
+
+        return min(1.0, max(0.0, $combinedSimilarity));
+
+    } catch (Exception $e) {
+        error_log('Face comparison error: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Compare two images using histogram similarity (legacy method)
+ */
+function compareImages($image1Path, $image2Path) {
+    try {
+        // Get image dimensions and basic properties
+        $img1 = @imagecreatefromstring(file_get_contents($image1Path));
+        $img2 = @imagecreatefromstring(file_get_contents($image2Path));
+
+        if (!$img1 || !$img2) {
+            return 0;
+        }
+
+        $width1 = imagesx($img1);
+        $height1 = imagesy($img1);
+        $width2 = imagesx($img2);
+        $height2 = imagesy($img2);
+
+        // Resize images to same size for comparison
+        $size = 100; // 100x100 for comparison
+        $resized1 = imagecreatetruecolor($size, $size);
+        $resized2 = imagecreatetruecolor($size, $size);
+
+        imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
+        imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
+
+        // Calculate histogram similarity
+        $hist1 = calculateHistogram($resized1);
+        $hist2 = calculateHistogram($resized2);
+
+        $similarity = calculateHistogramSimilarity($hist1, $hist2);
+
+        // Clean up
+        imagedestroy($img1);
+        imagedestroy($img2);
+        imagedestroy($resized1);
+        imagedestroy($resized2);
+
+        return $similarity;
+
+    } catch (Exception $e) {
+        error_log('Image comparison error: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * Compare images using histogram similarity
+ */
+function compareImagesHistogram($img1, $img2) {
+    $width1 = imagesx($img1);
+    $height1 = imagesy($img1);
+    $width2 = imagesx($img2);
+    $height2 = imagesy($img2);
+
+    // Resize to same size
+    $size = 64;
+    $resized1 = imagecreatetruecolor($size, $size);
+    $resized2 = imagecreatetruecolor($size, $size);
+
+    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
+    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
+
+    $hist1 = calculateHistogram($resized1);
+    $hist2 = calculateHistogram($resized2);
+
+    $similarity = calculateHistogramSimilarity($hist1, $hist2);
+
+    imagedestroy($resized1);
+    imagedestroy($resized2);
+
+    return $similarity;
+}
+
+/**
+ * Calculate SSIM-like structural similarity
+ */
+function calculateSSIMSimilarity($img1, $img2) {
+    $width1 = imagesx($img1);
+    $height1 = imagesy($img1);
+    $width2 = imagesx($img2);
+    $height2 = imagesy($img2);
+
+    // Resize to same size
+    $size = 32;
+    $resized1 = imagecreatetruecolor($size, $size);
+    $resized2 = imagecreatetruecolor($size, $size);
+
+    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
+    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
+
+    // Convert to grayscale and calculate basic structural similarity
+    $gray1 = imagecreatetruecolor($size, $size);
+    $gray2 = imagecreatetruecolor($size, $size);
+
+    imagefilter($resized1, IMG_FILTER_GRAYSCALE);
+    imagefilter($resized2, IMG_FILTER_GRAYSCALE);
+
+    $diffSum = 0;
+    $pixelCount = $size * $size;
+
+    for ($x = 0; $x < $size; $x++) {
+        for ($y = 0; $y < $size; $y++) {
+            $rgb1 = imagecolorat($resized1, $x, $y);
+            $rgb2 = imagecolorat($resized2, $x, $y);
+
+            $gray1_val = ($rgb1 >> 16) & 0xFF;
+            $gray2_val = ($rgb2 >> 16) & 0xFF;
+
+            $diffSum += abs($gray1_val - $gray2_val);
+        }
+    }
+
+    imagedestroy($resized1);
+    imagedestroy($resized2);
+    imagedestroy($gray1);
+    imagedestroy($gray2);
+
+    // Convert difference to similarity (lower difference = higher similarity)
+    $avgDiff = $diffSum / $pixelCount;
+    return max(0, 1 - ($avgDiff / 128)); // Normalize to 0-1 range
+}
+
+/**
+ * Compare images using edge detection
+ */
+function compareImagesEdges($img1, $img2) {
+    $width1 = imagesx($img1);
+    $height1 = imagesy($img1);
+    $width2 = imagesx($img2);
+    $height2 = imagesy($img2);
+
+    // Resize to same size
+    $size = 64;
+    $resized1 = imagecreatetruecolor($size, $size);
+    $resized2 = imagecreatetruecolor($size, $size);
+
+    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
+    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
+
+    // Convert to grayscale
+    imagefilter($resized1, IMG_FILTER_GRAYSCALE);
+    imagefilter($resized2, IMG_FILTER_GRAYSCALE);
+
+    // Simple edge detection using Sobel-like operator
+    $edges1 = detectEdges($resized1);
+    $edges2 = detectEdges($resized2);
+
+    // Compare edge maps
+    $edgeSimilarity = compareEdgeMaps($edges1, $edges2);
+
+    imagedestroy($resized1);
+    imagedestroy($resized2);
+
+    return $edgeSimilarity;
+}
+
+/**
+ * Simple edge detection
+ */
+function detectEdges($image) {
+    $width = imagesx($image);
+    $height = imagesy($image);
+    $edges = imagecreatetruecolor($width, $height);
+
+    for ($x = 1; $x < $width - 1; $x++) {
+        for ($y = 1; $y < $height - 1; $y++) {
+            // Simple gradient calculation
+            $center = imagecolorat($image, $x, $y) & 0xFF;
+            $right = imagecolorat($image, $x + 1, $y) & 0xFF;
+            $bottom = imagecolorat($image, $x, $y + 1) & 0xFF;
+
+            $gradient = abs($center - $right) + abs($center - $bottom);
+            $edgeValue = min(255, $gradient * 2);
+
+            $color = imagecolorallocate($edges, $edgeValue, $edgeValue, $edgeValue);
+            imagesetpixel($edges, $x, $y, $color);
+        }
+    }
+
+    return $edges;
+}
+
+/**
+ * Compare edge maps
+ */
+function compareEdgeMaps($edges1, $edges2) {
+    $width = imagesx($edges1);
+    $height = imagesy($edges1);
+    $totalPixels = $width * $height;
+    $matchingPixels = 0;
+
+    for ($x = 0; $x < $width; $x++) {
+        for ($y = 0; $y < $height; $y++) {
+            $edge1 = imagecolorat($edges1, $x, $y) & 0xFF;
+            $edge2 = imagecolorat($edges2, $x, $y) & 0xFF;
+
+            // Consider edges similar if they're both significant or both insignificant
+            $isEdge1 = $edge1 > 50;
+            $isEdge2 = $edge2 > 50;
+
+            if ($isEdge1 === $isEdge2) {
+                $matchingPixels++;
+            }
+        }
+    }
+
+    imagedestroy($edges1);
+    imagedestroy($edges2);
+
+    return $matchingPixels / $totalPixels;
+}
+
+/**
+ * Compare face regions using simple skin color detection
+ */
+function compareFaceRegions($img1, $img2) {
+    $width1 = imagesx($img1);
+    $height1 = imagesy($img1);
+    $width2 = imagesx($img2);
+    $height2 = imagesy($img2);
+
+    // Resize to same size
+    $size = 64;
+    $resized1 = imagecreatetruecolor($size, $size);
+    $resized2 = imagecreatetruecolor($size, $size);
+
+    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
+    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
+
+    // Detect skin regions
+    $skinPixels1 = countSkinPixels($resized1);
+    $skinPixels2 = countSkinPixels($resized2);
+
+    $totalPixels = $size * $size;
+
+    // Compare skin pixel ratios
+    $skinRatio1 = $skinPixels1 / $totalPixels;
+    $skinRatio2 = $skinPixels2 / $totalPixels;
+
+    $ratioSimilarity = 1 - abs($skinRatio1 - $skinRatio2);
+
+    imagedestroy($resized1);
+    imagedestroy($resized2);
+
+    return $ratioSimilarity;
+}
+
+/**
+ * Count skin-colored pixels
+ */
+function countSkinPixels($image) {
+    $width = imagesx($image);
+    $height = imagesy($image);
+    $skinCount = 0;
+
+    for ($x = 0; $x < $width; $x++) {
+        for ($y = 0; $y < $height; $y++) {
+            $rgb = imagecolorat($image, $x, $y);
+            $r = ($rgb >> 16) & 0xFF;
+            $g = ($rgb >> 8) & 0xFF;
+            $b = $rgb & 0xFF;
+
+            // Simple skin color detection (rough approximation)
+            if ($r > 60 && $g > 40 && $b > 20 &&
+                $r > $g && $r > $b &&
+                abs($r - $g) > 15) {
+                $skinCount++;
+            }
+        }
+    }
+
+    return $skinCount;
+}
+
+/**
+ * Calculate color histogram for an image
+ */
+function calculateHistogram($image) {
+    $histogram = array_fill(0, 768, 0); // 256 * 3 colors
+
+    $width = imagesx($image);
+    $height = imagesy($image);
+
+    for ($x = 0; $x < $width; $x++) {
+        for ($y = 0; $y < $height; $y++) {
+            $rgb = imagecolorat($image, $x, $y);
+            $r = ($rgb >> 16) & 0xFF;
+            $g = ($rgb >> 8) & 0xFF;
+            $b = $rgb & 0xFF;
+
+            $histogram[$r]++;
+            $histogram[256 + $g]++;
+            $histogram[512 + $b]++;
+        }
+    }
+
+    return $histogram;
+}
+
+/**
+ * Calculate similarity between two histograms
+ */
+function calculateHistogramSimilarity($hist1, $hist2) {
+    $total = 0;
+    $matches = 0;
+
+    for ($i = 0; $i < count($hist1); $i++) {
+        $total += max($hist1[$i], $hist2[$i]);
+        $matches += min($hist1[$i], $hist2[$i]);
+    }
+
+    return $total > 0 ? $matches / $total : 0;
 }
 
 /**

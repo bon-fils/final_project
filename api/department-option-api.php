@@ -11,7 +11,8 @@ require_once "../session_check.php";
 
 // Allow demo access for department-option API when called from registration page
 $referer = $_SERVER['HTTP_REFERER'] ?? '';
-$isFromRegistration = strpos($referer, 'register-student.php') !== false;
+$isFromRegistration = strpos($referer, 'register-student.php') !== false ||
+                      strpos($referer, 'admin-register-lecturer.php') !== false;
 
 if (!$isFromRegistration) {
     require_role(['admin', 'lecturer', 'hod']);
@@ -69,17 +70,41 @@ function handleGetOptions() {
     global $pdo;
 
     // Check if department_id is provided (for admin usage)
-    $departmentId = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
+    $departmentId = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT) ?:
+                   filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
 
     if (!$departmentId) {
+        // For admin users, allow getting all options if no department specified
+        if (isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
+            // Return all active options for admin
+            $stmt = $pdo->prepare("
+                SELECT o.id, o.name, d.name as department_name
+                FROM options o
+                INNER JOIN departments d ON o.department_id = d.id
+                WHERE o.status = 'active'
+                ORDER BY d.name, o.name
+            ");
+            $stmt->execute();
+            $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            echo json_encode([
+                'success' => true,
+                'data' => $options,
+                'count' => count($options),
+                'message' => count($options) === 1 ? '1 option found' : count($options) . ' options found',
+                'admin_mode' => true,
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+            return;
+        }
+
         // Fallback to HoD's department ID from session (for HOD usage) by joining through lecturers table
         $hod_id = $_SESSION['user_id'];
         $deptStmt = $pdo->prepare("
             SELECT d.id
             FROM departments d
             JOIN lecturers l ON d.hod_id = l.id
-            JOIN users u ON l.email = u.email AND u.role = 'hod'
-            WHERE u.id = ?
+            WHERE l.user_id = ?
         ");
         $deptStmt->execute([$hod_id]);
         $department = $deptStmt->fetch(PDO::FETCH_ASSOC);

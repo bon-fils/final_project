@@ -5,7 +5,7 @@ echo "=== CREATING SAMPLE ATTENDANCE DATA ===\n\n";
 
 try {
     // Get the student we found
-    $stmt = $pdo->query("SELECT id, first_name, last_name, department_id, option_id FROM students LIMIT 1");
+    $stmt = $pdo->query("SELECT s.id, u.first_name, u.last_name, s.option_id FROM students s JOIN users u ON s.user_id = u.id LIMIT 1");
     $student = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$student) {
@@ -16,7 +16,7 @@ try {
     echo "Found student: {$student['first_name']} {$student['last_name']} (ID: {$student['id']})\n\n";
 
     // Get a lecturer for the sessions
-    $stmt = $pdo->query("SELECT id, first_name, last_name FROM lecturers LIMIT 1");
+    $stmt = $pdo->query("SELECT l.id, l.user_id, u.first_name, u.last_name FROM lecturers l JOIN users u ON l.user_id = u.id LIMIT 1");
     $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$lecturer) {
@@ -24,7 +24,7 @@ try {
         exit;
     }
 
-    echo "Found lecturer: {$lecturer['first_name']} {$lecturer['last_name']} (ID: {$lecturer['id']})\n\n";
+    echo "Found lecturer: {$lecturer['first_name']} {$lecturer['last_name']} (ID: {$lecturer['id']}, User ID: {$lecturer['user_id']})\n\n";
 
     // Get a course
     $stmt = $pdo->query("SELECT id, name FROM courses LIMIT 1");
@@ -44,7 +44,7 @@ try {
             'start_time' => '09:00:00',
             'end_time' => '11:00:00',
             'course_id' => $course['id'],
-            'lecturer_id' => $lecturer['id'],
+            'lecturer_id' => $lecturer['user_id'],
             'option_id' => $student['option_id']
         ],
         [
@@ -52,7 +52,7 @@ try {
             'start_time' => '14:00:00',
             'end_time' => '16:00:00',
             'course_id' => $course['id'],
-            'lecturer_id' => $lecturer['id'],
+            'lecturer_id' => $lecturer['user_id'],
             'option_id' => $student['option_id']
         ],
         [
@@ -60,7 +60,7 @@ try {
             'start_time' => '10:00:00',
             'end_time' => '12:00:00',
             'course_id' => $course['id'],
-            'lecturer_id' => $lecturer['id'],
+            'lecturer_id' => $lecturer['user_id'],
             'option_id' => $student['option_id']
         ]
     ];

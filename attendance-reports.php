@@ -22,10 +22,19 @@ if (!$user_id) {
 }
 
 // Initialize user context
-$user_context = getUserContext($pdo, $user_id, $user_role);
-$lecturer_id = $user_context['lecturer_id'];
-$department_id = $user_context['department_id'];
-$is_admin = $user_role === 'admin';
+try {
+    $user_context = getUserContext($pdo, $user_id, $user_role);
+    $lecturer_id = $user_context['lecturer_id'];
+    $department_id = $user_context['department_id'];
+    $is_admin = $user_role === 'admin';
+} catch (Exception $e) {
+    // Handle user context errors gracefully
+    error_log("User context error in attendance-reports: " . $e->getMessage());
+    $user_context_error = $e->getMessage(); // Use the actual error message
+    $lecturer_id = null;
+    $department_id = null;
+    $is_admin = false;
+}
 
 /**
  * Get user context and permissions
@@ -38,10 +47,9 @@ function getUserContext($pdo, $user_id, $user_role) {
 
         // Get lecturer information
         $stmt = $pdo->prepare("
-            SELECT l.id as lecturer_id, l.department_id, l.first_name, l.last_name
+            SELECT l.id as lecturer_id, l.department_id, l.id_number as lecturer_name
             FROM lecturers l
-            INNER JOIN users u ON l.email = u.email
-            WHERE u.id = :user_id AND u.role IN ('lecturer', 'hod')
+            WHERE l.user_id = :user_id
         ");
         $stmt->execute(['user_id' => $user_id]);
         $lecturer_data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -54,18 +62,30 @@ function getUserContext($pdo, $user_id, $user_role) {
             $lecturer_data = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$lecturer_data) {
-                header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
-                exit();
+                // If still no lecturer record, log more details and throw exception
+                error_log("Failed to create lecturer record for user_id: $user_id, role: $user_role");
+
+                // Check if user exists and has correct role
+                $userCheckStmt = $pdo->prepare("SELECT id, username, role FROM users WHERE id = ?");
+                $userCheckStmt->execute([$user_id]);
+                $userInfo = $userCheckStmt->fetch(PDO::FETCH_ASSOC);
+                error_log("User info: " . json_encode($userInfo));
+
+                throw new Exception("Your lecturer account is not properly configured. Please contact your system administrator to set up your lecturer profile.");
             }
         }
 
         $_SESSION['lecturer_id'] = $lecturer_data['lecturer_id'];
+        // Add first_name and last_name for backward compatibility
+        $lecturer_data['first_name'] = $lecturer_data['lecturer_name'];
+        $lecturer_data['last_name'] = '';
         return $lecturer_data;
 
     } catch (PDOException $e) {
         error_log("Error getting user context: " . $e->getMessage());
-        header("Location: lecturer-dashboard.php?error=system_error");
-        exit();
+        error_log("SQL Query error details: " . $e->getMessage());
+        error_log("User ID: $user_id, Role: $user_role");
+        throw new Exception("Database error occurred while loading user information: " . $e->getMessage());
     }
 }
 
@@ -74,17 +94,28 @@ function getUserContext($pdo, $user_id, $user_role) {
  */
 function createLecturerRecord($pdo, $user_id) {
     try {
+        // First get user information
+        $userStmt = $pdo->prepare("SELECT username, role FROM users WHERE id = :user_id");
+        $userStmt->execute(['user_id' => $user_id]);
+        $user = $userStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$user) {
+            error_log("User not found for lecturer creation: $user_id");
+            return;
+        }
+
+        // Insert lecturer record with proper columns
         $stmt = $pdo->prepare("
-            INSERT INTO lecturers (first_name, last_name, email, department_id, role, password, created_at)
-            SELECT
-                CASE WHEN LOCATE(' ', username) > 0 THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
-                CASE WHEN LOCATE(' ', username) > 0 THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
-                email, 1, u.role, 'default_password', NOW()
-            FROM users u
-            WHERE id = :user_id AND role IN ('lecturer', 'hod')
-            ON DUPLICATE KEY UPDATE email = email
+            INSERT INTO lecturers (id_number, gender, dob, department_id, user_id, created_at, updated_at)
+            VALUES (:id_number, 'Male', CURDATE(), 1, :user_id, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE user_id = user_id
         ");
-        $stmt->execute(['user_id' => $user_id]);
+        $stmt->execute([
+            'id_number' => $user['username'], // Use username as id_number
+            'user_id' => $user_id
+        ]);
+
+        error_log("Created lecturer record for user_id: $user_id");
     } catch (PDOException $e) {
         error_log("Error creating lecturer record: " . $e->getMessage());
     }
@@ -136,14 +167,23 @@ function getAvailableDepartments($pdo, $lecturer_id, $is_admin) {
  */
 function getOptionsForDepartment($pdo, $department_id, $lecturer_id, $is_admin) {
     try {
-        $query = "SELECT id, name FROM options WHERE department_id = :department_id";
-        $params = ['department_id' => $department_id];
+        $query = "SELECT DISTINCT o.id, o.name FROM options o";
+        $params = [];
 
         if (!$is_admin && $lecturer_id) {
-            // Additional check if needed for lecturer permissions
+            // Lecturers can only see options for courses they teach
+            $query .= "
+                INNER JOIN courses c ON o.id = c.option_id
+                WHERE c.lecturer_id = :lecturer_id AND o.department_id = :department_id";
+            $params['lecturer_id'] = $lecturer_id;
+            $params['department_id'] = $department_id;
+        } else {
+            // Admins can see all options in the department
+            $query .= " WHERE o.department_id = :department_id";
+            $params['department_id'] = $department_id;
         }
 
-        $query .= " ORDER BY name ASC";
+        $query .= " ORDER BY o.name ASC";
 
         $stmt = $pdo->prepare($query);
         $stmt->execute($params);
@@ -191,19 +231,24 @@ function getAvailableClasses($pdo, $lecturer_id, $is_admin) {
  */
 function getCoursesForClass($pdo, $class_id, $lecturer_id, $is_admin) {
     try {
-        $query = "
-            SELECT DISTINCT c.id, c.course_name as name, c.course_code
-            FROM courses c
-            INNER JOIN options o ON c.option_id = o.id
-            INNER JOIN students s ON o.id = s.option_id
-            WHERE s.year_level = :year_level
-        ";
-
-        $params = ['year_level' => $class_id];
-
         if (!$is_admin && $lecturer_id) {
-            $query .= " AND c.lecturer_id = :lecturer_id";
-            $params['lecturer_id'] = $lecturer_id;
+            // Lecturers can only see courses they teach in the specified class
+            $query = "
+                SELECT DISTINCT c.id, c.course_name as name, c.course_code
+                FROM courses c
+                WHERE c.lecturer_id = :lecturer_id AND c.option_id IN (SELECT s.option_id FROM students s WHERE s.year_level = :year_level AND s.department_id = (SELECT l.department_id FROM lecturers l WHERE l.id = :lecturer_id))
+            ";
+            $params = ['year_level' => $class_id, 'lecturer_id' => $lecturer_id];
+        } else {
+            // Admins can see all courses for the class
+            $query = "
+                SELECT DISTINCT c.id, c.course_name as name, c.course_code
+                FROM courses c
+                INNER JOIN options o ON c.option_id = o.id
+                INNER JOIN students s ON o.id = s.option_id
+                WHERE s.year_level = :year_level
+            ";
+            $params = ['year_level' => $class_id];
         }
 
         $query .= " ORDER BY c.course_name ASC";
@@ -257,7 +302,27 @@ $endDate = $_GET['end_date'] ?? null;
 $departments = getAvailableDepartments($pdo, $lecturer_id, $is_admin);
 $options = $selectedDepartmentId ? getOptionsForDepartment($pdo, $selectedDepartmentId, $lecturer_id, $is_admin) : [];
 $classes = getAvailableClasses($pdo, $lecturer_id, $is_admin);
-$courses = $selectedClassId ? getCoursesForClass($pdo, $selectedClassId, $lecturer_id, $is_admin) : [];
+
+// For course selection, lecturers should only see courses they teach
+if (!$is_admin && $lecturer_id) {
+    // Get courses assigned to this lecturer
+    try {
+        $stmt = $pdo->prepare("
+            SELECT DISTINCT c.id, c.course_name as name, c.course_code
+            FROM courses c
+            WHERE c.lecturer_id = ?
+            ORDER BY c.course_name ASC
+        ");
+        $stmt->execute([$lecturer_id]);
+        $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error fetching lecturer courses: " . $e->getMessage());
+        $courses = [];
+    }
+} else {
+    // Admins can see all courses for the selected class
+    $courses = $selectedClassId ? getCoursesForClass($pdo, $selectedClassId, $lecturer_id, $is_admin) : [];
+}
 
 /**
  * Generate comprehensive attendance report based on report type
@@ -386,6 +451,11 @@ function generateCourseReport($pdo, $course_id, $start_date, $end_date, $lecture
         return ['error' => 'Course not found'];
     }
 
+    // Check if lecturer has permission to view this course
+    if (!$is_admin && $lecturer_id && $course_info['lecturer_id'] != $lecturer_id) {
+        return ['error' => 'You do not have permission to view reports for this course'];
+    }
+
     // Get all students who should attend this course (based on their class/year)
     $students = getStudentsForCourse($pdo, $course_info['year_level'] ?? null, $course_id, $lecturer_id, $is_admin);
     if (empty($students)) {
@@ -415,8 +485,8 @@ function generateCourseReport($pdo, $course_id, $start_date, $end_date, $lecture
 function getCourseInfo($pdo, $course_id) {
     try {
         $stmt = $pdo->prepare("
-            SELECT c.id, c.course_name, c.course_code, d.name as department_name,
-                   CONCAT(l.first_name, ' ', l.last_name) as lecturer_name
+            SELECT c.id, c.course_name, c.course_code, c.lecturer_id, d.name as department_name,
+                    l.id_number as lecturer_name
             FROM courses c
             LEFT JOIN departments d ON c.department_id = d.id
             LEFT JOIN lecturers l ON c.lecturer_id = l.id
@@ -445,7 +515,8 @@ function getStudentsForDepartment($pdo, $department_id, $lecturer_id, $is_admin)
         $params = ['department_id' => $department_id];
 
         if (!$is_admin && $lecturer_id) {
-            // Additional permission check if needed
+            $query .= " AND s.option_id IN (SELECT c.option_id FROM courses c WHERE c.lecturer_id = :lecturer_id AND c.department_id = :department_id)";
+            $params['lecturer_id'] = $lecturer_id;
         }
 
         $query .= " ORDER BY s.year_level, s.first_name, s.last_name";
@@ -513,7 +584,7 @@ function getStudentsForClass($pdo, $class_id, $lecturer_id, $is_admin) {
         $params = ['year_level' => $class_id];
 
         if (!$is_admin && $lecturer_id) {
-            $query .= " AND s.department_id = (SELECT department_id FROM lecturers WHERE id = :lecturer_id)";
+            $query .= " AND s.department_id = (SELECT department_id FROM lecturers WHERE id = :lecturer_id) AND s.option_id IN (SELECT c.option_id FROM courses c WHERE c.lecturer_id = :lecturer_id)";
             $params['lecturer_id'] = $lecturer_id;
         }
 
@@ -551,10 +622,10 @@ function getStudentsForCourse($pdo, $class_id, $course_id, $lecturer_id, $is_adm
                     s.reg_no, s.student_id_number, d.name as department_name
             FROM students s
             INNER JOIN departments d ON s.department_id = d.id
-            WHERE s.year_level = :year_level
+            WHERE s.year_level = :year_level AND s.option_id = :option_id
         ";
 
-        $params = ['year_level' => $class_id];
+        $params = ['year_level' => $class_id, 'option_id' => $course['option_id']];
 
         if (!$is_admin && $lecturer_id) {
             $query .= " AND s.department_id = (SELECT department_id FROM lecturers WHERE id = :lecturer_id)";
@@ -1571,6 +1642,15 @@ if (isset($_GET['export']) && !empty($report_data)) {
             </div>
         </div>
 
+        <!-- Error Display -->
+        <?php if (isset($user_context_error)): ?>
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <strong>System Error:</strong> <?= htmlspecialchars($user_context_error) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        <?php else: ?>
+
         <!-- Filter Section -->
         <div class="filter-section">
             <form method="GET" class="filter-row">
@@ -1623,13 +1703,24 @@ if (isset($_GET['export']) && !empty($report_data)) {
                 <div id="courseFilter" style="display: <?= ($reportType == 'course') ? 'block' : 'none' ?>">
                     <label class="form-label fw-bold">Course</label>
                     <select name="course_id" class="form-select">
-                        <option value="">📖 Select Course</option>
+                        <option value="">
+                            📖 Select Course
+                            <?php if (!$is_admin && $lecturer_id): ?>
+                                (Your Assigned Courses)
+                            <?php endif; ?>
+                        </option>
                         <?php foreach ($courses as $course) : ?>
                             <option value="<?= $course['id'] ?>" <?= ($selectedCourseId == $course['id']) ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($course['name']) ?> (<?= htmlspecialchars($course['course_code']) ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <?php if (!$is_admin && $lecturer_id && empty($courses)): ?>
+                        <div class="text-muted small mt-1">
+                            <i class="fas fa-info-circle me-1"></i>
+                            No courses are currently assigned to you. Please contact your administrator.
+                        </div>
+                    <?php endif; ?>
                 </div>
 
                 <div>
@@ -1825,6 +1916,7 @@ if (isset($_GET['export']) && !empty($report_data)) {
                 </div>
             </div>
         <?php endif; ?>
+        <?php endif; ?>
     </div>
 
     <!-- Student Details Modal -->
@@ -1881,8 +1973,14 @@ if (isset($_GET['export']) && !empty($report_data)) {
                     classFilter.style.display = 'block';
                     break;
                 case 'course':
-                    classFilter.style.display = 'block';
-                    courseFilter.style.display = 'block';
+                    <?php if (!$is_admin && $lecturer_id): ?>
+                        // For lecturers, show courses directly without class filter
+                        courseFilter.style.display = 'block';
+                    <?php else: ?>
+                        // For admins, show class filter first, then courses
+                        classFilter.style.display = 'block';
+                        courseFilter.style.display = 'block';
+                    <?php endif; ?>
                     break;
             }
         }

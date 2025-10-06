@@ -44,6 +44,9 @@ DROP COLUMN department_id;
 
 ### 3. Update `lecturers` table to reference `users`
 ```sql
+-- First, change department_id type to match departments.id
+ALTER TABLE lecturers MODIFY COLUMN department_id INT(11) NOT NULL;
+
 ALTER TABLE lecturers
 ADD COLUMN user_id INT(11),
 ADD CONSTRAINT fk_lecturers_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -65,7 +68,7 @@ DROP COLUMN course_name;
 ```sql
 -- Lecturers department FK
 ALTER TABLE lecturers
-ADD CONSTRAINT fk_lecturers_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE SET NULL;
+ADD CONSTRAINT fk_lecturers_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE;
 
 -- Leave requests reviewed_by FK
 ALTER TABLE leave_requests

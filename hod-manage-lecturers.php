@@ -7,14 +7,13 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 require_role(['hod']);
 
-// Get HoD's department ID by joining through lecturers table
+// Get HoD's department ID by joining through lecturers table with user_id
 $hod_id = $_SESSION['user_id'];
 $stmt = $pdo->prepare("
     SELECT d.id AS department_id
     FROM departments d
     JOIN lecturers l ON d.hod_id = l.id
-    JOIN users u ON l.email = u.email AND u.role = 'hod'
-    WHERE u.id = ? LIMIT 1
+    WHERE l.user_id = ? LIMIT 1
 ");
 $stmt->execute([$hod_id]);
 $hod = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -123,6 +122,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->beginTransaction();
 
+        // Generate unique username: firstname.lastname (lowercase)
+        $username_base = strtolower(trim(preg_replace('/\s+/', '.', $first_name . ' ' . $last_name)));
+        $username = $username_base;
+        $suffix = 0;
+        $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
+        do {
+            $checkStmt->execute([$username]);
+            $exists = (int)$checkStmt->fetchColumn() > 0;
+            if ($exists) { $suffix++; $username = $username_base . $suffix; }
+        } while ($exists);
+
+        // Insert into users table first
+        $stmtUser = $pdo->prepare("INSERT INTO users (username, email, password, role, created_at) VALUES (?, ?, ?, ?, ?)");
+        $stmtUser->execute([
+            $username,
+            $email,
+            $password,
+            'lecturer',
+            date('Y-m-d H:i:s')
+        ]);
+
+        // Get new user ID
+        $user_id = (int)$pdo->lastInsertId();
+
         // Photo upload with security checks
         $photo_filename = null;
         if (!empty($_FILES['photo']['name'])) {
@@ -144,11 +167,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Insert into lecturers table
-        $stmt = $pdo->prepare("INSERT INTO lecturers 
-            (first_name, last_name, gender, dob, id_number, email, phone, department_id, education_level, role, password, photo)
+        // Insert into lecturers table with user_id
+        $stmt = $pdo->prepare("INSERT INTO lecturers
+            (user_id, first_name, last_name, gender, dob, id_number, email, phone, department_id, education_level, role, photo)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
+            $user_id,
             $first_name,
             $last_name,
             $gender,
@@ -159,33 +183,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $hod_department,
             $education_level,
             $role,
-            $password,
             $photo_filename
         ]);
 
         // Get new lecturer ID
         $lecturer_id = (int)$pdo->lastInsertId();
-
-        // Generate unique username: firstname.lastname (lowercase)
-        $username_base = strtolower(trim(preg_replace('/\s+/', '.', $first_name . ' ' . $last_name)));
-        $username = $username_base;
-        $suffix = 0;
-        $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = ?");
-        do {
-            $checkStmt->execute([$username]);
-            $exists = (int)$checkStmt->fetchColumn() > 0;
-            if ($exists) { $suffix++; $username = $username_base . $suffix; }
-        } while ($exists);
-
-        // Insert into users table (let users.id auto-increment to avoid PK conflicts)
-        $stmtUser = $pdo->prepare("INSERT INTO users (username, email, password, role, created_at) VALUES (?, ?, ?, ?, ?)");
-        $stmtUser->execute([
-            $username,
-            $email,
-            $password,
-            'lecturer',
-            date('Y-m-d H:i:s')
-        ]);
 
         // Note: User and lecturer records are created successfully
         // The user_id relationship is not established due to missing user_id column in lecturers table

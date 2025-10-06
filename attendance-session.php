@@ -340,6 +340,25 @@ $userRole = $_SESSION['role'] ?? 'admin';
         box-shadow: 0 0 0 0 rgba(40, 167, 69, 0);
       }
     }
+
+    /* Session status indicator */
+    #session-status-indicator .badge {
+      font-size: 0.9rem;
+      padding: 0.5rem 1rem;
+      animation: pulse 2s infinite;
+    }
+
+    /* Enhanced end session button */
+    #end-session.pulse {
+      animation: buttonPulse 1.5s infinite;
+      box-shadow: 0 0 20px rgba(220, 53, 69, 0.4);
+    }
+
+    @keyframes buttonPulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
   </style>
 </head>
 
@@ -371,7 +390,21 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
   <!-- Topbar -->
   <header class="topbar" role="banner">
-    <h5 class="m-0 fw-bold">Attendance Session</h5>
+    <div>
+      <h5 class="m-0 fw-bold">Attendance Session</h5>
+      <div id="session-status-indicator" class="d-none">
+        <span class="badge bg-danger">
+          <i class="fas fa-video me-1"></i>
+          <span id="session-status-text">Session Active</span>
+        </span>
+        <div class="ms-2">
+          <small class="text-muted">
+            <i class="fas fa-clock me-1"></i>
+            <span id="session-timer">00:00:00</span>
+          </small>
+        </div>
+      </div>
+    </div>
     <span>RP Attendance System</span>
   </header>
 
@@ -405,19 +438,19 @@ $userRole = $_SESSION['role'] ?? 'admin';
     <form id="sessionForm" class="row g-3 mb-4">
       <div class="col-md-3">
         <label for="department" class="form-label fw-semibold">Department</label>
-        <select id="department" class="form-select" required>
+        <select id="department" name="department_id" class="form-select" required>
           <option value="" disabled selected>Select Department</option>
         </select>
       </div>
       <div class="col-md-3">
         <label for="option" class="form-label fw-semibold">Option</label>
-        <select id="option" class="form-select" required disabled>
+        <select id="option" name="option_id" class="form-select" required disabled>
           <option value="" disabled selected>Select Option</option>
         </select>
       </div>
       <div class="col-md-3">
         <label for="classLevel" class="form-label fw-semibold">Class (Year)</label>
-        <select id="classLevel" class="form-select" required disabled>
+        <select id="classLevel" name="classLevel" class="form-select" required disabled>
           <option value="" disabled selected>Select Class</option>
           <option value="Year 1">Year 1</option>
           <option value="Year 2">Year 2</option>
@@ -433,7 +466,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
         </label>
         <div class="position-relative">
           <input type="text" id="course-search" class="form-control mb-2" placeholder="Search courses..." style="display: none;">
-          <select id="course" class="form-select" required disabled>
+          <select id="course" name="course_id" class="form-select" required disabled>
             <option value="" disabled selected>Select Course</option>
           </select>
           <div id="course-loading" class="text-center py-1" style="display: none;">
@@ -633,6 +666,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
     let currentSessionId = null;
     let attendanceCheckInterval = null;
     let faceRecognitionActive = false;
+    let sessionStartTime = null;
+    let sessionTimerInterval = null;
     let csrfToken = '<?php echo generate_csrf_token(); ?>';
 
     // DOM elements
@@ -705,7 +740,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const response = await fetch('api/attendance-session-api.php?action=get_departments', {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
           }
         });
 
@@ -789,7 +825,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const response = await fetch(`api/attendance-session-api.php?action=get_options&department_id=${departmentId}`, {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
           }
         });
 
@@ -869,7 +906,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
           const response = await fetch(url, {
             method: 'GET',
             headers: {
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
             }
           });
 
@@ -1058,18 +1096,52 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     // Check for existing session
     async function checkExistingSession() {
-      const departmentId = departmentSelect.value;
-      const optionId = optionSelect.value;
-      const courseId = courseSelect.value;
+      try {
+        // First, try to get any active session for the current user
+        const response = await fetch('api/attendance-session-api.php?action=get_user_active_session', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          }
+        });
 
-      if (departmentId && optionId && courseId) {
-        try {
+        const result = await response.json();
+
+        if (result.status === 'success' && result.data) {
+          currentSessionId = result.data.id;
+          showActiveSession(result.data);
+
+          // Also populate the form with session details
+          if (result.data.department_id) departmentSelect.value = result.data.department_id;
+          if (result.data.option_id) optionSelect.value = result.data.option_id;
+          if (result.data.course_id) courseSelect.value = result.data.course_id;
+
+          // Trigger dependent dropdowns
+          if (result.data.department_id) {
+            await loadOptions(result.data.department_id);
+            optionSelect.value = result.data.option_id;
+            await loadCourses(result.data.department_id, result.data.option_id);
+            courseSelect.value = result.data.course_id;
+          }
+
+          showNotification('Resumed active attendance session', 'info');
+          return;
+        }
+
+        // Fallback: check based on current form selection
+        const departmentId = departmentSelect.value;
+        const optionId = optionSelect.value;
+        const courseId = courseSelect.value;
+
+        if (departmentId && optionId && courseId) {
           const response = await fetch(
             `api/attendance-session-api.php?action=get_session_status&department_id=${departmentId}&option_id=${optionId}&course_id=${courseId}`,
             {
               method: 'GET',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
               }
             }
           );
@@ -1080,9 +1152,9 @@ $userRole = $_SESSION['role'] ?? 'admin';
             currentSessionId = result.data.id;
             showActiveSession(result.data);
           }
-        } catch (error) {
-          console.error('Error checking existing session:', error);
         }
+      } catch (error) {
+        console.error('Error checking existing session:', error);
       }
     }
 
@@ -1122,6 +1194,9 @@ $userRole = $_SESSION['role'] ?? 'admin';
            showNotification('Session started successfully!', 'success');
            showActiveSession(result.data);
            startAttendanceMonitoring();
+         } else if (result.status === 'existing_session') {
+           // Handle existing session - ask user what to do
+           handleExistingSession(result.existing_session, formData);
          } else {
            showNotification('Error starting session: ' + result.message, 'error');
          }
@@ -1172,9 +1247,25 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     // Show active session UI
     function showActiveSession(sessionData) {
+
       startBtn.disabled = true;
       endBtn.disabled = false;
       sessionStatsSection.style.display = 'block';
+
+      // Show session status indicator
+      const statusIndicator = document.getElementById('session-status-indicator');
+      const statusText = document.getElementById('session-status-text');
+      if (statusIndicator && statusText) {
+        statusText.textContent = `Session Active - ${sessionData.course_name || 'Course'}`;
+        statusIndicator.classList.remove('d-none');
+      }
+
+      // Make end button more prominent
+      endBtn.classList.add('btn-danger', 'pulse');
+      endBtn.innerHTML = '<i class="fas fa-stop me-2"></i> End Session (Active)';
+
+      // Start session timer
+      startSessionTimer();
 
       // Start webcam
       startWebcam();
@@ -1190,6 +1281,19 @@ $userRole = $_SESSION['role'] ?? 'admin';
       endBtn.disabled = true;
       sessionStatsSection.style.display = 'none';
       currentSessionId = null;
+
+      // Hide session status indicator
+      const statusIndicator = document.getElementById('session-status-indicator');
+      if (statusIndicator) {
+        statusIndicator.classList.add('d-none');
+      }
+
+      // Reset end button
+      endBtn.classList.remove('btn-danger', 'pulse');
+      endBtn.innerHTML = '<i class="fas fa-stop me-2"></i> End Session';
+
+      // Stop session timer
+      stopSessionTimer();
 
       // Stop webcam
       stopWebcam();
@@ -1241,6 +1345,38 @@ $userRole = $_SESSION['role'] ?? 'admin';
       }
     }
 
+    // Start session timer
+    function startSessionTimer() {
+      sessionStartTime = new Date();
+      updateSessionTimer();
+
+      sessionTimerInterval = setInterval(updateSessionTimer, 1000);
+    }
+
+    // Stop session timer
+    function stopSessionTimer() {
+      if (sessionTimerInterval) {
+        clearInterval(sessionTimerInterval);
+        sessionTimerInterval = null;
+      }
+      sessionStartTime = null;
+      document.getElementById('session-timer').textContent = '00:00:00';
+    }
+
+    // Update session timer display
+    function updateSessionTimer() {
+      if (!sessionStartTime) return;
+
+      const now = new Date();
+      const elapsed = Math.floor((now - sessionStartTime) / 1000);
+
+      const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
+      const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
+      const seconds = (elapsed % 60).toString().padStart(2, '0');
+
+      document.getElementById('session-timer').textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
     // Load attendance records
     async function loadAttendanceRecords() {
       if (!currentSessionId) return;
@@ -1253,7 +1389,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const response = await fetch(`api/attendance-session-api.php?action=get_attendance_history&session_id=${currentSessionId}`, {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
           }
         });
 
@@ -1324,7 +1461,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const response = await fetch(`api/attendance-session-api.php?action=get_session_stats&session_id=${currentSessionId}`, {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
           }
         });
 
@@ -1390,7 +1528,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
           {
             method: 'GET',
             headers: {
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
             }
           }
         );
@@ -1464,7 +1603,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const response = await fetch('api/attendance-session-api.php?action=test_courses', {
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
           }
         });
 
@@ -1599,31 +1739,52 @@ $userRole = $_SESSION['role'] ?? 'admin';
         .join('');
     }
 
-    // Face recognition simulation (placeholder)
+    // Real face recognition using API
     async function processFaceRecognition(imageData) {
-      // This would integrate with actual face recognition API
-      console.log('Processing face recognition...');
-
-      // Simulate face recognition delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // For demo purposes, randomly mark students as present
-      if (Math.random() > 0.3) {
-        return { recognized: true, student_id: Math.floor(Math.random() * 1000) + 1 };
+      console.log('Processing face recognition with API...');
+    
+      try {
+        const formData = new FormData();
+        formData.append('image_data', imageData);
+        formData.append('session_id', currentSessionId);
+        formData.append('csrf_token', csrfToken);
+    
+        const response = await fetch('api/attendance-session-api.php?action=process_face_recognition', {
+          method: 'POST',
+          body: formData
+        });
+    
+        const result = await response.json();
+        console.log('Face recognition API result:', result);
+    
+        if (result.status === 'success') {
+          return {
+            recognized: result.recognized,
+            student_id: result.student_id,
+            confidence: result.confidence,
+            student_name: result.student_name
+          };
+        } else {
+          console.error('Face recognition API error:', result.message);
+          return { recognized: false };
+        }
+      } catch (error) {
+        console.error('Face recognition request failed:', error);
+        return { recognized: false };
       }
-
-      return { recognized: false };
     }
 
     // Fingerprint authentication (placeholder)
     async function processFingerprint() {
       // This would integrate with fingerprint scanner
       console.log('Processing fingerprint...');
-
+    
       // Simulate fingerprint processing
       await new Promise(resolve => setTimeout(resolve, 2000));
-
-      return { authenticated: true, student_id: Math.floor(Math.random() * 1000) + 1 };
+    
+      // For demo purposes, use a real student ID
+      // In a real implementation, this would scan and match fingerprints
+      return { authenticated: true, student_id: 1 }; // Use a real student ID
     }
 
     // Keyboard shortcuts
@@ -1680,10 +1841,28 @@ $userRole = $_SESSION['role'] ?? 'admin';
       if (document.hidden && currentSessionId) {
         // Pause monitoring when tab is not visible
         console.log('Tab hidden, pausing attendance monitoring');
+        if (sessionTimerInterval) {
+          clearInterval(sessionTimerInterval);
+          sessionTimerInterval = null;
+        }
       } else if (!document.hidden && currentSessionId) {
         // Resume monitoring when tab becomes visible
         console.log('Tab visible, resuming attendance monitoring');
         loadAttendanceRecords();
+        // Resume timer
+        if (sessionStartTime && !sessionTimerInterval) {
+          sessionTimerInterval = setInterval(updateSessionTimer, 1000);
+        }
+      }
+    });
+
+    // Warn user before leaving with active session
+    window.addEventListener('beforeunload', function(e) {
+      if (currentSessionId) {
+        // Show confirmation dialog
+        const message = 'You have an active attendance session. Are you sure you want to leave? The session will remain active.';
+        e.returnValue = message; // Standard for most browsers
+        return message; // For some older browsers
       }
     });
 
@@ -1692,6 +1871,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
       if (currentSessionId) {
         stopAttendanceMonitoring();
         stopWebcam();
+        stopSessionTimer();
       }
     });
 
@@ -1714,16 +1894,30 @@ $userRole = $_SESSION['role'] ?? 'admin';
           const imageData = canvas.toDataURL('image/jpeg', 0.8);
 
           // Show processing overlay
-          showFaceRecognitionOverlay('Processing...');
+          updateFaceRecognitionStatus('🔍 Scanning faces...', 'info');
 
           const result = await processFaceRecognition(imageData);
 
-          hideFaceRecognitionOverlay();
-
           if (result.recognized && currentSessionId) {
+            // Show success status
+            const studentInfo = result.student_name || `ID ${result.student_id}`;
+            updateFaceRecognitionStatus(`✅ ${studentInfo} recognized!`, 'success');
+
             // Record attendance
             await recordAttendance(result.student_id, 'face_recognition', 'present');
-            showNotification(`Student ${result.student_id} marked present via face recognition`, 'success');
+
+            // Show notification
+            const notificationText = result.student_name ?
+              `${result.student_name} (${result.confidence}% confidence)` :
+              `Student ID ${result.student_id} (${result.confidence}% confidence)`;
+            showNotification(`${notificationText} marked present via face recognition`, 'success');
+
+            // Hide overlay after success
+            setTimeout(() => hideFaceRecognitionOverlay(), 2000);
+          } else {
+            // Show no match status briefly
+            updateFaceRecognitionStatus('❌ No face recognized', 'error');
+            setTimeout(() => hideFaceRecognitionOverlay(), 1500);
           }
 
         } catch (error) {
@@ -1745,6 +1939,26 @@ $userRole = $_SESSION['role'] ?? 'admin';
       const overlay = document.getElementById('webcam-overlay');
       const status = document.getElementById('face-recognition-status');
       status.textContent = message;
+      overlay.style.display = 'flex';
+    }
+
+    function updateFaceRecognitionStatus(message, type = 'info') {
+      const overlay = document.getElementById('webcam-overlay');
+      const status = document.getElementById('face-recognition-status');
+
+      // Update status text
+      status.textContent = message;
+
+      // Update styling based on type
+      status.className = '';
+      if (type === 'success') {
+        status.classList.add('text-success', 'fw-bold');
+      } else if (type === 'error') {
+        status.classList.add('text-danger', 'fw-bold');
+      } else {
+        status.classList.add('text-light');
+      }
+
       overlay.style.display = 'flex';
     }
 
@@ -1792,7 +2006,12 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     // Record attendance helper function
     async function recordAttendance(studentId, method, status) {
-      if (!currentSessionId) return;
+      if (!currentSessionId) {
+        console.error('No active session ID for recording attendance');
+        return false;
+      }
+
+      console.log(`Recording attendance: student=${studentId}, method=${method}, status=${status}, session=${currentSessionId}`);
 
       try {
         const formData = new FormData();
@@ -1808,18 +2027,153 @@ $userRole = $_SESSION['role'] ?? 'admin';
         });
 
         const result = await response.json();
+        console.log('Attendance recording API response:', result);
 
         if (result.status === 'success') {
+          console.log('Attendance recorded successfully');
           loadAttendanceRecords();
           loadSessionStats();
           return true;
         } else {
           console.error('Failed to record attendance:', result.message);
+          showNotification('Failed to record attendance: ' + result.message, 'error');
           return false;
         }
       } catch (error) {
         console.error('Error recording attendance:', error);
+        showNotification('Error recording attendance: ' + error.message, 'error');
         return false;
+      }
+    }
+
+    // Handle existing session dialog
+    function handleExistingSession(existingSession, originalFormData) {
+      // Create modal dialog
+      const modalHtml = `
+        <div class="modal fade" id="existingSessionModal" tabindex="-1" aria-labelledby="existingSessionLabel" aria-hidden="true">
+          <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="existingSessionLabel">
+                  <i class="fas fa-exclamation-triangle text-warning me-2"></i>
+                  Active Session Found
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <p class="mb-3">An active attendance session already exists for this course:</p>
+                <div class="alert alert-info">
+                  <strong>Session Details:</strong><br>
+                  Started: ${new Date(existingSession.start_time).toLocaleString()}<br>
+                  Date: ${existingSession.session_date}
+                </div>
+                <p class="mb-0">What would you like to do?</p>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                  <i class="fas fa-times me-1"></i>Cancel
+                </button>
+                <button type="button" class="btn btn-primary" onclick="resumeExistingSession(${existingSession.id})">
+                  <i class="fas fa-play me-1"></i>Resume Session
+                </button>
+                <button type="button" class="btn btn-danger" onclick="forceStartNewSession()">
+                  <i class="fas fa-plus me-1"></i>Start New Session
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Add modal to page
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // Store form data for later use
+      window.pendingSessionFormData = originalFormData;
+
+      // Show modal
+      const modal = new bootstrap.Modal(document.getElementById('existingSessionModal'));
+      modal.show();
+
+      // Clean up modal when hidden
+      document.getElementById('existingSessionModal').addEventListener('hidden.bs.modal', function() {
+        this.remove();
+      });
+    }
+
+    // Resume existing session
+    async function resumeExistingSession(sessionId) {
+      // Close modal
+      bootstrap.Modal.getInstance(document.getElementById('existingSessionModal')).hide();
+
+      try {
+        showLoading('Resuming session...');
+
+        // Get session details
+        const response = await fetch(`api/attendance-session-api.php?action=get_user_active_session`);
+        const result = await response.json();
+
+        // console.log('Resume session API response:', result);
+
+        hideLoading();
+
+        if (result.status === 'success' && result.data) {
+          currentSessionId = result.data.id;
+          showNotification('Resumed existing session', 'success');
+          showActiveSession(result.data);
+          startAttendanceMonitoring();
+        } else {
+          console.error('Resume session failed:', result);
+          showNotification('Failed to resume session: ' + (result.message || 'Unknown error'), 'error');
+        }
+      } catch (error) {
+        hideLoading();
+        console.error('Error resuming session:', error);
+        showNotification('Failed to resume session: ' + error.message, 'error');
+      }
+    }
+
+    // Force start new session (end existing and start new)
+    async function forceStartNewSession() {
+      // Close modal
+      bootstrap.Modal.getInstance(document.getElementById('existingSessionModal')).hide();
+
+      if (!window.pendingSessionFormData) {
+        showNotification('Session data not available', 'error');
+        return;
+      }
+
+      try {
+        showLoading('Starting new session...');
+
+        // Add force flag to form data
+        const formData = new FormData();
+        for (let [key, value] of window.pendingSessionFormData.entries()) {
+          formData.append(key, value);
+        }
+        formData.append('force_new', '1');
+
+        const response = await fetch('api/attendance-session-api.php?action=start_session', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+
+        hideLoading();
+
+        if (result.status === 'success') {
+          currentSessionId = result.session_id;
+          showNotification('New session started successfully!', 'success');
+          showActiveSession(result.data);
+          startAttendanceMonitoring();
+        } else {
+          showNotification('Error starting new session: ' + result.message, 'error');
+        }
+      } catch (error) {
+        hideLoading();
+        console.error('Error starting new session:', error);
+        showNotification('Failed to start new session', 'error');
       }
     }
 

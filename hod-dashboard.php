@@ -17,7 +17,7 @@ try {
         SELECT d.name as department_name, d.id as department_id
         FROM departments d
         JOIN lecturers l ON d.hod_id = l.id
-        JOIN users u ON l.email = u.email AND u.role = 'hod'
+        JOIN users u ON l.user_id = u.id AND u.role = 'hod'
         WHERE u.id = ?
     ");
     $stmt->execute([$user_id]);
@@ -25,7 +25,7 @@ try {
 
     if (!$dept_result) {
         // User is HOD but not assigned to any department - deny access
-        header("Location: login.php?error=not_assigned");
+        header("Location: login_new.php?error=not_assigned");
         exit;
     }
 
@@ -33,7 +33,7 @@ try {
     $department_id = $dept_result['department_id'];
 
     // Get user information
-    $stmt = $pdo->prepare("SELECT username as name, email FROM users WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     $user['department_name'] = $department_name;
@@ -62,7 +62,8 @@ try {
                 COUNT(*) as total_count
             FROM attendance_records ar
             JOIN students s ON ar.student_id = s.id
-            WHERE s.department_id = ?
+            JOIN options o ON s.option_id = o.id
+            WHERE o.department_id = ?
             AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
         ");
         $stmt->execute([$department_id]);
@@ -79,7 +80,8 @@ try {
             SELECT COUNT(*) as pending_count
             FROM leave_requests lr
             JOIN students s ON lr.student_id = s.id
-            WHERE s.department_id = ?
+            JOIN options o ON s.option_id = o.id
+            WHERE o.department_id = ?
             AND lr.status = 'pending'
         ");
         $stmt->execute([$department_id]);
@@ -89,8 +91,9 @@ try {
         // Total students in department
         $stmt = $pdo->prepare("
             SELECT COUNT(*) as total_students
-            FROM students
-            WHERE department_id = ?
+            FROM students s
+            JOIN options o ON s.option_id = o.id
+            WHERE o.department_id = ?
         ");
         $stmt->execute([$department_id]);
         $students_result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -100,7 +103,7 @@ try {
         $stmt = $pdo->prepare("
             SELECT COUNT(*) as total_lecturers
             FROM lecturers l
-            INNER JOIN users u ON l.email = u.email
+            INNER JOIN users u ON l.user_id = u.id
             WHERE l.department_id = ?
         ");
         $stmt->execute([$department_id]);
@@ -315,7 +318,7 @@ try {
     <a href="hod-leave-management.php"><i class="fas fa-envelope-open-text me-2"></i> Manage Leave Requests</a>
     <a href="#" onclick="showCourseAssignmentModal()"><i class="fas fa-book me-2"></i> Assign Courses</a>
     <a href="hod-manage-lecturers.php"><i class="fas fa-user-plus me-2"></i> Manage Lecturers</a>
-    <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+    <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
   </div>
 
   <!-- Topbar -->
@@ -445,10 +448,12 @@ try {
                 if (isset($department_id)) {
                     // Get recent leave requests for this department
                     $stmt = $pdo->prepare("
-                        SELECT lr.requested_at, s.first_name, s.last_name, lr.status
+                        SELECT lr.requested_at, u.first_name, u.last_name, lr.status
                         FROM leave_requests lr
                         JOIN students s ON lr.student_id = s.id
-                        WHERE s.department_id = ?
+                        JOIN users u ON s.user_id = u.id
+                        JOIN options o ON s.option_id = o.id
+                        WHERE o.department_id = ?
                         ORDER BY lr.requested_at DESC
                         LIMIT 3
                     ");

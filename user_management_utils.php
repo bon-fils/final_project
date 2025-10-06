@@ -32,12 +32,12 @@ function validate_status($status) {
 /**
  * Sanitize input data
  */
-function sanitize_input($data) {
-    if (is_array($data)) {
-        return array_map('sanitize_input', $data);
-    }
-    return htmlspecialchars(trim($data), ENT_QUOTES, 'UTF-8');
-}
+// function sanitize_input($data) {
+//     if (is_array($data)) {
+//         return array_map('sanitize_input', $data);
+//     }
+//     return htmlspecialchars(trim($data), ENT_QUOTES, 'UTF-8');
+// }
 
 /**
  * Validate username format

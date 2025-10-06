@@ -18,7 +18,7 @@ try {
     echo "\n2. TABLE STRUCTURES:\n\n";
 
     // Check key tables
-    $key_tables = ['courses', 'students', 'lecturers', 'departments', 'options'];
+    $key_tables = ['courses', 'students', 'lecturers', 'departments', 'options', 'attendance_sessions', 'attendance_records'];
 
     foreach ($key_tables as $table) {
         if (in_array($table, $tables)) {

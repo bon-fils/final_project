@@ -25,13 +25,13 @@ function getRecentActivities($pdo, $user_id) {
 
         // Recent attendance sessions - filter by department
         $sessionsStmt = $pdo->prepare("
-            SELECT 'session' as type, s.course_name, s.created_at, COUNT(ar.id) as attendance_count
+            SELECT 'session' as type, c.name as course_name, s.session_date, COUNT(ar.id) as attendance_count
             FROM attendance_sessions s
             LEFT JOIN attendance_records ar ON s.id = ar.session_id
             INNER JOIN courses c ON s.course_id = c.id
             WHERE c.department_id = ?
             GROUP BY s.id
-            ORDER BY s.created_at DESC
+            ORDER BY s.session_date DESC
             LIMIT 3
         ");
         $sessionsStmt->execute([$lecturerDept['department_id']]);
@@ -49,12 +49,13 @@ function getRecentActivities($pdo, $user_id) {
 
         // Recent leave requests - filter by department
         $leavesStmt = $pdo->prepare("
-            SELECT 'leave' as type, lr.reason, lr.status, lr.created_at, st.first_name, st.last_name
+            SELECT 'leave' as type, lr.reason, lr.status, lr.requested_at, u.first_name, u.last_name
             FROM leave_requests lr
             INNER JOIN students st ON lr.student_id = st.id
+            INNER JOIN users u ON st.user_id = u.id
             INNER JOIN options o ON st.option_id = o.id
             WHERE o.department_id = ?
-            ORDER BY lr.created_at DESC
+            ORDER BY lr.requested_at DESC
             LIMIT 3
         ");
         $leavesStmt->execute([$lecturerDept['department_id']]);
@@ -252,7 +253,7 @@ function getActiveSessionsCount($pdo, $user_id) {
             SELECT COUNT(*) as active
             FROM attendance_sessions s
             INNER JOIN courses c ON s.course_id = c.id
-            WHERE c.department_id = ? AND s.status = 'active'
+            WHERE c.department_id = ?
         ");
         $stmt->execute([$lecturerDept['department_id']]);
         return $stmt->fetch()['active'] ?? 0;
@@ -287,7 +288,7 @@ function getAverageAttendanceRate($pdo, $user_id) {
             FROM courses c
             LEFT JOIN attendance_sessions s ON c.id = s.course_id
             LEFT JOIN attendance_records ar ON s.id = ar.session_id
-            LEFT JOIN students st ON c.id = st.option_id
+            LEFT JOIN students st ON st.option_id = c.option_id
             WHERE c.department_id = ?
         ");
         $stmt->execute([$lecturerDept['department_id']]);
@@ -324,17 +325,17 @@ function getCoursePerformanceData($pdo, $user_id) {
 
         $stmt = $pdo->prepare("
             SELECT
-                c.course_name,
+                c.name as course_name,
                 COUNT(DISTINCT s.id) as sessions_count,
                 COUNT(ar.id) as attendance_count,
                 COUNT(DISTINCT st.id) as student_count
             FROM courses c
             LEFT JOIN attendance_sessions s ON c.id = s.course_id
             LEFT JOIN attendance_records ar ON s.id = ar.session_id
-            LEFT JOIN students st ON c.id = st.option_id
+            LEFT JOIN students st ON st.option_id = c.option_id
             WHERE c.department_id = ?
-            GROUP BY c.id, c.course_name
-            ORDER BY c.course_name
+            GROUP BY c.id, c.name
+            ORDER BY c.name
         ");
         $stmt->execute([$lecturerDept['department_id']]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -374,7 +375,7 @@ function getAttendanceTrends($pdo, $user_id) {
             $stmt->execute([$lecturerDept['department_id'], $date]);
             $result = $stmt->fetch();
             $trends[] = [
-                'date' => date('M d', strtotime($date)),
+                'day' => date('M d', strtotime($date)),
                 'count' => $result['count'] ?? 0
             ];
         }

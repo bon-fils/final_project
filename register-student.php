@@ -15,9 +15,13 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 $csrf_token = $_SESSION['csrf_token'];
 
+// Initialize data arrays with error handling
+$departments = [];
+$provinces = [];
+
 // Get departments for dropdown
 try {
-    $stmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
+    $stmt = $pdo->query("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
     $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     error_log("Error fetching departments: " . $e->getMessage());
@@ -42,6 +46,11 @@ if (empty($provinces)) {
         ['id' => 4, 'name' => 'Eastern Province'],
         ['id' => 5, 'name' => 'Northern Province']
     ];
+}
+
+// Validate required data
+if (empty($departments)) {
+    error_log("Warning: No departments found in database");
 }
 ?>
 
@@ -136,6 +145,7 @@ if (empty($provinces)) {
                             <option value="">Select Gender</option>
                             <option value="Male">Male</option>
                             <option value="Female">Female</option>
+                            <option value="Other">Other</option>
                         </select>
                     </div>
                 </div>
@@ -288,17 +298,9 @@ if (empty($provinces)) {
                             <i class="fas fa-city me-2 text-success"></i>
                             <strong>Province</strong>
                         </label>
-                        <select class="form-control location-field" id="province" name="province" aria-label="Province" aria-describedby="provinceHelp">
-                            <option value="">🌍 Select Province</option>
-                            <?php
-                            foreach ($provinces as $province) {
-                                echo "<option value=\"{$province['id']}\">{$province['name']}</option>";
-                            }
-                            ?>
+                        <select class="form-control" id="province" name="province" aria-label="Province">
+                            <option value="">Select Province</option>
                         </select>
-                        <div class="form-text" id="provinceHelp">
-                            <small class="text-muted">Choose your province to load available districts</small>
-                        </div>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -307,12 +309,9 @@ if (empty($provinces)) {
                             <i class="fas fa-building me-2 text-primary"></i>
                             <strong>District</strong>
                         </label>
-                        <select class="form-control location-field" id="district" name="district" disabled aria-label="District" aria-describedby="districtHelp">
-                            <option value="">🏛️ Select Province First</option>
+                        <select class="form-control" id="district" name="district" disabled aria-label="District">
+                            <option value="">Select Province First</option>
                         </select>
-                        <div class="form-text" id="districtHelp">
-                            <small class="text-muted">Districts will appear after selecting a province</small>
-                        </div>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -321,12 +320,9 @@ if (empty($provinces)) {
                             <i class="fas fa-home me-2 text-info"></i>
                             <strong>Sector</strong>
                         </label>
-                        <select class="form-control location-field" id="sector" name="sector" disabled aria-label="Sector" aria-describedby="sectorHelp">
-                            <option value="">🏘️ Select District First</option>
+                        <select class="form-control" id="sector" name="sector" disabled aria-label="Sector">
+                            <option value="">Select District First</option>
                         </select>
-                        <div class="form-text" id="sectorHelp">
-                            <small class="text-muted">Sectors will appear after selecting a district</small>
-                        </div>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -340,27 +336,18 @@ if (empty($provinces)) {
                                 <i class="fas fa-home me-1"></i>Final
                             </span>
                         </label>
-                        <select class="form-control location-field" id="cell" name="cell" disabled aria-label="Cell" aria-describedby="cellHelp">
-                            <option value="">🏘️ Select Sector First</option>
+                        <select class="form-control" id="cell" name="cell" disabled aria-label="Cell">
+                            <option value="">Select Sector First</option>
                         </select>
-                        <div class="form-text mt-2" id="cellHelp">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-info-circle text-warning me-2"></i>
-                                <small class="text-muted fw-medium">Select your specific cell/village within the sector</small>
-                            </div>
-                        </div>
-                        <!-- Cell Search (shown when cells are loaded) -->
                         <div class="mt-2" id="cellSearchContainer" style="display: none;">
                             <input type="text" class="form-control form-control-sm" id="cellSearch" placeholder="🔍 Search cells..." aria-label="Search cells">
-                            <small class="text-muted">Type to filter cells in this sector</small>
                         </div>
-                        <div class="mt-2" id="cellInfo" style="display: none;">
-                            <div class="alert alert-warning py-2 px-3 border-0" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);">
-                                <div class="d-flex align-items-center">
-                                    <i class="fas fa-map-marker-alt text-warning me-2 fs-6"></i>
-                                    <div class="flex-grow-1">
-                                        <small class="fw-medium text-warning-emphasis" id="cellInfoText"></small>
-                                    </div>
+                        <div class="mt-2 alert alert-info py-2 px-3 border-0 d-none" id="cellInfo" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-map-marker-alt text-info me-2 fs-5"></i>
+                                <div>
+                                    <strong class="text-info">Location Selected</strong><br>
+                                    <small id="cellInfoText" class="text-info-emphasis fw-medium"></small>
                                 </div>
                             </div>
                         </div>
@@ -699,6 +686,106 @@ if (empty($provinces)) {
             flex-wrap: wrap;
         }
 
+        /* Location loading states */
+        .location-loading {
+            position: relative;
+            opacity: 0.7;
+        }
+
+        .location-loading::after {
+            content: '';
+            position: absolute;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            border: 2px solid #0d6efd;
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: translateY(-50%) rotate(0deg); }
+            50% { transform: translateY(-50%) rotate(45deg); }
+            100% { transform: translateY(-50%) rotate(360deg); }
+        }
+
+        /* Enhanced location section styling */
+        .section-title i.fa-map-marker-alt {
+            color: #198754;
+        }
+
+        /* Location cascade animation */
+        .location-field {
+            transition: all 0.3s ease;
+        }
+
+        .location-field.enabled {
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        /* Better visual hierarchy for location fields */
+        #province, #district, #sector {
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        #province:focus {
+            border-color: #198754;
+            box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
+        }
+
+        #district:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+        }
+
+        #sector:focus {
+            border-color: #6f42c1;
+            box-shadow: 0 0 0 0.2rem rgba(111, 66, 193, 0.25);
+        }
+
+        #cell:focus {
+            border-color: #fd7e14;
+            box-shadow: 0 0 0 0.2rem rgba(253, 126, 20, 0.25);
+        }
+
+        /* Cell information display */
+        #cellInfo {
+            animation: fadeInDown 0.3s ease-out;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Enhanced cell selection feedback */
+        #cell.border-success {
+            animation: successPulse 2s ease-in-out;
+        }
+
+        @keyframes successPulse {
+            0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
+            50% { box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.3); }
+            100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
+        }
+
+        /* Cell badge styling */
+        .badge.bg-warning.text-dark {
+            background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
+            border: none;
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
+        }
+
         /* Enhanced mobile fingerprint UI */
         @media (max-width: 768px) {
             .fingerprint-container {
@@ -795,104 +882,6 @@ if (empty($provinces)) {
             100% { transform: scale(1); }
         }
 
-        /* Location loading states */
-        .location-loading {
-            position: relative;
-            opacity: 0.7;
-        }
-
-        .location-loading::after {
-            content: '';
-            position: absolute;
-            right: 30px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 16px;
-            height: 16px;
-            border: 2px solid #0d6efd;
-            border-top: 2px solid transparent;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: translateY(-50%) rotate(0deg); }
-            100% { transform: translateY(-50%) rotate(360deg); }
-        }
-
-        /* Enhanced location section styling */
-        .section-title i.fa-map-marker-alt {
-            color: #198754;
-        }
-
-        /* Location cascade animation */
-        .location-field {
-            transition: all 0.3s ease;
-        }
-
-        .location-field.enabled {
-            animation: fadeInUp 0.3s ease-out;
-        }
-
-        /* Better visual hierarchy for location fields */
-        #province, #district, #sector {
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        #province:focus {
-            border-color: #198754;
-            box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
-        }
-
-        #district:focus {
-            border-color: #0d6efd;
-            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
-        }
-
-        #sector:focus {
-            border-color: #6f42c1;
-            box-shadow: 0 0 0 0.2rem rgba(111, 66, 193, 0.25);
-        }
-
-        #cell:focus {
-            border-color: #fd7e14;
-            box-shadow: 0 0 0 0.2rem rgba(253, 126, 20, 0.25);
-        }
-
-        /* Cell information display */
-        #cellInfo {
-            animation: fadeInDown 0.3s ease-out;
-        }
-
-        @keyframes fadeInDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        /* Enhanced cell selection feedback */
-        #cell.border-success {
-            animation: successPulse 2s ease-in-out;
-        }
-
-        @keyframes successPulse {
-            0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
-            50% { box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.3); }
-            100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
-        }
-
-        /* Cell badge styling */
-        .badge.bg-warning.text-dark {
-            background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
-            border: none;
-            font-size: 0.7rem;
-            padding: 0.25rem 0.5rem;
-        }
     </style>
 
     <!-- JavaScript -->
@@ -910,13 +899,12 @@ class StudentRegistration {
         this.fingerprintData = null;
         this.fingerprintQuality = 0;
         this.isCapturing = false;
-        // Location caching for better performance
+        // Location caching for performance
         this.locationCache = {
             districts: new Map(),
             sectors: new Map(),
             cells: new Map()
         };
-        // Cell search functionality
         this.originalCellOptions = [];
         this.init();
     }
@@ -952,6 +940,9 @@ class StudentRegistration {
     }
 
     initializeLocationFields() {
+        // Load provinces on page load
+        this.loadProvinces();
+
         // Add enabled class to province field (always available)
         $('#province').addClass('enabled');
 
@@ -959,629 +950,37 @@ class StudentRegistration {
         this.resetLocationFields('province');
     }
 
-    setupGlobalErrorHandler() {
-        // Handle unhandled promise rejections
-        window.addEventListener('unhandledrejection', (event) => {
-            console.error('Unhandled promise rejection:', event.reason);
-            this.showAlert('An unexpected error occurred. Please try again.', 'error');
-            event.preventDefault();
-        });
-
-        // Handle global JavaScript errors
-        window.addEventListener('error', (event) => {
-            console.error('Global JavaScript error:', event.error);
-            // Don't show alert for minor errors to avoid spam
-            if (event.error && !event.error.message.includes('Script error')) {
-                this.showAlert('A system error occurred. Please refresh if issues persist.', 'error');
-            }
-        });
-    }
-
-    async checkServerConnectivity() {
-        try {
-            // Quick connectivity check to a lightweight endpoint
-            const response = await fetch('api/location-api.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: `action=get_provinces&csrf_token=${this.csrfToken}`,
-                signal: AbortSignal.timeout(5000) // 5 second timeout
-            });
-
-            if (response.ok) {
-                console.log('✅ Server connectivity check passed');
-            } else {
-                console.warn('⚠️ Server connectivity check failed with status:', response.status);
-                this.showAlert('⚠️ Server connection may be unstable. Please check your internet connection.', 'warning');
-            }
-        } catch (error) {
-            console.error('❌ Server connectivity check failed:', error);
-            this.showAlert('⚠️ Unable to connect to server. Please check your internet connection and try refreshing the page.', 'warning');
-        }
-    }
-
-    setupEventListeners() {
-        // Department change with error handling
-        $('#department').on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
-
-        // Location hierarchy
-        $('#province').on('change', this.debounce(this.handleProvinceChange.bind(this), 300));
-        $('#district').on('change', this.debounce(this.handleDistrictChange.bind(this), 300));
-        $('#sector').on('change', this.debounce(this.handleSectorChange.bind(this), 300));
-        $('#cell').on('change', this.debounce(this.handleCellChange.bind(this), 300));
-        $('#cellSearch').on('input', this.debounce(this.handleCellSearch.bind(this), 300));
-
-        // Photo handling
-        $('#selectPhotoBtn').on('click', () => $('#photoInput').click());
-        $('#photoInput').on('change', this.handlePhotoSelect.bind(this));
-        $('#removePhoto').on('click', this.removePhoto.bind(this));
-
-        // Form submission
-        $('#registrationForm').on('submit', this.handleSubmit.bind(this));
-
-        // Real-time validation
-        $('input[required]').on('blur', this.validateField.bind(this));
-        $('input[required]').on('input', this.debounce(this.updateProgress.bind(this), 200));
-
-        // Enhanced registration number validation
-        $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
-        $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
-
-        // Phone number input filtering (digits only, max 10 characters)
-        $('input[name="telephone"]').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
-        });
-
-        // Student ID number input filtering (digits only)
-        $('#studentIdNumber').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-
-        // Parent contact input filtering (digits only, max 10 characters)
-        $('input[name="parent_contact"]').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
-        });
-
-        // Fingerprint functionality
-        $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
-        $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
-        $('#enrollFingerprintBtn').on('click', this.enrollFingerprint.bind(this));
-    }
-
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    async handleDepartmentChange() {
-        const deptId = $('#department').val();
-        const $option = $('#option');
-        const $loadingSpinner = $('.program-loading');
-
-        if (!deptId) {
-            this.resetProgramSelection();
-            return;
-        }
-
-        // Clear previous program selection and show loading
-        $option.prop('disabled', true).removeClass('programs-loaded');
-        $loadingSpinner.removeClass('d-none');
-        $('#programCount').addClass('d-none');
-        $('#programLoadedIcon').addClass('d-none');
-
-        // Reset help text to initial state
-        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
-        $('#programHelp small').html('<strong class="text-muted">Available programs will appear after selecting a department</strong>');
-
-        $option.prop('disabled', true);
-        $loadingSpinner.removeClass('d-none');
-
+    async loadProvinces() {
         try {
             const response = await this.retryableAjax({
-                url: 'api/department-option-api.php',
+                url: 'api/location-api.php',
                 method: 'POST',
                 data: {
-                    action: 'get_options',
-                    department_id: parseInt(deptId, 10),
+                    action: 'get_provinces',
                     csrf_token: this.csrfToken
                 }
             });
 
-            if (response.success) {
-                if (response.data && response.data.length > 0) {
-                    const options = response.data.map(opt =>
-                        `<option value="${opt.id}" data-department="${deptId}">${this.escapeHtml(opt.name)}</option>`
-                    ).join('');
+            if (response.success && response.provinces) {
+                const options = response.provinces.map(province =>
+                    `<option value="${province.id}">${this.escapeHtml(province.name)}</option>`
+                ).join('');
 
-                    $option.html('<option value="">Select Program</option>' + options)
-                        .prop('disabled', false)
-                        .addClass('programs-loaded')
-                        .data('department-id', deptId);
-
-                    // Update program count display
-                    $('#programCountText').text(`${response.data.length} program${response.data.length !== 1 ? 's' : ''} available for selection`);
-                    $('#programCount').removeClass('d-none');
-
-                    // Show success icon
-                    $('#programLoadedIcon').removeClass('d-none');
-
-                    // Update help text with success styling
-                    $('#programHelp .fas').removeClass('fa-info-circle text-info').addClass('fa-check-circle text-success');
-                    $('#programHelp small').html('<strong class="text-success">Programs loaded successfully!</strong> Choose your desired program from the dropdown above');
-
-                    this.showAlert(`🎉 ${response.data.length} program${response.data.length !== 1 ? 's' : ''} loaded successfully!`, 'success');
-                } else {
-                    $option.html('<option value="">No programs available</option>')
-                        .removeData('department-id');
-
-                    $('#programCount').addClass('d-none');
-                    $('#programHelp small').text('No programs are currently available for this department');
-
-                    this.showAlert('⚠️ No programs found for this department', 'warning');
-                }
+                $('#province').append(options);
+                this.showAlert(`📍 ${response.provinces.length} provinces loaded successfully!`, 'success');
             } else {
-                throw new Error(response.message || 'Failed to load options');
+                throw new Error(response.message || 'Failed to load provinces');
             }
         } catch (error) {
-            console.error('Department change error:', error);
-            $option.html('<option value="">Error loading programs</option>')
-                .removeData('department-id');
-
-            // Reset program count and help text
-            $('#programCount').addClass('d-none');
-            $('#programHelp small').text('Failed to load programs. Please try selecting the department again.');
-
-            this.showAlert('❌ Failed to load programs. Please try again.', 'error');
-        } finally {
-            $option.prop('disabled', false);
-            $loadingSpinner.addClass('d-none');
+            console.error('Province loading error:', error);
+            $('#province').html('<option value="">❌ Failed to load provinces</option>');
+            this.showAlert('❌ Failed to load provinces. Please refresh the page.', 'error');
         }
-    }
-
-    async retryableAjax(options, retries = this.retryAttempts) {
-        const defaultOptions = {
-            timeout: 10000,
-            dataType: 'json',
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        };
-
-        const finalOptions = { ...defaultOptions, ...options };
-
-        for (let i = 0; i < retries; i++) {
-            try {
-                const response = await $.ajax(finalOptions);
-
-                // Validate response structure
-                if (response && typeof response === 'object') {
-                    return response;
-                } else {
-                    throw new Error('Invalid response format');
-                }
-            } catch (error) {
-                const isLastAttempt = i === retries - 1;
-                const errorMessage = this.getErrorMessage(error);
-
-                // Enhanced error logging with attempt information
-                console.error(`=== AJAX ATTEMPT ${i + 1}/${retries} FAILED ===`);
-                console.error('URL:', finalOptions.url);
-                console.error('Method:', finalOptions.method);
-                console.error('Error message:', errorMessage);
-                console.error('HTTP Status:', error.status);
-                console.error('Status Text:', error.statusText);
-                console.error('Ready State:', error.readyState);
-                console.error('Response Text (truncated):', error.responseText ? error.responseText.substring(0, 200) + '...' : 'No response');
-                console.error('Response JSON:', error.responseJSON);
-                console.error('Full error object:', error);
-                console.error('=== END AJAX ATTEMPT FAILURE ===');
-
-                if (isLastAttempt) {
-                    console.error(`AJAX request failed after ${retries} attempts:`, errorMessage);
-                    throw error; // Throw the original error for better handling
-                }
-
-                // Exponential backoff with jitter
-                const delay = this.retryDelay * Math.pow(2, i) + Math.random() * 1000;
-                console.log(`Retrying in ${Math.round(delay)}ms... (attempt ${i + 2}/${retries})`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
-
-    getErrorMessage(error) {
-        // Enhanced error message extraction
-        if (error.responseJSON && error.responseJSON.message) {
-            return `Server error: ${error.responseJSON.message}`;
-        } else if (error.responseJSON && error.responseJSON.errors) {
-            const errors = Object.values(error.responseJSON.errors).flat();
-            return `Validation errors: ${errors.join('; ')}`;
-        } else if (error.status) {
-            let statusMessage = `HTTP ${error.status}`;
-            if (error.statusText) {
-                statusMessage += `: ${error.statusText}`;
-            }
-
-            // Add specific guidance for common HTTP errors
-            switch (error.status) {
-                case 0:
-                    return `${statusMessage} - Network connection failed. Check your internet connection.`;
-                case 403:
-                    return `${statusMessage} - Access denied. Please refresh the page and try again.`;
-                case 404:
-                    return `${statusMessage} - Service not found. The requested endpoint may not exist.`;
-                case 500:
-                    return `${statusMessage} - Server error. Please try again later.`;
-                case 503:
-                    return `${statusMessage} - Service temporarily unavailable. Please try again later.`;
-                default:
-                    return statusMessage;
-            }
-        } else if (error.message) {
-            return `Request error: ${error.message}`;
-        } else if (typeof error === 'string') {
-            return error;
-        }
-
-        // Fallback with more details
-        return `Unknown error occurred. Error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`;
-    }
-
-    validateImage(file) {
-        const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-        const maxSize = 5 * 1024 * 1024;
-
-        if (!validTypes.includes(file.type)) {
-            this.showAlert('Invalid file type. Please use JPEG, PNG, or WebP.', 'error');
-            return false;
-        }
-
-        if (file.size > maxSize) {
-            this.showAlert('File too large. Maximum size is 5MB.', 'error');
-            return false;
-        }
-
-        return true;
-    }
-
-    isValidEmail(email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return emailRegex.test(email);
-    }
-
-    isValidPhone(phone) {
-        // Must be exactly 10 digits, start with 0, and contain no letters
-        const phoneRegex = /^0\d{9}$/;
-        return phoneRegex.test(phone) && /^[0-9]+$/.test(phone);
-    }
-
-    showFieldError(field, message) {
-        $(field).addClass('is-invalid').removeClass('is-valid');
-        $(field).next('.invalid-feedback').remove();
-        $(field).after(`<div class="invalid-feedback">${message}</div>`);
-    }
-
-    clearFieldError(field) {
-        $(field).removeClass('is-invalid').addClass('is-valid');
-        $(field).next('.invalid-feedback').remove();
-    }
-
-    validateRegistrationNumber(e) {
-        const value = e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().substring(0, 20);
-        e.target.value = value;
-
-        if (value.length >= 5) {
-            $(e.target).addClass('is-valid').removeClass('is-invalid');
-        } else if (value.length > 0) {
-            $(e.target).addClass('is-invalid').removeClass('is-valid');
-        } else {
-            $(e.target).removeClass('is-valid is-invalid');
-        }
-    }
-
-    validateStudentId(e) {
-        const value = e.target.value.replace(/[^0-9]/g, '').substring(0, 16);
-        e.target.value = value;
-
-        if (value.length === 16) {
-            $(e.target).addClass('is-valid');
-        } else {
-            $(e.target).removeClass('is-valid is-invalid');
-        }
-    }
-
-    showLoading(show) {
-        if (show) {
-            $('#loadingOverlay').removeClass('d-none').addClass('d-flex');
-        } else {
-            $('#loadingOverlay').removeClass('d-flex').addClass('d-none');
-        }
-    }
-
-    disableForm(disable) {
-        $('#registrationForm input, #registrationForm select, #registrationForm button')
-            .prop('disabled', disable);
-    }
-
-    escapeHtml(unsafe) {
-        return unsafe
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
-    }
-
-    showWelcomeMessage() {
-        setTimeout(() => {
-            this.showAlert('Welcome to Rwanda Polytechnic Student Registration System! Please fill in all required fields.', 'info');
-        }, 1000);
-    }
-
-    validateField(e) {
-        const field = e.target;
-        const value = field.value.trim();
-
-        if (!value) return;
-
-        const fieldName = field.name;
-
-        switch (fieldName) {
-            case 'email':
-                if (!this.isValidEmail(value)) {
-                    this.showFieldError(field, 'Please enter a valid email address');
-                } else {
-                    this.clearFieldError(field);
-                }
-                break;
-            case 'telephone':
-                if (!this.isValidPhone(value)) {
-                    this.showFieldError(field, 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
-                } else {
-                    this.clearFieldError(field);
-                }
-                break;
-        }
-    }
-
-    updateProgress() {
-        const totalFields = $('#registrationForm [required]').length;
-        const filledFields = $('#registrationForm [required]').filter(function() {
-            return $(this).val().trim().length > 0;
-        }).length;
-
-        const progress = Math.round((filledFields / totalFields) * 100);
-        $('#formProgress').css('width', progress + '%');
-        $('#progressText').text(progress + '%');
-
-        const $progressBar = $('#formProgress');
-        $progressBar.removeClass('bg-success bg-warning bg-danger');
-
-        if (progress >= 80) {
-            $progressBar.addClass('bg-success');
-        } else if (progress >= 50) {
-            $progressBar.addClass('bg-warning');
-        } else {
-            $progressBar.addClass('bg-danger');
-        }
-    }
-
-    showSuccess(response) {
-        // Show success alert prominently at the top
-        this.showAlert(`🎉 SUCCESS: ${response.message}`, 'success', false);
-
-        // Create enhanced success modal
-        if ($('#successModal').length === 0) {
-            $('body').append(`
-                <div class="modal fade" id="successModal" tabindex="-1" data-bs-backdrop="static">
-                    <div class="modal-dialog modal-dialog-centered">
-                        <div class="modal-content border-success">
-                            <div class="modal-header bg-success text-white">
-                                <h4 class="modal-title">
-                                    <i class="fas fa-check-circle me-2"></i>Registration Completed Successfully!
-                                </h4>
-                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                            </div>
-                            <div class="modal-body text-center p-4">
-                                <div class="mb-4">
-                                    <i class="fas fa-graduation-cap fa-4x text-success mb-3"></i>
-                                    <h5 class="text-success mb-3">Welcome to Rwanda Polytechnic!</h5>
-                                </div>
-
-                                <div class="row g-3">
-                                    <div class="col-12">
-                                        <div class="alert alert-success border-success">
-                                            <i class="fas fa-user-check me-2"></i>
-                                            <strong>Student Registration Complete</strong><br>
-                                            ${response.message}
-                                        </div>
-                                    </div>
-
-                                    <div class="col-12">
-                                        <div class="card border-success">
-                                            <div class="card-body">
-                                                <h6 class="card-title text-success">
-                                                    <i class="fas fa-id-card me-2"></i>Student Information
-                                                </h6>
-                                                <p class="mb-1"><strong>Student ID:</strong> <code class="text-success">${response.student_id}</code></p>
-                                                <p class="mb-0"><strong>Status:</strong> <span class="badge bg-success">Active</span></p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    ${response.fingerprint_enrolled ?
-                                        '<div class="col-12"><div class="alert alert-info border-info"><i class="fas fa-fingerprint me-2"></i><strong>Biometric Security:</strong> Fingerprint enrolled successfully for secure attendance tracking!</div></div>' :
-                                        '<div class="col-12"><div class="alert alert-warning border-warning"><i class="fas fa-exclamation-triangle me-2"></i><strong>Note:</strong> Fingerprint not enrolled. Student can enroll later through their dashboard.</div></div>'
-                                    }
-                                </div>
-
-                                <div class="mt-4 text-muted small">
-                                    <i class="fas fa-info-circle me-1"></i>
-                                    Student account has been created with default password (registration number).
-                                    Please advise student to change password on first login.
-                                </div>
-                            </div>
-                            <div class="modal-footer justify-content-center">
-                                <button type="button" class="btn btn-success btn-lg px-4" id="continueButton">
-                                    <i class="fas fa-tachometer-alt me-2"></i>Go to Dashboard
-                                </button>
-                                <button type="button" class="btn btn-outline-success" data-bs-dismiss="modal">
-                                    <i class="fas fa-times me-2"></i>Close
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `);
-        }
-
-        const modal = new bootstrap.Modal(document.getElementById('successModal'), {
-            backdrop: 'static',
-            keyboard: false
-        });
-        modal.show();
-
-        $('#continueButton').off('click').on('click', function() {
-            modal.hide();
-            // Add a small delay to show transition
-            setTimeout(() => {
-                window.location.href = response.redirect || 'admin-dashboard.php';
-            }, 300);
-        });
-    }
-
-    startFingerprintCapture() {
-        if (this.isCapturing) return;
-
-        this.isCapturing = true;
-        this.updateFingerprintUI('capturing');
-        this.simulateFingerprintCapture();
-    }
-
-    simulateFingerprintCapture() {
-        const canvas = document.getElementById('fingerprintCanvas');
-        const ctx = canvas.getContext('2d');
-        const placeholder = document.getElementById('fingerprintPlaceholder');
-        const status = document.getElementById('fingerprintStatus');
-
-        canvas.classList.remove('d-none');
-        placeholder.classList.add('d-none');
-
-        let progress = 0;
-        let qualityVariation = 0;
-
-        const captureInterval = setInterval(() => {
-            progress += Math.random() * 8 + 2;
-            qualityVariation += (Math.random() - 0.5) * 2;
-
-            const currentProgress = Math.min(progress, 100);
-            status.textContent = `Capturing... ${Math.round(currentProgress)}%`;
-
-            this.drawFingerprintPattern(ctx, currentProgress);
-
-            if (currentProgress >= 100) {
-                clearInterval(captureInterval);
-                this.fingerprintCaptured = true;
-
-                const baseQuality = 85 + Math.floor(Math.random() * 10);
-                const variationQuality = Math.max(75, Math.min(100, baseQuality + qualityVariation));
-                this.fingerprintQuality = Math.round(variationQuality);
-
-                this.isCapturing = false;
-                this.updateFingerprintUI('captured');
-                this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
-            }
-        }, 80);
-    }
-
-    drawFingerprintPattern(ctx, progress) {
-        const centerX = ctx.canvas.width / 2;
-        const centerY = ctx.canvas.height / 2;
-        const maxRadius = Math.min(centerX, centerY) * 0.8;
-
-        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-
-        ctx.strokeStyle = `rgba(13, 110, 253, ${Math.min(progress / 100, 1)})`;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-
-        const circleCount = Math.floor(progress / 10);
-        for (let i = 1; i <= circleCount; i++) {
-            const radius = (maxRadius * i) / 10;
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-            ctx.stroke();
-        }
-
-        if (progress > 50) {
-            const spiralProgress = (progress - 50) / 50;
-            ctx.strokeStyle = `rgba(25, 135, 84, ${spiralProgress})`;
-            ctx.beginPath();
-
-            let angle = 0;
-            let radius = 10;
-            const maxAngle = spiralProgress * Math.PI * 4;
-
-            while (radius < maxRadius && angle < maxAngle) {
-                const x = centerX + Math.cos(angle) * radius;
-                const y = centerY + Math.sin(angle) * radius;
-                ctx.lineTo(x, y);
-                angle += 0.15;
-                radius += 0.3;
-            }
-            ctx.stroke();
-        }
-
-        if (this.fingerprintQuality > 0) {
-            this.updateQualityIndicator(ctx.canvas, this.fingerprintQuality);
-        }
-    }
-
-    updateQualityIndicator(canvas, quality) {
-        let qualityElement = document.querySelector('.quality-indicator');
-        if (!qualityElement) {
-            qualityElement = document.createElement('div');
-            qualityElement.className = 'quality-indicator';
-            canvas.parentElement.appendChild(qualityElement);
-        }
-
-        const qualityColor = quality >= 90 ? '#28a745' : quality >= 80 ? '#ffc107' : '#dc3545';
-        qualityElement.textContent = `Quality: ${quality}%`;
-        qualityElement.style.backgroundColor = qualityColor;
-        qualityElement.style.color = 'white';
-    }
-
-    handlePhotoSelect(e) {
-        const file = e.target.files[0];
-        if (file && this.validateImage(file)) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                $('#photoPreview').attr('src', e.target.result).removeClass('d-none');
-                $('#removePhoto').removeClass('d-none');
-            };
-            reader.readAsDataURL(file);
-        }
-    }
-
-    removePhoto() {
-        $('#photoInput').val('');
-        $('#photoPreview').addClass('d-none').attr('src', '');
-        $('#removePhoto').addClass('d-none');
     }
 
     async handleProvinceChange() {
         const provinceId = $('#province').val();
         const $district = $('#district');
-        const $sector = $('#sector');
 
         // Reset dependent fields
         this.resetLocationFields('district');
@@ -1616,7 +1015,7 @@ class StudentRegistration {
                 this.locationCache.districts.set(provinceId, response.districts);
                 this.populateDistricts(response.districts);
 
-                this.showAlert(`📍 ${response.districts.length} district${response.districts.length !== 1 ? 's' : ''} loaded for ${$('#province option:selected').text()}`, 'success');
+                this.showAlert(`🏛️ ${response.districts.length} district${response.districts.length !== 1 ? 's' : ''} loaded for ${$('#province option:selected').text()}`, 'success');
             } else {
                 throw new Error(response.message || 'No districts found');
             }
@@ -1910,42 +1309,6 @@ class StudentRegistration {
         }
     }
 
-    // Validate location selection
-    validateLocation() {
-        const provinceId = $('#province').val();
-        const districtId = $('#district').val();
-        const sectorId = $('#sector').val();
-        const cellId = $('#cell').val();
-
-        if (!provinceId) {
-            this.showFieldError($('#province')[0], 'Please select a province');
-            return false;
-        }
-
-        if (!districtId) {
-            this.showFieldError($('#district')[0], 'Please select a district');
-            return false;
-        }
-
-        if (!sectorId) {
-            this.showFieldError($('#sector')[0], 'Please select a sector');
-            return false;
-        }
-
-        if (!cellId) {
-            this.showFieldError($('#cell')[0], 'Please select a cell');
-            return false;
-        }
-
-        // Clear any previous errors
-        this.clearFieldError($('#province')[0]);
-        this.clearFieldError($('#district')[0]);
-        this.clearFieldError($('#sector')[0]);
-        this.clearFieldError($('#cell')[0]);
-
-        return true;
-    }
-
     // Get complete location info
     getLocationInfo() {
         const provinceId = $('#province').val();
@@ -1968,6 +1331,661 @@ class StudentRegistration {
             cell_name: $('#cell option:selected').text()
         };
     }
+
+    setupGlobalErrorHandler() {
+        // Handle unhandled promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+            this.showAlert('An unexpected error occurred. Please try again.', 'error');
+            event.preventDefault();
+        });
+
+        // Handle global JavaScript errors
+        window.addEventListener('error', (event) => {
+            console.error('Global JavaScript error:', event.error);
+            // Don't show alert for minor errors to avoid spam
+            if (event.error && !event.error.message.includes('Script error')) {
+                this.showAlert('A system error occurred. Please refresh if issues persist.', 'error');
+            }
+        });
+    }
+
+    async checkServerConnectivity() {
+        try {
+            // Quick connectivity check to a lightweight endpoint
+            const response = await fetch('api/location-api.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: `action=get_provinces&csrf_token=${this.csrfToken}`,
+                signal: AbortSignal.timeout(5000) // 5 second timeout
+            });
+
+            if (response.ok) {
+                console.log('✅ Server connectivity check passed');
+            } else {
+                console.warn('⚠️ Server connectivity check failed with status:', response.status);
+                this.showAlert('⚠️ Server connection may be unstable. Please check your internet connection.', 'warning');
+            }
+        } catch (error) {
+            console.error('❌ Server connectivity check failed:', error);
+            this.showAlert('⚠️ Unable to connect to server. Please check your internet connection and try refreshing the page.', 'warning');
+        }
+    }
+
+    setupEventListeners() {
+        // Department change with error handling
+        $('#department').on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
+
+        // Location cascading
+        $('#province').on('change', this.debounce(this.handleProvinceChange.bind(this), 300));
+        $('#district').on('change', this.debounce(this.handleDistrictChange.bind(this), 300));
+        $('#sector').on('change', this.debounce(this.handleSectorChange.bind(this), 300));
+        $('#cell').on('change', this.debounce(this.handleCellChange.bind(this), 300));
+        $('#cellSearch').on('input', this.debounce(this.handleCellSearch.bind(this), 300));
+
+        // Photo handling
+        $('#selectPhotoBtn').on('click', () => $('#photoInput').click());
+        $('#photoInput').on('change', this.handlePhotoSelect.bind(this));
+        $('#removePhoto').on('click', this.removePhoto.bind(this));
+
+        // Form submission
+        $('#registrationForm').on('submit', this.handleSubmit.bind(this));
+
+        // Real-time validation
+        $('input[required]').on('blur', this.validateField.bind(this));
+        $('input[required]').on('input', this.debounce(this.updateProgress.bind(this), 200));
+
+        // Enhanced registration number validation
+        $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
+
+        // Real-time email validation
+        $('input[name="email"]').on('blur', this.validateEmailField.bind(this));
+
+        // Real-time phone validation
+        $('input[name="telephone"], input[name="parent_contact"]').on('blur', this.validatePhoneField.bind(this));
+        $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
+
+        // Phone number input filtering (digits only, max 10 characters)
+        $('input[name="telephone"]').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
+        });
+
+        // Student ID number input filtering (digits only)
+        $('#studentIdNumber').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+
+        // Parent contact input filtering (digits only, max 10 characters)
+        $('input[name="parent_contact"]').on('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
+        });
+
+        // Fingerprint functionality
+        $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
+        $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
+        $('#enrollFingerprintBtn').on('click', this.enrollFingerprint.bind(this));
+    }
+
+    debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    async handleDepartmentChange() {
+        const deptId = $('#department').val();
+        const $option = $('#option');
+        const $loadingSpinner = $('.program-loading');
+
+        if (!deptId) {
+            this.resetProgramSelection();
+            return;
+        }
+
+        // Clear previous program selection and show loading
+        $option.prop('disabled', true).removeClass('programs-loaded');
+        $loadingSpinner.removeClass('d-none');
+        $('#programCount').addClass('d-none');
+        $('#programLoadedIcon').addClass('d-none');
+
+        // Reset help text to initial state
+        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
+        $('#programHelp small').html('<strong class="text-muted">Available programs will appear after selecting a department</strong>');
+
+        $option.prop('disabled', true);
+        $loadingSpinner.removeClass('d-none');
+
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/department-option-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_options',
+                    department_id: parseInt(deptId, 10),
+                    csrf_token: this.csrfToken
+                }
+            });
+
+            if (response.success) {
+                if (response.data && response.data.length > 0) {
+                    const options = response.data.map(opt =>
+                        `<option value="${opt.id}" data-department="${deptId}">${this.escapeHtml(opt.name)}</option>`
+                    ).join('');
+
+                    $option.html('<option value="">Select Program</option>' + options)
+                        .prop('disabled', false)
+                        .addClass('programs-loaded')
+                        .data('department-id', deptId);
+
+                    // Update program count display
+                    $('#programCountText').text(`${response.data.length} program${response.data.length !== 1 ? 's' : ''} available for selection`);
+                    $('#programCount').removeClass('d-none');
+
+                    // Show success icon
+                    $('#programLoadedIcon').removeClass('d-none');
+
+                    // Update help text with success styling
+                    $('#programHelp .fas').removeClass('fa-info-circle text-info').addClass('fa-check-circle text-success');
+                    $('#programHelp small').html('<strong class="text-success">Programs loaded successfully!</strong> Choose your desired program from the dropdown above');
+
+                    this.showAlert(`🎉 ${response.data.length} program${response.data.length !== 1 ? 's' : ''} loaded successfully!`, 'success');
+                } else {
+                    $option.html('<option value="">No programs available</option>')
+                        .removeData('department-id');
+
+                    $('#programCount').addClass('d-none');
+                    $('#programHelp small').text('No programs are currently available for this department');
+
+                    this.showAlert('⚠️ No programs found for this department', 'warning');
+                }
+            } else {
+                throw new Error(response.message || 'Failed to load options');
+            }
+        } catch (error) {
+            console.error('Department change error:', error);
+            $option.html('<option value="">Error loading programs</option>')
+                .removeData('department-id');
+
+            // Reset program count and help text
+            $('#programCount').addClass('d-none');
+            $('#programHelp small').text('Failed to load programs. Please try selecting the department again.');
+
+            this.showAlert('❌ Failed to load programs. Please try again.', 'error');
+        } finally {
+            $option.prop('disabled', false);
+            $loadingSpinner.addClass('d-none');
+        }
+    }
+
+    async retryableAjax(options, retries = this.retryAttempts) {
+        const defaultOptions = {
+            timeout: 10000,
+            dataType: 'json',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        };
+
+        const finalOptions = { ...defaultOptions, ...options };
+
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await $.ajax(finalOptions);
+
+                // Validate response structure
+                if (response && typeof response === 'object') {
+                    return response;
+                } else {
+                    throw new Error('Invalid response format');
+                }
+            } catch (error) {
+                const isLastAttempt = i === retries - 1;
+                const errorMessage = this.getErrorMessage(error);
+
+                // Enhanced error logging with attempt information
+                console.error(`=== AJAX ATTEMPT ${i + 1}/${retries} FAILED ===`);
+                console.error('URL:', finalOptions.url);
+                console.error('Method:', finalOptions.method);
+                console.error('Error message:', errorMessage);
+                console.error('HTTP Status:', error.status);
+                console.error('Status Text:', error.statusText);
+                console.error('Ready State:', error.readyState);
+                console.error('Response Text (truncated):', error.responseText ? error.responseText.substring(0, 200) + '...' : 'No response');
+                console.error('Response JSON:', error.responseJSON);
+                console.error('Full error object:', error);
+                console.error('=== END AJAX ATTEMPT FAILURE ===');
+
+                if (isLastAttempt) {
+                    console.error(`AJAX request failed after ${retries} attempts:`, errorMessage);
+                    throw error; // Throw the original error for better handling
+                }
+
+                // Exponential backoff with jitter
+                const delay = this.retryDelay * Math.pow(2, i) + Math.random() * 1000;
+                console.log(`Retrying in ${Math.round(delay)}ms... (attempt ${i + 2}/${retries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    getErrorMessage(error) {
+        // Enhanced error message extraction
+        if (error.responseJSON && error.responseJSON.message) {
+            return `Server error: ${error.responseJSON.message}`;
+        } else if (error.responseJSON && error.responseJSON.errors) {
+            const errors = Object.values(error.responseJSON.errors).flat();
+            return `Validation errors: ${errors.join('; ')}`;
+        } else if (error.status) {
+            let statusMessage = `HTTP ${error.status}`;
+            if (error.statusText) {
+                statusMessage += `: ${error.statusText}`;
+            }
+
+            // Add specific guidance for common HTTP errors
+            switch (error.status) {
+                case 0:
+                    return `${statusMessage} - Network connection failed. Check your internet connection.`;
+                case 403:
+                    return `${statusMessage} - Access denied. Please refresh the page and try again.`;
+                case 404:
+                    return `${statusMessage} - Service not found. The requested endpoint may not exist.`;
+                case 500:
+                    return `${statusMessage} - Server error. Please try again later.`;
+                case 503:
+                    return `${statusMessage} - Service temporarily unavailable. Please try again later.`;
+                default:
+                    return statusMessage;
+            }
+        } else if (error.message) {
+            return `Request error: ${error.message}`;
+        } else if (typeof error === 'string') {
+            return error;
+        }
+
+        // Fallback with more details
+        return `Unknown error occurred. Error details: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`;
+    }
+
+    validateImage(file) {
+        const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+        const maxSize = 5 * 1024 * 1024;
+
+        if (!validTypes.includes(file.type)) {
+            this.showAlert('Invalid file type. Please use JPEG, PNG, or WebP.', 'error');
+            return false;
+        }
+
+        if (file.size > maxSize) {
+            this.showAlert('File too large. Maximum size is 5MB.', 'error');
+            return false;
+        }
+
+        return true;
+    }
+
+    isValidEmail(email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
+
+    isValidPhone(phone) {
+        // Must be exactly 10 digits, start with 0, and contain no letters
+        const phoneRegex = /^0\d{9}$/;
+        return phoneRegex.test(phone) && /^[0-9]+$/.test(phone);
+    }
+
+    showFieldError(field, message) {
+        $(field).addClass('is-invalid').removeClass('is-valid');
+        $(field).next('.invalid-feedback').remove();
+        $(field).after(`<div class="invalid-feedback">${message}</div>`);
+    }
+
+    clearFieldError(field) {
+        $(field).removeClass('is-invalid').addClass('is-valid');
+        $(field).next('.invalid-feedback').remove();
+    }
+
+    validateRegistrationNumber(e) {
+        const value = e.target.value.replace(/[^A-Za-z0-9_-]/g, '').toUpperCase().substring(0, 20);
+        e.target.value = value;
+
+        if (value.length >= 5 && this.isValidRegistrationNumber(value)) {
+            $(e.target).addClass('is-valid').removeClass('is-invalid');
+        } else if (value.length > 0) {
+            $(e.target).addClass('is-invalid').removeClass('is-valid');
+        } else {
+            $(e.target).removeClass('is-valid is-invalid');
+        }
+    }
+
+    validateEmailField(e) {
+        const email = e.target.value.trim();
+        if (email && !this.isValidEmail(email)) {
+            this.showFieldError(e.target, 'Please enter a valid email address');
+        } else {
+            this.clearFieldError(e.target);
+        }
+    }
+
+    validatePhoneField(e) {
+        const phone = e.target.value.trim();
+        if (phone && !this.isValidPhone(phone)) {
+            const fieldName = e.target.name === 'telephone' ? 'Phone number' : 'Parent phone number';
+            this.showFieldError(e.target, `${fieldName} must be exactly 10 digits starting with 0 (e.g., 0781234567)`);
+        } else {
+            this.clearFieldError(e.target);
+        }
+    }
+
+    validateStudentId(e) {
+        const value = e.target.value.replace(/[^0-9]/g, '').substring(0, 16);
+        e.target.value = value;
+
+        if (value.length === 16) {
+            $(e.target).addClass('is-valid');
+        } else {
+            $(e.target).removeClass('is-valid is-invalid');
+        }
+    }
+
+    showLoading(show) {
+        if (show) {
+            $('#loadingOverlay').removeClass('d-none').addClass('d-flex');
+        } else {
+            $('#loadingOverlay').removeClass('d-flex').addClass('d-none');
+        }
+    }
+
+    disableForm(disable) {
+        $('#registrationForm input, #registrationForm select, #registrationForm button')
+            .prop('disabled', disable);
+    }
+
+    escapeHtml(unsafe) {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    showWelcomeMessage() {
+        setTimeout(() => {
+            this.showAlert('Welcome to Rwanda Polytechnic Student Registration System! Please fill in all required fields.', 'info');
+        }, 1000);
+    }
+
+    validateField(e) {
+        const field = e.target;
+        const value = field.value.trim();
+
+        if (!value) return;
+
+        const fieldName = field.name;
+
+        switch (fieldName) {
+            case 'email':
+                if (!this.isValidEmail(value)) {
+                    this.showFieldError(field, 'Please enter a valid email address');
+                } else {
+                    this.clearFieldError(field);
+                }
+                break;
+            case 'telephone':
+                if (!this.isValidPhone(value)) {
+                    this.showFieldError(field, 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
+                } else {
+                    this.clearFieldError(field);
+                }
+                break;
+        }
+    }
+
+    updateProgress() {
+        const totalFields = $('#registrationForm [required]').length;
+        const filledFields = $('#registrationForm [required]').filter(function() {
+            return $(this).val().trim().length > 0;
+        }).length;
+
+        const progress = Math.round((filledFields / totalFields) * 100);
+        $('#formProgress').css('width', progress + '%');
+        $('#progressText').text(progress + '%');
+
+        const $progressBar = $('#formProgress');
+        $progressBar.removeClass('bg-success bg-warning bg-danger');
+
+        if (progress >= 80) {
+            $progressBar.addClass('bg-success');
+        } else if (progress >= 50) {
+            $progressBar.addClass('bg-warning');
+        } else {
+            $progressBar.addClass('bg-danger');
+        }
+    }
+
+    showSuccess(response) {
+        // Show success alert prominently at the top
+        this.showAlert(`🎉 SUCCESS: ${response.message}`, 'success', false);
+
+        // Create enhanced success modal
+        if ($('#successModal').length === 0) {
+            $('body').append(`
+                <div class="modal fade" id="successModal" tabindex="-1" data-bs-backdrop="static">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content border-success">
+                            <div class="modal-header bg-success text-white">
+                                <h4 class="modal-title">
+                                    <i class="fas fa-check-circle me-2"></i>Registration Completed Successfully!
+                                </h4>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body text-center p-4">
+                                <div class="mb-4">
+                                    <i class="fas fa-graduation-cap fa-4x text-success mb-3"></i>
+                                    <h5 class="text-success mb-3">Welcome to Rwanda Polytechnic!</h5>
+                                </div>
+
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <div class="alert alert-success border-success">
+                                            <i class="fas fa-user-check me-2"></i>
+                                            <strong>Student Registration Complete</strong><br>
+                                            ${response.message}
+                                        </div>
+                                    </div>
+
+                                    <div class="col-12">
+                                        <div class="card border-success">
+                                            <div class="card-body">
+                                                <h6 class="card-title text-success">
+                                                    <i class="fas fa-id-card me-2"></i>Student Information
+                                                </h6>
+                                                <p class="mb-1"><strong>Student ID:</strong> <code class="text-success">${response.student_id}</code></p>
+                                                <p class="mb-0"><strong>Status:</strong> <span class="badge bg-success">Active</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    ${response.fingerprint_enrolled ?
+                                        '<div class="col-12"><div class="alert alert-info border-info"><i class="fas fa-fingerprint me-2"></i><strong>Biometric Security:</strong> Fingerprint enrolled successfully for secure attendance tracking!</div></div>' :
+                                        '<div class="col-12"><div class="alert alert-warning border-warning"><i class="fas fa-exclamation-triangle me-2"></i><strong>Note:</strong> Fingerprint not enrolled. Student can enroll later through their dashboard.</div></div>'
+                                    }
+                                </div>
+
+                                <div class="mt-4 text-muted small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    Student account has been created with default password: <strong>12345</strong>.
+                                    Please advise student to login and change password on first login.
+                                </div>
+                            </div>
+                            <div class="modal-footer justify-content-center">
+                                <button type="button" class="btn btn-success btn-lg px-4" id="continueButton">
+                                    <i class="fas fa-tachometer-alt me-2"></i>Go to Dashboard
+                                </button>
+                                <button type="button" class="btn btn-outline-success" data-bs-dismiss="modal">
+                                    <i class="fas fa-times me-2"></i>Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+        }
+
+        const modal = new bootstrap.Modal(document.getElementById('successModal'), {
+            backdrop: 'static',
+            keyboard: false
+        });
+        modal.show();
+
+        $('#continueButton').off('click').on('click', function() {
+            modal.hide();
+            // Add a small delay to show transition
+            setTimeout(() => {
+                window.location.href = response.redirect || 'admin-dashboard.php';
+            }, 300);
+        });
+    }
+
+    startFingerprintCapture() {
+        if (this.isCapturing) return;
+
+        this.isCapturing = true;
+        this.updateFingerprintUI('capturing');
+        this.simulateFingerprintCapture();
+    }
+
+    simulateFingerprintCapture() {
+        const canvas = document.getElementById('fingerprintCanvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('fingerprintPlaceholder');
+        const status = document.getElementById('fingerprintStatus');
+
+        canvas.classList.remove('d-none');
+        placeholder.classList.add('d-none');
+
+        let progress = 0;
+        let qualityVariation = 0;
+
+        const captureInterval = setInterval(() => {
+            progress += Math.random() * 8 + 2;
+            qualityVariation += (Math.random() - 0.5) * 2;
+
+            const currentProgress = Math.min(progress, 100);
+            status.textContent = `Capturing... ${Math.round(currentProgress)}%`;
+
+            this.drawFingerprintPattern(ctx, currentProgress);
+
+            if (currentProgress >= 100) {
+                clearInterval(captureInterval);
+                this.fingerprintCaptured = true;
+
+                const baseQuality = 85 + Math.floor(Math.random() * 10);
+                const variationQuality = Math.max(75, Math.min(100, baseQuality + qualityVariation));
+                this.fingerprintQuality = Math.round(variationQuality);
+
+                this.isCapturing = false;
+                this.updateFingerprintUI('captured');
+                this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
+            }
+        }, 80);
+    }
+
+    drawFingerprintPattern(ctx, progress) {
+        const centerX = ctx.canvas.width / 2;
+        const centerY = ctx.canvas.height / 2;
+        const maxRadius = Math.min(centerX, centerY) * 0.8;
+
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        ctx.strokeStyle = `rgba(13, 110, 253, ${Math.min(progress / 100, 1)})`;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+
+        const circleCount = Math.floor(progress / 10);
+        for (let i = 1; i <= circleCount; i++) {
+            const radius = (maxRadius * i) / 10;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        if (progress > 50) {
+            const spiralProgress = (progress - 50) / 50;
+            ctx.strokeStyle = `rgba(25, 135, 84, ${spiralProgress})`;
+            ctx.beginPath();
+
+            let angle = 0;
+            let radius = 10;
+            const maxAngle = spiralProgress * Math.PI * 4;
+
+            while (radius < maxRadius && angle < maxAngle) {
+                const x = centerX + Math.cos(angle) * radius;
+                const y = centerY + Math.sin(angle) * radius;
+                ctx.lineTo(x, y);
+                angle += 0.15;
+                radius += 0.3;
+            }
+            ctx.stroke();
+        }
+
+        if (this.fingerprintQuality > 0) {
+            this.updateQualityIndicator(ctx.canvas, this.fingerprintQuality);
+        }
+    }
+
+    updateQualityIndicator(canvas, quality) {
+        let qualityElement = document.querySelector('.quality-indicator');
+        if (!qualityElement) {
+            qualityElement = document.createElement('div');
+            qualityElement.className = 'quality-indicator';
+            canvas.parentElement.appendChild(qualityElement);
+        }
+
+        const qualityColor = quality >= 90 ? '#28a745' : quality >= 80 ? '#ffc107' : '#dc3545';
+        qualityElement.textContent = `Quality: ${quality}%`;
+        qualityElement.style.backgroundColor = qualityColor;
+        qualityElement.style.color = 'white';
+    }
+
+    handlePhotoSelect(e) {
+        const file = e.target.files[0];
+        if (file && this.validateImage(file)) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                $('#photoPreview').attr('src', e.target.result).removeClass('d-none');
+                $('#removePhoto').removeClass('d-none');
+            };
+            reader.readAsDataURL(file);
+        } else {
+            // Clear the input if file is invalid
+            e.target.value = '';
+        }
+    }
+
+    removePhoto() {
+        $('#photoInput').val('');
+        $('#photoPreview').addClass('d-none').attr('src', '');
+        $('#removePhoto').addClass('d-none');
+    }
+
+
+    // Validate location selection (optional fields)
+    validateLocation() {
+        // Location fields are optional, so always return true
+        return true;
+    }
+
 
     async handleSubmit(e) {
         e.preventDefault();
@@ -2116,121 +2134,136 @@ class StudentRegistration {
     }
 
    validateForm() {
-    let isValid = true;
-    const errors = [];
+       let isValid = true;
+       const errors = [];
 
-    // Clear previous validation
-    $('.is-invalid').removeClass('is-invalid');
-    $('.invalid-feedback').remove();
+       // Clear previous validation
+       $('.is-invalid').removeClass('is-invalid');
+       $('.invalid-feedback').remove();
 
-    // Required field validation with specific messages
-    const requiredFields = [
-        { id: 'firstName', name: 'First Name' },
-        { id: 'lastName', name: 'Last Name' },
-        { id: 'email', name: 'Email Address' },
-        { id: 'telephone', name: 'Phone Number' },
-        { id: 'reg_no', name: 'Registration Number' },
-        { id: 'department', name: 'Department' },
-        { id: 'option', name: 'Program' },
-        { id: 'year_level', name: 'Year Level' },
-        { id: 'sex', name: 'Gender' }
-    ];
+       // Required field validation with specific messages
+       const requiredFields = [
+           { id: 'firstName', name: 'First Name' },
+           { id: 'lastName', name: 'Last Name' },
+           { id: 'email', name: 'Email Address' },
+           { id: 'telephone', name: 'Phone Number' },
+           { id: 'reg_no', name: 'Registration Number' },
+           { id: 'department', name: 'Department' },
+           { id: 'option', name: 'Program' },
+           { id: 'year_level', name: 'Year Level' },
+           { id: 'sex', name: 'Gender' }
+       ];
 
-    requiredFields.forEach(field => {
-        const $field = $(`#${field.id}`);
-        if (!$field.val().trim()) {
-            this.showFieldError($field[0], `${field.name} is required`);
-            isValid = false;
-            errors.push(`${field.name} is required`);
-        }
-    });
+       requiredFields.forEach(field => {
+           const $field = $(`#${field.id}`);
+           if (!$field.val().trim()) {
+               this.showFieldError($field[0], `${field.name} is required`);
+               isValid = false;
+               errors.push(`${field.name} is required`);
+           }
+       });
 
-    // Department-program dependency validation
-    const departmentId = $('#department').val();
-    const optionId = $('#option').val();
-    if (departmentId && !optionId) {
-        const $option = $('#option');
-        this.showFieldError($option[0], 'Please select a program for the chosen department');
-        isValid = false;
-        errors.push('Program selection is required');
-    }
+       // Department-program dependency validation
+       const departmentId = $('#department').val();
+       const optionId = $('#option').val();
+       if (departmentId && !optionId) {
+           const $option = $('#option');
+           this.showFieldError($option[0], 'Please select a program for the chosen department');
+           isValid = false;
+           errors.push('Program selection is required');
+       }
 
-    // Validate that the selected option belongs to the selected department
-    if (departmentId && optionId) {
-        const $optionElement = $('#option');
-        const selectedOption = $optionElement.find('option:selected');
-        const optionDepartmentId = selectedOption.data('department');
+       // Validate that the selected option belongs to the selected department
+       if (departmentId && optionId) {
+           const $optionElement = $('#option');
+           const selectedOption = $optionElement.find('option:selected');
+           const optionDepartmentId = selectedOption.data('department');
 
-        if (optionDepartmentId && optionDepartmentId != departmentId) {
-            const $option = $('#option');
-            this.showFieldError($option[0], 'Selected program does not belong to the chosen department');
-            isValid = false;
-            errors.push('Invalid program for department');
-        } else {
-            this.clearFieldError($('#option')[0]);
-        }
-    }
+           if (optionDepartmentId && optionDepartmentId != departmentId) {
+               const $option = $('#option');
+               this.showFieldError($option[0], 'Selected program does not belong to the chosen department');
+               isValid = false;
+               errors.push('Invalid program for department');
+           } else {
+               this.clearFieldError($('#option')[0]);
+           }
+       }
 
-    // Email format validation
-    const email = $('#email').val();
-    if (email && !this.isValidEmail(email)) {
-        this.showFieldError($('#email')[0], 'Please enter a valid email address');
-        isValid = false;
-        errors.push('Invalid email format');
-    }
+       // Email format validation
+       const email = $('#email').val();
+       if (email && !this.isValidEmail(email)) {
+           this.showFieldError($('#email')[0], 'Please enter a valid email address');
+           isValid = false;
+           errors.push('Invalid email format');
+       }
 
-    // Phone number validation
-    const phone = $('#telephone').val();
-    if (phone && !this.isValidPhone(phone)) {
-        this.showFieldError($('#telephone')[0], 'Phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
-        isValid = false;
-        errors.push('Invalid phone number format');
-    }
+       // Phone number validation
+       const phone = $('#telephone').val();
+       if (phone && !this.isValidPhone(phone)) {
+           this.showFieldError($('#telephone')[0], 'Phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
+           isValid = false;
+           errors.push('Invalid phone number format');
+       }
 
-    // Parent contact validation if provided
-    const parentContact = $('#parent_contact').val();
-    if (parentContact && !this.isValidPhone(parentContact)) {
-        this.showFieldError($('#parent_contact')[0], 'Parent phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
-        isValid = false;
-        errors.push('Invalid parent phone number format');
-    }
+       // Parent contact validation if provided
+       const parentContact = $('#parent_contact').val();
+       if (parentContact && !this.isValidPhone(parentContact)) {
+           this.showFieldError($('#parent_contact')[0], 'Parent phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
+           isValid = false;
+           errors.push('Invalid parent phone number format');
+       }
 
-    // Date of birth validation
-    const dob = $('#dob').val();
-    if (dob) {
-        const birthDate = new Date(dob);
-        const today = new Date();
-        const age = today.getFullYear() - birthDate.getFullYear();
+       // Date of birth validation
+       const dob = $('#dob').val();
+       if (dob) {
+           const birthDate = new Date(dob);
+           const today = new Date();
+           const age = today.getFullYear() - birthDate.getFullYear();
 
-        if (age < 16) {
-            this.showFieldError($('#dob')[0], 'Student must be at least 16 years old');
-            isValid = false;
-            errors.push('Student too young');
-        } else if (age > 60) {
-            this.showFieldError($('#dob')[0], 'Please enter a valid date of birth');
-            isValid = false;
-            errors.push('Invalid date of birth');
-        }
-    }
+           if (age < 16) {
+               this.showFieldError($('#dob')[0], 'Student must be at least 16 years old');
+               isValid = false;
+               errors.push('Student too young');
+           } else if (age > 60) {
+               this.showFieldError($('#dob')[0], 'Please enter a valid date of birth');
+               isValid = false;
+               errors.push('Invalid date of birth');
+           }
+       }
 
-    // Location validation
-    if (!this.validateLocation()) {
-        isValid = false;
-        errors.push('Location information is incomplete');
-    }
+       // Location validation
+       if (!this.validateLocation()) {
+           isValid = false;
+           errors.push('Location information is incomplete');
+       }
 
-    // Fingerprint is optional - no validation required
-    if (!this.fingerprintCaptured) {
-        console.log('Fingerprint not captured - proceeding without biometric data (optional)');
-    }
+       // Registration number format validation
+       const regNo = $('#reg_no').val();
+       if (regNo && !this.isValidRegistrationNumber(regNo)) {
+           this.showFieldError($('#reg_no')[0], 'Registration number must be 5-20 characters, alphanumeric only');
+           isValid = false;
+           errors.push('Invalid registration number format');
+       }
 
-    // Log validation results for debugging
-    if (!isValid) {
-        console.log('Form validation failed:', errors);
-    }
+       // Fingerprint is optional - no validation required
+       if (!this.fingerprintCaptured) {
+           console.log('Fingerprint not captured - proceeding without biometric data (optional)');
+       }
 
-    return isValid;
-}
+       // Log validation results for debugging
+       if (!isValid) {
+           console.log('Form validation failed:', errors);
+       }
+
+       return isValid;
+   }
+
+   // Enhanced registration number validation
+   isValidRegistrationNumber(regNo) {
+       // Must be 5-20 characters, alphanumeric only, no special characters except hyphens/underscores
+       const regNoRegex = /^[A-Za-z0-9_-]{5,20}$/;
+       return regNoRegex.test(regNo);
+   }
     updateFingerprintUI(state) {
         const container = document.querySelector('.fingerprint-container');
         const captureBtn = document.getElementById('captureFingerprintBtn');

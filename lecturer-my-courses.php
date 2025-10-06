@@ -89,101 +89,89 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>My Courses | Lecturer | RP Attendance System</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Courses | RP Attendance System</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="css/admin-dashboard.css" rel="stylesheet">
+  <link href="css/lecturer-dashboard.css" rel="stylesheet">
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 
-  <!-- Bootstrap CSS -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
-  <!-- Font Awesome -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
-
-  <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(to right, #0066cc, #003366);
-    }
-    .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 250px;
-      height: 100vh;
-      background-color: #003366;
-      color: white;
-      padding-top: 20px;
-    }
-    .sidebar a {
-      display: block;
-      padding: 12px 20px;
-      color: #fff;
-      text-decoration: none;
-    }
-    .sidebar a:hover,
-    .sidebar a.active {
-      background-color: #0066cc;
-    }
-    .topbar {
-      margin-left: 250px;
-      background-color: #fff;
-      padding: 10px 30px;
-      border-bottom: 1px solid #ddd;
-    }
-    .main-content {
-      margin-left: 250px;
-      padding: 30px;
-    }
-    .footer {
-      text-align: center;
-      margin-left: 250px;
-      padding: 15px;
-      font-size: 0.9rem;
-      color: #666;
-      background-color: #f0f0f0;
-    }
-    .card {
-      border-radius: 10px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-      transition: 0.3s ease;
-    }
-    .card:hover {
-      transform: translateY(-2px);
-    }
-    .btn-action {
-      margin-right: 5px;
-    }
-    .search-bar {
-      max-width: 400px;
-      margin-bottom: 25px;
-    }
-    @media (max-width: 768px) {
-      .sidebar,
-      .topbar,
-      .main-content,
-      .footer {
-        margin-left: 0 !important;
-        width: 100%;
-      }
-      .sidebar {
-        display: none;
-      }
-    }
-  </style>
 </head>
 <body>
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()" aria-label="Toggle navigation menu">
+        <i class="fas fa-bars" aria-hidden="true"></i>
+    </button>
 
 <!-- Sidebar -->
-<div class="sidebar">
-  <div class="text-center mb-4">
-    <h4>👨‍🏫 Lecturer</h4>
-    <hr style="border-color: #ffffff66;">
-  </div>
-  <a href="lecturer-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
-  <a href="lecturer-my-courses.php" class="active"><i class="fas fa-book-open me-2"></i> My Courses</a>
-  <a href="attendance-session.php"><i class="fas fa-video me-2"></i> Attendance Session</a>
-  <a href="attendance-reports.php"><i class="fas fa-chart-bar me-2"></i> Attendance Reports</a>
-  <a href="leave-requests.php"><i class="fas fa-envelope me-2"></i> Leave Requests</a>
-  <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+<div class="sidebar" id="sidebar">
+    <div class="logo-container text-center">
+        <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" onerror="this.style.display='none'">
+        <div class="logo-glow"></div>
+    </div>
+
+    <div class="text-center mb-4">
+        <h3 style="margin: 0; font-weight: 700; color: white;"><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
+        <small style="color: rgba(255,255,255,0.8);">Lecturer Panel</small>
+    </div>
+
+    <ul class="sidebar-nav">
+        <li class="nav-section">
+            <i class="fas fa-th-large me-2"></i>Main Dashboard
+        </li>
+        <li>
+            <a href="lecturer-dashboard.php">
+                <i class="fas fa-tachometer-alt"></i><span class="sidebar-text"> Dashboard Overview</span>
+            </a>
+        </li>
+
+        <li class="nav-section">
+            <i class="fas fa-book me-2"></i>Course Management
+        </li>
+        <li>
+            <a href="lecturer-my-courses.php" class="active">
+                <i class="fas fa-book"></i><span class="sidebar-text"> My Courses</span>
+            </a>
+        </li>
+
+        <li class="nav-section">
+            <i class="fas fa-calendar-check me-2"></i>Attendance
+        </li>
+        <li>
+            <a href="attendance-session.php">
+                <i class="fas fa-video"></i><span class="sidebar-text"> Attendance Session</span>
+            </a>
+        </li>
+        <li>
+            <a href="attendance-reports.php">
+                <i class="fas fa-chart-line"></i><span class="sidebar-text"> Attendance Reports</span>
+            </a>
+        </li>
+
+        <li class="nav-section">
+            <i class="fas fa-envelope me-2"></i>Requests
+        </li>
+        <li>
+            <a href="leave-requests.php">
+                <i class="fas fa-envelope"></i><span class="sidebar-text"> Leave Requests</span>
+                <?php if (isset($_SESSION['pending_leaves']) && $_SESSION['pending_leaves'] > 0): ?>
+                    <span class="notification-badge"><?= $_SESSION['pending_leaves'] ?></span>
+                <?php endif; ?>
+            </a>
+        </li>
+
+        <li class="nav-section">
+            <i class="fas fa-sign-out-alt me-2"></i>Account
+        </li>
+        <li>
+            <a href="logout.php" class="text-danger">
+                <i class="fas fa-sign-out-alt"></i><span class="sidebar-text"> Logout</span>
+            </a>
+        </li>
+    </ul>
 </div>
 
 <!-- Topbar -->
@@ -194,6 +182,32 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 <!-- Main Content -->
 <div class="main-content">
+    <!-- Page Header -->
+    <div class="page-header text-center py-4" style="background: linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%); border-bottom: 2px solid #0ea5e9; margin-bottom: 20px;">
+        <div class="d-flex align-items-center justify-content-center">
+            <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" style="height: 60px; width: auto; margin-right: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" onerror="this.style.display='none'">
+            <h1 style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin: 0; font-weight: 700;">
+                My Courses
+            </h1>
+        </div>
+    </div>
+
+    <div class="topbar">
+        <div class="d-flex align-items-center justify-content-end">
+            <div class="d-flex gap-2 align-items-center">
+                <div class="badge bg-primary fs-6 px-3 py-2">
+                    <i class="fas fa-clock me-1"></i>Live Updates
+                </div>
+                <div class="badge bg-success fs-6 px-3 py-2">
+                    <i class="fas fa-chalkboard-teacher me-1"></i>Lecturer
+                </div>
+                <button class="btn btn-outline-primary btn-sm" onclick="location.reload()" title="Refresh Courses">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
   <input type="text" id="courseSearch" class="form-control search-bar" placeholder="Search courses by name or code...">
 
   <div class="row g-4" id="courseContainer">
@@ -239,21 +253,27 @@ $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 <!-- Filter Script -->
 <script>
-  const searchInput = document.getElementById('courseSearch');
-  const courseCards = document.querySelectorAll('.course-card');
+// Sidebar toggle functionality
+function toggleSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    sidebar.classList.toggle('mobile-open');
+}
 
-  searchInput.addEventListener('keyup', function () {
-    const query = this.value.toLowerCase();
-    courseCards.forEach(card => {
-      const title = card.querySelector('.course-title').textContent.toLowerCase();
-      const code = card.querySelector('.course-code').textContent.toLowerCase();
-      if (title.includes(query) || code.includes(query)) {
-        card.style.display = 'block';
-      } else {
-        card.style.display = 'none';
-      }
-    });
+const searchInput = document.getElementById('courseSearch');
+const courseCards = document.querySelectorAll('.course-card');
+
+searchInput.addEventListener('keyup', function () {
+  const query = this.value.toLowerCase();
+  courseCards.forEach(card => {
+    const title = card.querySelector('.course-title').textContent.toLowerCase();
+    const code = card.querySelector('.course-code').textContent.toLowerCase();
+    if (title.includes(query) || code.includes(query)) {
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
   });
+});
 </script>
 
 </body>

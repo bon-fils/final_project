@@ -16,15 +16,22 @@ header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
 
-// Ensure user is logged in and is HoD
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
-    http_response_code(403);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Unauthorized access - HoD role required',
-        'error_code' => 'UNAUTHORIZED'
-    ]);
-    exit;
+// Allow demo access for course assignment API when called from registration page
+$referer = $_SERVER['HTTP_REFERER'] ?? '';
+$isFromRegistration = strpos($referer, 'register-student.php') !== false ||
+                      strpos($referer, 'admin-register-lecturer.php') !== false;
+
+if (!$isFromRegistration) {
+    // Ensure user is logged in and has appropriate role (HoD or Admin)
+    if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['hod', 'admin'])) {
+        http_response_code(403);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Unauthorized access - HoD or Admin role required',
+            'error_code' => 'UNAUTHORIZED'
+        ]);
+        exit;
+    }
 }
 
 // Validate CSRF token for POST requests
@@ -120,16 +127,44 @@ try {
 /**
  * Handle get_courses action - Get all courses for HoD's department
  */
-function handleGetCourses(PDO $pdo, int $hod_id): array {
+function handleGetCourses(PDO $pdo, int $user_id): array {
     try {
-        // Get HoD's department with validation
-        $department = getHodDepartment($pdo, $hod_id);
-        if (!$department) {
-            return [
-                'success' => false,
-                'message' => 'No department assigned to this HoD',
-                'error_code' => 'NO_DEPARTMENT'
-            ];
+        $user_role = $_SESSION['role'] ?? '';
+        $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
+
+        if ($user_role === 'admin') {
+            // For admin, require department_id parameter
+            if (!$department_id) {
+                return [
+                    'success' => false,
+                    'message' => 'Department ID is required for admin users',
+                    'error_code' => 'DEPARTMENT_ID_REQUIRED'
+                ];
+            }
+
+            // Get department info
+            $dept_stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id = ?");
+            $dept_stmt->execute([$department_id]);
+            $department = $dept_stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$department) {
+                return [
+                    'success' => false,
+                    'message' => 'Department not found',
+                    'error_code' => 'DEPARTMENT_NOT_FOUND'
+                ];
+            }
+        } else {
+            // For HoD, get their department
+            $department = getHodDepartment($pdo, $user_id);
+            if (!$department) {
+                return [
+                    'success' => false,
+                    'message' => 'No department assigned to this HoD',
+                    'error_code' => 'NO_DEPARTMENT'
+                ];
+            }
+            $department_id = $department['id'];
         }
 
         // Get all unassigned courses for the department (lecturer_id IS NULL)
@@ -139,7 +174,7 @@ function handleGetCourses(PDO $pdo, int $hod_id): array {
             WHERE department_id = ? AND (lecturer_id IS NULL OR lecturer_id = 0)
             ORDER BY name
         ");
-        $stmt->execute([$department['id']]);
+        $stmt->execute([$department_id]);
         $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         return [
@@ -147,7 +182,7 @@ function handleGetCourses(PDO $pdo, int $hod_id): array {
             'message' => 'Courses retrieved successfully',
             'data' => $courses,
             'count' => count($courses),
-            'department_id' => $department['id'],
+            'department_id' => $department_id,
             'department_name' => $department['name']
         ];
 
@@ -188,7 +223,7 @@ function handleGetLecturers(PDO $pdo, int $hod_id): array {
                 u.username,
                 u.role as user_role
             FROM lecturers l
-            INNER JOIN users u ON l.email = u.email
+            INNER JOIN users u ON l.user_id = u.id
             WHERE l.department_id = ?
                 AND u.role = 'lecturer'
                 AND l.role IN ('lecturer', 'hod')
@@ -531,7 +566,7 @@ function handleGetCourseAssignmentOverview(PDO $pdo, int $hod_id): array {
                 COUNT(DISTINCT c.id) as course_count,
                 COUNT(DISTINCT s.id) as session_count
             FROM lecturers l
-            INNER JOIN users u ON l.email = u.email
+            INNER JOIN users u ON l.user_id = u.id
             LEFT JOIN courses c ON l.id = c.lecturer_id
             LEFT JOIN attendance_sessions s ON c.id = s.course_id
             WHERE l.department_id = ?
@@ -589,8 +624,7 @@ function getHodDepartment(PDO $pdo, int $hod_id): ?array {
         SELECT d.id, d.name
         FROM departments d
         JOIN lecturers l ON d.hod_id = l.id
-        JOIN users u ON l.email = u.email AND u.role = 'hod'
-        WHERE u.id = ?
+        WHERE l.user_id = ?
     ");
     $stmt->execute([$hod_id]);
     $department = $stmt->fetch(PDO::FETCH_ASSOC);

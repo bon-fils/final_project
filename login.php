@@ -128,6 +128,135 @@ function updatePasswordHash($userId, $password, $pdo) {
     }
 }
 
+// Load role-specific session data with optimized queries
+function loadRoleSpecificData($pdo, $user) {
+    try {
+        switch ($user['role']) {
+            case 'student':
+                error_log("Loading student data for user_id {$user['id']}");
+                $stmt = $pdo->prepare("
+                    SELECT s.id, s.reg_no, s.year_level, o.name as option_name, d.name as department_name,
+                           u.first_name, u.last_name, u.phone, u.sex as gender, u.photo, u.dob as date_of_birth
+                    FROM students s
+                    LEFT JOIN options o ON s.option_id = o.id
+                    LEFT JOIN departments d ON o.department_id = d.id
+                    INNER JOIN users u ON s.user_id = u.id
+                    WHERE s.user_id = ? AND u.status = 'active' LIMIT 1
+                ");
+                $stmt->execute([$user['id']]);
+                $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($data) {
+                    error_log("Student data loaded successfully for user_id {$user['id']}: " . json_encode($data));
+                    $_SESSION['student_id'] = (int)$data['id'];
+                    $_SESSION['reg_no'] = $data['reg_no'];
+                    $_SESSION['year_level'] = $data['year_level'];
+                    $_SESSION['option_name'] = $data['option_name'];
+                    $_SESSION['department_name'] = $data['department_name'];
+                    // Set personal info
+                    setPersonalInfo($data);
+                    return "students-dashboard.php";
+                } else {
+                    error_log("No student data found for user_id {$user['id']}. Allowing login with limited access.");
+                    // Allow login even without student record - dashboard will handle notification
+                    $_SESSION['student_id'] = 0;
+                    $_SESSION['reg_no'] = 'Not Registered';
+                    $_SESSION['year_level'] = 'N/A';
+                    $_SESSION['option_name'] = 'Not Assigned';
+                    $_SESSION['department_name'] = 'Not Assigned';
+                    // Set basic personal info from users table
+                    setPersonalInfo([
+                        'first_name' => $user['first_name'] ?? null,
+                        'last_name' => $user['last_name'] ?? null,
+                        'phone' => null,
+                        'gender' => null,
+                        'photo' => null,
+                        'date_of_birth' => null
+                    ]);
+                    return "students-dashboard.php";
+                }
+                break;
+
+            case 'lecturer':
+            case 'hod':
+                $stmt = $pdo->prepare("
+                    SELECT l.id, l.id_number, l.education_level,
+                           d.id as department_id, d.name as department_name,
+                           u.first_name, u.last_name, u.phone, l.gender as gender, u.photo, u.dob as date_of_birth
+                    FROM lecturers l
+                    LEFT JOIN departments d ON l.department_id = d.id
+                    INNER JOIN users u ON l.user_id = u.id
+                    WHERE l.user_id = ? LIMIT 1
+                ");
+                $stmt->execute([$user['id']]);
+                $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($data) {
+                    $_SESSION['lecturer_id'] = (int)$data['id'];
+                    $_SESSION['department_id'] = (int)$data['department_id'];
+                    $_SESSION['department_name'] = $data['department_name'];
+                    $_SESSION['id_number'] = $data['id_number'];
+                    $_SESSION['education_level'] = $data['education_level'];
+                    // Set personal info
+                    setPersonalInfo($data);
+                    return ($user['role'] === 'hod') ? "hod-dashboard.php" : "lecturer-dashboard.php";
+                }
+                break;
+
+            case 'admin':
+            case 'tech':
+                $stmt = $pdo->prepare("
+                    SELECT first_name, last_name, phone, sex as gender, photo, dob as date_of_birth
+                    FROM users WHERE id = ? LIMIT 1
+                ");
+                $stmt->execute([$user['id']]);
+                $data = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($data) {
+                    setPersonalInfo($data);
+                    return ($user['role'] === 'admin') ? "admin-dashboard.php" : "tech-dashboard.php";
+                }
+                break;
+        }
+
+        // Log missing profile for debugging
+        error_log("Profile missing for user {$user['username']} (ID: {$user['id']}), role: {$user['role']}");
+        // For students, allow login even without student record - dashboard will handle notification
+        if ($user['role'] === 'student') {
+            error_log("Allowing student login without student record for user {$user['username']}");
+            $_SESSION['student_id'] = 0;
+            $_SESSION['reg_no'] = 'Not Registered';
+            $_SESSION['year_level'] = 'N/A';
+            $_SESSION['option_name'] = 'Not Assigned';
+            $_SESSION['department_name'] = 'Not Assigned';
+            setPersonalInfo([
+                'first_name' => $user['first_name'] ?? null,
+                'last_name' => $user['last_name'] ?? null,
+                'phone' => null,
+                'gender' => null,
+                'photo' => null,
+                'date_of_birth' => null
+            ]);
+            return "students-dashboard.php";
+        }
+        return false;
+
+    } catch (Throwable $t) {
+        error_log("Error loading role-specific data for user {$user['id']}: " . $t->getMessage());
+        return false;
+    }
+}
+
+// Helper function to set personal information in session
+function setPersonalInfo($data) {
+    $_SESSION['first_name'] = $data['first_name'] ?? null;
+    $_SESSION['last_name'] = $data['last_name'] ?? null;
+    $_SESSION['phone'] = $data['phone'] ?? null;
+    $_SESSION['gender'] = $data['gender'] ?? null;
+    $_SESSION['photo'] = $data['photo'] ?? null;
+    $_SESSION['date_of_birth'] = $data['date_of_birth'] ?? null;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Validate CSRF token first
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
@@ -222,87 +351,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $redirect_url = '';
                         $role_valid = true;
 
-                        switch ($user['role']) {
-                            case 'student':
-                                try {
-                                    $stmt = $pdo->prepare("SELECT id FROM students WHERE user_id = ? AND status = 'active' LIMIT 1");
-                                    $stmt->execute([$user['id']]);
-                                    $student = $stmt->fetch(PDO::FETCH_ASSOC);
-                                    if ($student) {
-                                        $_SESSION['student_id'] = (int)$student['id'];
-                                        $redirect_url = "students-dashboard.php";
-                                    } else {
-                                        // Allow login but log the missing profile
-                                        error_log("Student profile missing or inactive for user {$user['username']} (ID: {$user['id']})");
-                                        $_SESSION['student_id'] = null;
-                                        $redirect_url = "students-dashboard.php";
-                                    }
-                                } catch (Throwable $t) {
-                                    error_log("Error fetching student profile: " . $t->getMessage());
-                                    $_SESSION['student_id'] = null;
-                                    $redirect_url = "students-dashboard.php";
-                                }
-                                break;
-
-                            case 'lecturer':
-                                try {
-                                    $stmt = $pdo->prepare("SELECT id, department_id FROM lecturers WHERE email = ? AND status = 'active' LIMIT 1");
-                                    $stmt->execute([$user['email']]);
-                                    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                                    if ($lecturer) {
-                                        $_SESSION['lecturer_id'] = (int)$lecturer['id'];
-                                        $_SESSION['department_id'] = (int)$lecturer['department_id'];
-                                        $redirect_url = "lecturer-dashboard.php";
-                                    } else {
-                                        error_log("Lecturer profile missing or inactive for user {$user['username']} (ID: {$user['id']})");
-                                        $_SESSION['lecturer_id'] = null;
-                                        $_SESSION['department_id'] = null;
-                                        $redirect_url = "lecturer-dashboard.php";
-                                    }
-                                } catch (Throwable $t) {
-                                    error_log("Error fetching lecturer profile: " . $t->getMessage());
-                                    $_SESSION['lecturer_id'] = null;
-                                    $_SESSION['department_id'] = null;
-                                    $redirect_url = "lecturer-dashboard.php";
-                                }
-                                break;
-
-                            case 'hod':
-                                try {
-                                    $stmt = $pdo->prepare("SELECT id, department_id FROM lecturers WHERE email = ? AND status = 'active' LIMIT 1");
-                                    $stmt->execute([$user['email']]);
-                                    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                                    if ($lecturer) {
-                                        $_SESSION['lecturer_id'] = (int)$lecturer['id'];
-                                        $_SESSION['department_id'] = (int)$lecturer['department_id'];
-                                        $redirect_url = "hod-dashboard.php";
-                                    } else {
-                                        error_log("HOD profile missing or inactive for user {$user['username']} (ID: {$user['id']})");
-                                        $_SESSION['lecturer_id'] = null;
-                                        $_SESSION['department_id'] = null;
-                                        $redirect_url = "hod-dashboard.php";
-                                    }
-                                } catch (Throwable $t) {
-                                    error_log("Error fetching HOD profile: " . $t->getMessage());
-                                    $_SESSION['lecturer_id'] = null;
-                                    $_SESSION['department_id'] = null;
-                                    $redirect_url = "hod-dashboard.php";
-                                }
-                                break;
-
-                            case 'admin':
-                                $redirect_url = "admin-dashboard.php";
-                                break;
-
-                            case 'tech':
-                                $redirect_url = "tech-dashboard.php";
-                                break;
-
-                            default:
-                                $error = "Role not recognized.";
-                                $role_valid = false;
+                        // Load role-specific session data using optimized queries
+                        $redirect_url = loadRoleSpecificData($pdo, $user);
+                        if (!$redirect_url) {
+                            error_log("Login failed: loadRoleSpecificData returned false for user {$user['id']} with role {$user['role']}");
+                            $error = "Unable to load user profile. Please contact support.";
+                            $role_valid = false;
                         }
 
                         // Only redirect if role validation passed
@@ -334,6 +388,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             // Redirect immediately
                             header("Location: $redirect_url");
+                            // echo ($_SESSION['user_id'] ? 'User ID: ' . $_SESSION['user_id'] . ' logged in successfully. Redirecting...' : 'Login successful. Redirecting...');
+                            // echo ("Redirecting user {$user['username']} to $redirect_url");
+                            // error_log("Redirecting user {$user['username']} to $redirect_url");
                             exit;
                         }
                     } else {
