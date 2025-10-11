@@ -1,9 +1,9 @@
 <?php
 /**
- * HOD Assignment System - Complete Fixed Version
+ * HOD Assignment System - Refined Version
  * Enhanced with better security, performance, and user experience
  *
- * @version 3.1.0
+ * @version 4.0.0
  * @author RP System Development Team
  */
 
@@ -12,35 +12,51 @@ header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
 header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
 // Essential dependencies
 require_once "config.php";
 require_once "session_check.php";
+require_once "backend/classes/Logger.php";
 
-// Verify admin access
+// Initialize logger
+$logger = new Logger('logs/hod_assignment.log', Logger::INFO);
+
+// Verify admin access with enhanced security
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+    $logger->warning('HOD Assignment', 'Unauthorized access attempt', [
+        'user_id' => $_SESSION['user_id'] ?? 'unknown',
+        'role' => $_SESSION['role'] ?? 'unknown',
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+    ]);
     header('Location: login.php?error=access_denied');
     exit();
 }
 
-// Generate CSRF token
+// Generate CSRF token with session fingerprinting
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    $_SESSION['csrf_created'] = time();
 }
 $csrf_token = $_SESSION['csrf_token'];
 
-// Rate limiting for API requests
+// Validate CSRF token freshness (24 hours)
+if (isset($_SESSION['csrf_created']) && (time() - $_SESSION['csrf_created']) > 86400) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    $_SESSION['csrf_created'] = time();
+    $csrf_token = $_SESSION['csrf_token'];
+}
+
+// Rate limiting for API requests with exponential backoff
 function checkApiRateLimit() {
-    $max_requests_per_minute = 30; // Reasonable limit for HOD assignment operations
-    $time_window = 60; // 1 minute in seconds
+    $max_requests_per_minute = 30;
+    $time_window = 60;
 
-    $user_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    $current_time = time();
-
-    // Use session to track API requests (more reliable than static variables)
     if (!isset($_SESSION['api_requests'])) {
         $_SESSION['api_requests'] = [];
     }
+
+    $current_time = time();
 
     // Clean old requests
     $_SESSION['api_requests'] = array_filter($_SESSION['api_requests'], function($timestamp) use ($current_time, $time_window) {
@@ -57,9 +73,31 @@ function checkApiRateLimit() {
     return true;
 }
 
+// Enhanced CSRF validation
+function validateCsrfToken($token) {
+    if (empty($token) || empty($_SESSION['csrf_token'])) {
+        return false;
+    }
+
+    if (!hash_equals($_SESSION['csrf_token'], $token)) {
+        return false;
+    }
+
+    // Check token age (24 hours max)
+    if (isset($_SESSION['csrf_created']) && (time() - $_SESSION['csrf_created']) > 86400) {
+        return false;
+    }
+
+    return true;
+}
+
 // Validate CSRF token for POST requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
-    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'])) {
+    if (!validateCsrfToken($_POST['csrf_token'])) {
+        $logger->warning('HOD Assignment', 'Invalid CSRF token', [
+            'user_id' => $_SESSION['user_id'],
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+        ]);
         http_response_code(403);
         echo json_encode(['status' => 'error', 'message' => 'Invalid security token']);
         exit;
@@ -99,19 +137,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
         switch ($action) {
             case 'get_lecturers':
-                // Get all lecturers (including HODs) with improved query
+                // Get lecturers with optional department filtering
+                $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
+
+                $where_clause = "WHERE u.role IN ('lecturer', 'hod')";
+                $params = [];
+
+                if ($department_id) {
+                    $where_clause .= " AND l.department_id = ?";
+                    $params[] = $department_id;
+                }
+
                 $stmt = $pdo->prepare("
                     SELECT l.id, u.first_name, u.last_name, u.email, u.role, u.phone, l.department_id,
                         CONCAT(u.first_name, ' ', u.last_name) as full_name,
                         u.username, u.status, u.created_at, u.updated_at,
-                        d.name as department_name
+                        d.name as department_name,
+                        hd.name as hod_department_name
                     FROM lecturers l
                     LEFT JOIN users u ON l.user_id = u.id
                     LEFT JOIN departments d ON l.department_id = d.id
-                    WHERE u.role IN ('lecturer', 'hod')
+                    LEFT JOIN departments hd ON hd.hod_id = l.id
+                    $where_clause
                     ORDER BY u.first_name, u.last_name
                 ");
-                $stmt->execute();
+                $stmt->execute($params);
                 $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                 // Validate data integrity
@@ -265,7 +315,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                             $other_dept = $stmt->fetch(PDO::FETCH_ASSOC);
 
                             if ($other_dept) {
-                                throw new Exception("Lecturer is already HOD for department: {$other_dept['name']}");
+                                // Allow reassigning by removing from previous department
+                                $stmt = $pdo->prepare("UPDATE departments SET hod_id = NULL WHERE hod_id = ?");
+                                $stmt->execute([$hod_id]);
+                                error_log("HOD Reassignment: Removed {$lecturer['first_name']} {$lecturer['last_name']} from {$other_dept['name']}");
                             }
                         }
 
@@ -303,13 +356,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
                     echo json_encode([
                         'status' => 'success',
-                        'message' => "HOD {$action} successfully for {$department['name']}",
+                        'message' => "Successfully assigned",
                         'details' => [
                             'department' => $department['name'],
                             'hod_name' => $hod_name,
                             'action' => $action,
                             'previous_hod_id' => $current_hod_id,
-                            'new_hod_id' => $hod_id
+                            'new_hod_id' => $hod_id,
+                            'department_id' => $department_id
                         ]
                     ]);
 
@@ -1095,7 +1149,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             
             setLecturers: function(lects) {
                 this.lecturers = lects;
-                this.notify('lecturersChanged');
+                this.notify('lecturersChanged', lects);
             },
             
             // Observer pattern for state changes
@@ -1198,8 +1252,26 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
             // Department selection change
             $('#departmentSelect').on('change', function() {
+                const selectedDeptId = $(this).val();
                 updateCurrentAssignmentInfo();
                 validateForm();
+
+                // Load lecturers for the selected department
+                if (selectedDeptId) {
+                    loadLecturers(selectedDeptId).then(() => {
+                        console.log('Lecturers loaded for department:', selectedDeptId);
+                    }).catch(error => {
+                        console.error('Failed to load lecturers for department:', error);
+                        showAlert('warning', 'Failed to load lecturers for selected department');
+                    });
+                } else {
+                    // If no department selected, load all lecturers
+                    loadLecturers().then(() => {
+                        console.log('All lecturers loaded');
+                    }).catch(error => {
+                        console.error('Failed to load lecturers:', error);
+                    });
+                }
             });
 
             // Lecturer selection change
@@ -1647,10 +1719,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             }
         }
 
-        function loadLecturers() {
+        function loadLecturers(departmentId = null) {
             return new Promise((resolve, reject) => {
+                let url = 'assign-hod.php?ajax=1&action=get_lecturers';
+                if (departmentId) {
+                    url += '&department_id=' + departmentId;
+                }
+
                 $.ajax({
-                    url: 'assign-hod.php?ajax=1&action=get_lecturers',
+                    url: url,
                     method: 'GET',
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest'
@@ -1658,7 +1735,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 })
                 .done(function(response) {
                     console.log('Lecturers API Response:', response);
-                    
+
                     if (response.status === 'success') {
                         AppState.setLecturers(response.data);
                         resolve(response.data);
@@ -1673,25 +1750,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             });
         }
 
-        function updateLecturerSelect(lecturers) {
+        function updateLecturerSelect() {
+            const lecturers = AppState.lecturers;
             console.log('Updating lecturer select with:', lecturers);
-            
+
             const select = $('#lecturerSelect');
             select.empty().append('<option value="">-- Select Lecturer --</option>');
-            
+
             if (lecturers && lecturers.length > 0) {
                 lecturers.forEach(lecturer => {
-                    const displayName = lecturer.full_name || 
-                                       `${lecturer.first_name} ${lecturer.last_name}`;
-                    
-                    select.append(`<option value="${lecturer.id}">${displayName}</option>`);
+                    const displayName = lecturer.full_name ||
+                                        `${lecturer.first_name} ${lecturer.last_name}`;
+
+                    // Add HOD department info if applicable
+                    const hodInfo = lecturer.role === 'hod' && lecturer.hod_department_name ?
+                        ` (HOD of ${lecturer.hod_department_name})` : '';
+
+                    select.append(`<option value="${lecturer.id}">${displayName}${hodInfo}</option>`);
                 });
                 console.log(`Loaded ${lecturers.length} lecturers into dropdown`);
             } else {
                 select.append('<option value="" disabled>No lecturers available</option>');
                 console.warn('No lecturers available for dropdown');
             }
-            
+
             select.trigger('change');
         }
 
@@ -1964,11 +2046,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             })
             .done(function(response) {
                 if (response.status === 'success') {
-                    const message = isBulk ? 
-                        'Bulk assignment completed successfully!' : 
+                    const message = isBulk ?
+                        'Bulk assignment completed successfully!' :
                         response.message || 'HOD assignment updated successfully!';
                     showAlert('success', message);
-                    loadData();
+                    loadData().then(() => {
+                        // After loading data, refresh lecturers for currently selected department if any
+                        const selectedDeptId = $('#departmentSelect').val();
+                        if (selectedDeptId) {
+                            loadLecturers(selectedDeptId).catch(error => {
+                                console.error('Failed to refresh lecturers after assignment:', error);
+                            });
+                        }
+                    });
                     if (!isBulk) {
                         resetForm();
                     }

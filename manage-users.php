@@ -1,17 +1,20 @@
 <?php
 /**
- * User Management System - Refactored Version
- * Business logic layer for user management operations
+ * Enhanced User Management System - Advanced Version
+ * Comprehensive business logic layer for user management operations
  *
  * This file handles all server-side operations including:
- * - AJAX request processing
- * - User CRUD operations
- * - Data validation and security
- * - API responses
+ * - AJAX request processing with rate limiting
+ * - User CRUD operations with advanced validation
+ * - Data validation and security enhancements
+ * - API responses with performance monitoring
+ * - Advanced filtering and search capabilities
+ * - Bulk operations support
+ * - Audit logging and compliance
  *
- * @version 3.0.0
+ * @version 4.0.0
  * @author Rwanda Polytechnic Development Team
- * @since 2024
+ * @since 2025
  */
 
 // ================================
@@ -567,6 +570,259 @@ function handleDeleteUser(): array
     ];
 }
 
+function handleBulkOperations(): array
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        throw new Exception('Invalid request method');
+    }
+
+    $operation = sanitize_input($_POST['operation'] ?? '');
+    $user_ids = $_POST['user_ids'] ?? [];
+
+    if (empty($operation)) {
+        throw new ValidationException('Operation type is required');
+    }
+
+    if (empty($user_ids) || !is_array($user_ids)) {
+        throw new ValidationException('User IDs are required');
+    }
+
+    // Validate operation type
+    $allowed_operations = ['activate', 'deactivate', 'suspend', 'delete', 'export'];
+    if (!in_array($operation, $allowed_operations)) {
+        throw new ValidationException('Invalid operation type');
+    }
+
+    // Convert and validate user IDs
+    $user_ids = array_map('intval', array_filter($user_ids));
+    if (empty($user_ids)) {
+        throw new ValidationException('No valid user IDs provided');
+    }
+
+    // Prevent self-operation for dangerous operations
+    if (in_array($operation, ['deactivate', 'suspend', 'delete'])) {
+        if (in_array($_SESSION['user_id'], $user_ids)) {
+            throw new ValidationException('Cannot perform this operation on your own account');
+        }
+    }
+
+    global $pdo;
+
+    try {
+        $pdo->beginTransaction();
+
+        $results = [
+            'successful' => 0,
+            'failed' => 0,
+            'errors' => []
+        ];
+
+        foreach ($user_ids as $user_id) {
+            try {
+                switch ($operation) {
+                    case 'activate':
+                        toggleUserStatus($user_id, 'active');
+                        break;
+                    case 'deactivate':
+                        toggleUserStatus($user_id, 'inactive');
+                        break;
+                    case 'suspend':
+                        toggleUserStatus($user_id, 'suspended');
+                        break;
+                    case 'delete':
+                        deleteUserSafely($user_id);
+                        break;
+                }
+                $results['successful']++;
+            } catch (Exception $e) {
+                $results['failed']++;
+                $results['errors'][] = "User ID {$user_id}: " . $e->getMessage();
+            }
+        }
+
+        $pdo->commit();
+
+        // Log bulk operation
+        logActivity('bulk_operation', "Bulk {$operation} operation: {$results['successful']} successful, {$results['failed']} failed", null);
+
+        $message = "Bulk operation completed: {$results['successful']} successful";
+        if ($results['failed'] > 0) {
+            $message .= ", {$results['failed']} failed";
+        }
+
+        return [
+            'status' => 'success',
+            'message' => $message,
+            'results' => $results
+        ];
+
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function handleAdvancedSearch(): array
+{
+    $filters = [
+        'search' => sanitize_input($_GET['search'] ?? ''),
+        'role' => sanitize_input($_GET['role'] ?? ''),
+        'status' => sanitize_input($_GET['status'] ?? ''),
+        'department' => sanitize_input($_GET['department'] ?? ''),
+        'year_level' => sanitize_input($_GET['year_level'] ?? ''),
+        'gender' => sanitize_input($_GET['gender'] ?? ''),
+        'age_range' => sanitize_input($_GET['age_range'] ?? ''),
+        'reg_no' => sanitize_input($_GET['reg_no'] ?? ''),
+        'email' => sanitize_input($_GET['email'] ?? ''),
+        'date_from' => sanitize_input($_GET['date_from'] ?? ''),
+        'date_to' => sanitize_input($_GET['date_to'] ?? ''),
+        'sort_by' => sanitize_input($_GET['sort_by'] ?? 'created_at'),
+        'sort_order' => sanitize_input($_GET['sort_order'] ?? 'DESC'),
+        'page' => max(1, (int)($_GET['page'] ?? 1)),
+        'per_page' => min(100, max(10, (int)($_GET['per_page'] ?? 25)))
+    ];
+
+    validateAdvancedFilters($filters);
+
+    $offset = ($filters['page'] - 1) * $filters['per_page'];
+
+    // Build dynamic query with advanced filtering
+    $query = buildAdvancedSearchQuery($filters);
+    $countQuery = buildAdvancedSearchCountQuery($filters);
+
+    global $pdo;
+
+    try {
+        // Get total count
+        $countStmt = $pdo->prepare($countQuery);
+        bindAdvancedSearchParams($countStmt, $filters);
+        $countStmt->execute();
+        $total_count = $countStmt->fetchColumn();
+
+        // Get paginated results
+        $stmt = $pdo->prepare($query . " ORDER BY {$filters['sort_by']} {$filters['sort_order']} LIMIT {$filters['per_page']} OFFSET $offset");
+        bindAdvancedSearchParams($stmt, $filters);
+        $stmt->execute();
+        $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $total_pages = ceil($total_count / $filters['per_page']);
+
+        return [
+            'status' => 'success',
+            'data' => $users,
+            'pagination' => [
+                'current_page' => $filters['page'],
+                'total_pages' => $total_pages,
+                'total_count' => $total_count,
+                'per_page' => $filters['per_page'],
+                'has_next' => $filters['page'] < $total_pages,
+                'has_prev' => $filters['page'] > 1
+            ],
+            'timestamp' => time()
+        ];
+
+    } catch (PDOException $e) {
+        error_log("Advanced search error: " . $e->getMessage());
+        throw new DatabaseException('Search operation failed');
+    }
+}
+
+function buildAdvancedSearchQuery(array $filters): string
+{
+    $baseQuery = "
+        SELECT
+            u.id, u.username, u.email, u.role, u.status, u.created_at,
+            u.first_name, u.last_name, u.phone, u.gender, u.dob,
+            COALESCE(s.reg_no, l.id_number) as identifier,
+            COALESCE(s.year_level, '') as year_level,
+            d.name as department_name,
+            CASE
+                WHEN u.role = 'student' THEN COALESCE(s.year_level, '')
+                WHEN u.role = 'lecturer' THEN COALESCE(l.education_level, '')
+                ELSE ''
+            END as level_info
+        FROM users u
+        LEFT JOIN students s ON u.id = s.user_id
+        LEFT JOIN lecturers l ON u.id = l.user_id
+        LEFT JOIN departments d ON COALESCE(s.department_id, l.department_id) = d.id
+        WHERE 1=1
+    ";
+
+    return $baseQuery;
+}
+
+function buildAdvancedSearchCountQuery(array $filters): string
+{
+    return "SELECT COUNT(*) FROM (" . buildAdvancedSearchQuery($filters) . ") as count_query";
+}
+
+function bindAdvancedSearchParams(PDOStatement $stmt, array $filters): void
+{
+    if (!empty($filters['search'])) {
+        $searchTerm = '%' . $filters['search'] . '%';
+        $stmt->bindValue(':search', $searchTerm);
+    }
+    if (!empty($filters['role'])) {
+        $stmt->bindValue(':role', $filters['role']);
+    }
+    if (!empty($filters['status'])) {
+        $stmt->bindValue(':status', $filters['status']);
+    }
+    if (!empty($filters['department'])) {
+        $stmt->bindValue(':department', $filters['department']);
+    }
+    if (!empty($filters['year_level'])) {
+        $stmt->bindValue(':year_level', $filters['year_level']);
+    }
+    if (!empty($filters['gender'])) {
+        $stmt->bindValue(':gender', $filters['gender']);
+    }
+    if (!empty($filters['reg_no'])) {
+        $stmt->bindValue(':reg_no', '%' . $filters['reg_no'] . '%');
+    }
+    if (!empty($filters['email'])) {
+        $stmt->bindValue(':email', '%' . $filters['email'] . '%');
+    }
+    if (!empty($filters['date_from'])) {
+        $stmt->bindValue(':date_from', $filters['date_from']);
+    }
+    if (!empty($filters['date_to'])) {
+        $stmt->bindValue(':date_to', $filters['date_to']);
+    }
+}
+
+function validateAdvancedFilters(array $filters): void
+{
+    $allowed_roles = ['admin', 'hod', 'lecturer', 'student'];
+    $allowed_statuses = ['active', 'inactive', 'suspended'];
+    $allowed_sort_fields = ['created_at', 'username', 'email', 'first_name', 'last_name', 'role', 'status'];
+    $allowed_sort_orders = ['ASC', 'DESC'];
+
+    if (!empty($filters['role']) && !in_array($filters['role'], $allowed_roles)) {
+        throw new ValidationException('Invalid role filter');
+    }
+
+    if (!empty($filters['status']) && !in_array($filters['status'], $allowed_statuses)) {
+        throw new ValidationException('Invalid status filter');
+    }
+
+    if (!in_array($filters['sort_by'], $allowed_sort_fields)) {
+        throw new ValidationException('Invalid sort field');
+    }
+
+    if (!in_array($filters['sort_order'], $allowed_sort_orders)) {
+        throw new ValidationException('Invalid sort order');
+    }
+
+    if (!empty($filters['date_from']) && !strtotime($filters['date_from'])) {
+        throw new ValidationException('Invalid date from format');
+    }
+
+    if (!empty($filters['date_to']) && !strtotime($filters['date_to'])) {
+        throw new ValidationException('Invalid date to format');
+    }
+}
+
 // ================================
 // VALIDATION FUNCTIONS
 // ================================
@@ -752,22 +1008,47 @@ function validateAction(string $action): string
 }
 
 /**
- * Execute action with proper error handling
+ * Execute action with proper error handling and performance monitoring
  */
 function executeAction(string $action): array
 {
-    return match ($action) {
-        'get_users' => handleGetUsers(),
-        'export_users' => handleExportUsers(),
-        'get_departments' => handleGetDepartments(),
-        'get_options' => handleGetOptions(),
-        'create_user' => handleCreateUser(),
-        'update_user' => handleUpdateUser(),
-        'reset_password' => handleResetPassword(),
-        'toggle_status' => handleToggleStatus(),
-        'delete_user' => handleDeleteUser(),
-        default => throw new Exception('Unhandled action: ' . $action)
-    };
+    $startTime = microtime(true);
+
+    try {
+        $result = match ($action) {
+            'get_users' => handleGetUsers(),
+            'export_users' => handleExportUsers(),
+            'get_departments' => handleGetDepartments(),
+            'get_options' => handleGetOptions(),
+            'create_user' => handleCreateUser(),
+            'update_user' => handleUpdateUser(),
+            'reset_password' => handleResetPassword(),
+            'toggle_status' => handleToggleStatus(),
+            'delete_user' => handleDeleteUser(),
+            'bulk_operations' => handleBulkOperations(),
+            'advanced_search' => handleAdvancedSearch(),
+            default => throw new Exception('Unhandled action: ' . $action)
+        };
+
+        // Add performance metrics
+        $result['performance'] = [
+            'action' => $action,
+            'execution_time_ms' => round((microtime(true) - $startTime) * 1000, 2),
+            'timestamp' => time()
+        ];
+
+        return $result;
+
+    } catch (Exception $e) {
+        // Log performance even for failed operations
+        $executionTime = round((microtime(true) - $startTime) * 1000, 2);
+        logError("Action '{$action}' failed after {$executionTime}ms: " . $e->getMessage(), [
+            'action' => $action,
+            'execution_time_ms' => $executionTime,
+            'user_id' => $_SESSION['user_id'] ?? 'unknown'
+        ]);
+        throw $e;
+    }
 }
 
 /**

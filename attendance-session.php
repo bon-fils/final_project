@@ -7,6 +7,116 @@ require_role(['lecturer', 'hod', 'admin']);
 // Get current page for active state
 $currentPage = basename($_SERVER['PHP_SELF']);
 $userRole = $_SESSION['role'] ?? 'admin';
+
+// Handle AJAX requests for face recognition
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+
+    try {
+        if ($_POST['action'] === 'process_face_recognition') {
+            // Get the captured image data
+            $imageData = $_POST['image_data'] ?? '';
+            if (empty($imageData)) {
+                throw new Exception('No image data provided');
+            }
+
+            $session_id = $_POST['session_id'] ?? null;
+            if (!$session_id) {
+                throw new Exception('Session ID is required');
+            }
+
+            // Verify session is active
+            $stmt = $pdo->prepare("SELECT id FROM attendance_sessions WHERE id = ? AND end_time IS NULL");
+            $stmt->execute([$session_id]);
+            if (!$stmt->fetch()) {
+                throw new Exception('Active session not found');
+            }
+
+            // Create temporary file for the captured image
+            $tempDir = sys_get_temp_dir();
+            $tempFile = tempnam($tempDir, 'face_capture_');
+            $imageFile = $tempFile . '.jpg';
+
+            // Clean up temp file if it exists
+            if (file_exists($tempFile)) {
+                unlink($tempFile);
+            }
+
+            // Decode and save base64 image
+            if (strpos($imageData, 'data:image') === 0) {
+                $imageData = explode(',', $imageData)[1];
+            }
+            $imageBinary = base64_decode($imageData);
+
+            if ($imageBinary === false) {
+                throw new Exception('Invalid base64 image data');
+            }
+
+            if (file_put_contents($imageFile, $imageBinary) === false) {
+                throw new Exception('Failed to save temporary image file');
+            }
+
+            // Set proper permissions
+            chmod($imageFile, 0644);
+
+            // Call Python face recognition script
+            $pythonScript = __DIR__ . '/face_match.py';
+            $command = escapeshellcmd('python3') . ' ' . escapeshellarg($pythonScript) . ' ' . escapeshellarg($imageFile);
+
+            // Execute command
+            $output = shell_exec($command . " 2>&1");
+
+            // Clean up temporary file
+            if (file_exists($imageFile)) {
+                unlink($imageFile);
+            }
+
+            // Parse JSON output
+            $result = json_decode($output, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new Exception('Invalid response from face recognition script');
+            }
+
+            // If match found, record attendance
+            if ($result['status'] === 'success' && isset($result['student_id'])) {
+                // Check if attendance already recorded
+                $stmt = $pdo->prepare("SELECT id FROM attendance_records WHERE session_id = ? AND student_id = ?");
+                $stmt->execute([$session_id, $result['student_id']]);
+                $existing = $stmt->fetch();
+
+                if (!$existing) {
+                    // Record attendance
+                    $stmt = $pdo->prepare("
+                        INSERT INTO attendance_records (session_id, student_id, status, method, recorded_at)
+                        VALUES (?, ?, 'present', 'face_recognition', NOW())
+                    ");
+                    $stmt->execute([$session_id, $result['student_id']]);
+                }
+
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => 'Attendance marked successfully!',
+                    'student_name' => $result['student_name'],
+                    'student_reg' => $result['student_reg'],
+                    'confidence' => $result['confidence']
+                ]);
+            } else {
+                echo json_encode([
+                    'status' => 'no_match',
+                    'message' => $result['message'] ?? 'No face match found'
+                ]);
+            }
+        } else {
+            throw new Exception('Invalid action');
+        }
+    } catch (Exception $e) {
+        echo json_encode([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -23,9 +133,12 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
   <style>
     body {
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(to right, #0066cc, #003366);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(to right, #87CEEB, #4682B4);
       margin: 0;
+      line-height: 1.6;
+      color: #333;
+      font-size: 14px;
     }
 
     .sidebar {
@@ -52,18 +165,27 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     .sidebar a:hover,
     .sidebar a.active {
-      background-color: #0066cc;
+      background-color: #87CEEB;
     }
 
     .topbar {
       margin-left: 250px;
-      background-color: #fff;
-      padding: 10px 30px;
-      border-bottom: 1px solid #ddd;
+      background-color: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 15px 30px;
+      border-bottom: 1px solid rgba(135, 206, 235, 0.3);
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .topbar h5 {
+      font-weight: 600;
+      color: #2c3e50;
+      margin: 0;
+      font-size: 1.25rem;
     }
 
     .main-content {
@@ -85,7 +207,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
     #webcam-preview {
       width: 100%;
       max-width: 640px;
-      border: 2px solid #0066cc;
+      border: 2px solid #87CEEB;
       border-radius: 8px;
       background-color: #000;
       margin-bottom: 20px;
@@ -127,34 +249,77 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     /* Session Statistics Cards */
     .stat-card {
-      border-radius: 10px;
-      transition: transform 0.2s ease;
+      border-radius: 15px;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      border: none;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
     }
 
     .stat-card:hover {
-      transform: translateY(-2px);
+      transform: translateY(-5px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.15);
     }
 
     .stat-card .icon {
-      width: 50px;
-      height: 50px;
+      width: 60px;
+      height: 60px;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 15px;
+      margin: 0 auto 20px;
+      background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%);
+      color: white;
+      font-size: 1.5rem;
+    }
+
+    .stat-card h4 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2c3e50;
+      margin-bottom: 5px;
+    }
+
+    .stat-card small {
+      font-size: 0.85rem;
+      color: #6c757d;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     /* Attendance Table Enhancements */
     .attendance-table .table th {
-      background-color: #f8f9fa;
+      background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%);
+      color: white;
       border-top: none;
       font-weight: 600;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 12px;
+    }
+
+    .attendance-table .table td {
+      padding: 12px;
+      vertical-align: middle;
+      font-size: 0.9rem;
+      color: #2c3e50;
     }
 
     .attendance-table .badge {
       font-size: 0.75rem;
-      padding: 0.375rem 0.75rem;
+      padding: 0.4rem 0.8rem;
+      font-weight: 500;
+      border-radius: 20px;
+    }
+
+    .attendance-table h5 {
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 1rem;
     }
 
     /* Loading States */
@@ -165,37 +330,166 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     /* Notification Styles */
     .alert {
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
       border: none;
       border-left: 4px solid;
+      border-radius: 10px;
+      padding: 15px 20px;
+      margin-bottom: 20px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+    }
+
+    .alert h5, .alert .alert-heading {
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      font-size: 1.1rem;
+    }
+
+    .alert p {
+      color: #5a6c7d;
+      line-height: 1.6;
+      margin-bottom: 0;
     }
 
     .alert-success {
-      border-left-color: #28a745;
+      border-left-color: #10b981;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
     }
 
     .alert-info {
-      border-left-color: #17a2b8;
+      border-left-color: #06b6d4;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
     }
 
     .alert-warning {
-      border-left-color: #ffc107;
+      border-left-color: #f59e0b;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
     }
 
     .alert-danger {
-      border-left-color: #dc3545;
+      border-left-color: #ef4444;
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
     }
 
     /* Enhanced form styling */
-    .form-select:disabled {
+    .form-label {
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-select, .form-control {
+      border-radius: 8px;
+      border: 2px solid #e1e8ed;
+      padding: 10px 15px;
+      font-size: 0.95rem;
+      transition: all 0.3s ease;
+      background-color: #fff;
+    }
+
+    .form-select:disabled, .form-control:disabled {
       background-color: #f8f9fa;
+      opacity: 0.7;
+      cursor: not-allowed;
+      border-color: #dee2e6;
+    }
+
+    .btn:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
 
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+    /* Enhanced Button Styling */
+    .btn {
+      border-radius: 8px;
+      font-weight: 600;
+      padding: 12px 24px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border: none;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #4682B4 0%, #87CEEB 100%);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+    }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: linear-gradient(135deg, #495057 0%, #6c757d 100%);
+    }
+
+    .btn-info {
+      background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+      color: white;
+    }
+
+    .btn-info:hover {
+      background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+    }
+
+    .btn-outline-primary {
+      border: 2px solid #87CEEB;
+      color: #87CEEB;
+      background: transparent;
+    }
+
+    .btn-outline-primary:hover {
+      background: #87CEEB;
+      color: white;
+    }
+
+    .btn-outline-success {
+      border: 2px solid #10b981;
+      color: #10b981;
+      background: transparent;
+    }
+
+    .btn-outline-success:hover {
+      background: #10b981;
+      color: white;
     }
 
     /* Loading animation for dropdowns */
@@ -206,10 +500,36 @@ $userRole = $_SESSION['role'] ?? 'admin';
       background-size: 1rem;
     }
 
-    /* Webcam Container */
+    /* Webcam and Face Recognition Styles */
     #webcam-container {
       position: relative;
       display: inline-block;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+
+    #webcam-preview {
+      width: 100%;
+      max-width: 400px;
+      border: 3px solid #87CEEB;
+      border-radius: 10px;
+      background-color: #000;
+      display: block;
+    }
+
+    #webcam-placeholder {
+      width: 100%;
+      max-width: 400px;
+      height: 300px;
+      background: #f8f9fa;
+      border: 2px dashed #dee2e6;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6c757d;
+      text-align: center;
     }
 
     #webcam-overlay {
@@ -218,12 +538,56 @@ $userRole = $_SESSION['role'] ?? 'admin';
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0,0,0,0.5);
       display: none;
       align-items: center;
       justify-content: center;
       color: white;
       font-size: 1.2rem;
+      font-weight: 600;
+      backdrop-filter: blur(2px);
+      border-radius: 10px;
+    }
+
+    #webcam-overlay.processing {
+      background: rgba(13, 202, 240, 0.9);
+      border: 2px solid #0dcaf0;
+    }
+
+    #webcam-overlay.success {
+      background: rgba(25, 135, 84, 0.9);
+      border: 2px solid #198754;
+    }
+
+    #webcam-overlay.error {
+      background: rgba(220, 53, 69, 0.9);
+      border: 2px solid #dc3545;
+    }
+
+    .mark-attendance-section {
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      border-radius: 15px;
+      padding: 30px;
+      margin: 20px 0;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+
+    .attendance-result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 10px;
+      display: none;
+    }
+
+    .attendance-result.success {
+      background: linear-gradient(135deg, rgba(25, 135, 84, 0.1) 0%, rgba(255, 255, 255, 0.9) 100%);
+      border: 1px solid #198754;
+      color: #155724;
+    }
+
+    .attendance-result.error {
+      background: linear-gradient(135deg, rgba(220, 53, 69, 0.1) 0%, rgba(255, 255, 255, 0.9) 100%);
+      border: 1px solid #dc3545;
+      color: #721c24;
     }
 
     /* Method Breakdown Cards */
@@ -244,8 +608,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
     }
 
     #course-search:focus {
-      border-color: #0066cc;
-      box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
+      border-color: #87CEEB;
+      box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.25);
     }
 
     #course-loading {
@@ -261,8 +625,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
     }
 
     #course:focus {
-      border-color: #0066cc;
-      box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
+      border-color: #87CEEB;
+      box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.25);
     }
 
     #course option {
@@ -434,8 +798,65 @@ $userRole = $_SESSION['role'] ?? 'admin';
       </div>
     </div>
 
-    <!-- Session Filters -->
-    <form id="sessionForm" class="row g-3 mb-4">
+    <!-- Active Session Section -->
+    <div id="activeSessionSection" class="d-none">
+      <div class="alert alert-success">
+        <h5><i class="fas fa-play-circle me-2"></i>Active Attendance Session</h5>
+        <p id="sessionInfo" class="mb-3"></p>
+
+        <!-- Mark Attendance Section -->
+        <div class="mark-attendance-section">
+          <div class="row">
+            <div class="col-md-6">
+              <h6 class="mb-3"><i class="fas fa-camera me-2"></i>Face Recognition Attendance</h6>
+
+              <!-- Webcam Container -->
+              <div id="webcam-container" class="text-center">
+                <video id="webcam-preview" autoplay muted playsinline style="display: none;"></video>
+                <div id="webcam-placeholder">
+                  <i class="fas fa-video fa-3x mb-3"></i>
+                  <p>Webcam not active</p>
+                  <small class="text-muted">Click "Mark Attendance" to start</small>
+                </div>
+                <div id="webcam-overlay">
+                  <div id="webcam-status">Processing...</div>
+                </div>
+              </div>
+
+              <!-- Control Buttons -->
+              <div class="mt-3">
+                <button type="button" id="markAttendanceBtn" class="btn btn-primary btn-lg me-2" disabled>
+                  <i class="fas fa-camera me-2"></i>Mark Attendance
+                </button>
+                <button type="button" id="endSessionBtn" class="btn btn-danger">
+                  <i class="fas fa-stop me-2"></i>End Session
+                </button>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <h6 class="mb-3"><i class="fas fa-chart-bar me-2"></i>Session Statistics</h6>
+              <div id="sessionStats">
+                <div class="alert alert-info">
+                  <i class="fas fa-spinner fa-spin me-2"></i>Loading session statistics...
+                </div>
+              </div>
+
+              <!-- Attendance Result -->
+              <div id="attendanceResult" class="attendance-result">
+                <h6 id="resultTitle"></h6>
+                <p id="resultMessage"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session Setup Section -->
+    <div id="sessionSetupSection">
+      <!-- Session Filters -->
+      <form id="sessionForm" class="row g-3 mb-4">
       <div class="col-md-3">
         <label for="department" class="form-label fw-semibold">Department</label>
         <select id="department" name="department_id" class="form-select" required>
@@ -511,6 +932,14 @@ $userRole = $_SESSION['role'] ?? 'admin';
           </div>
           <div id="face-recognition-status">Detecting faces...</div>
         </div>
+      </div>
+
+      <!-- Face Recognition Status Indicator -->
+      <div id="face-recognition-indicator" class="face-recognition-indicator d-none">
+        <div class="indicator-light">
+          <i class="fas fa-camera"></i>
+        </div>
+        <div class="indicator-text">Face Recognition Active</div>
       </div>
     </div>
 
@@ -664,11 +1093,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
   <script>
     // Global variables
     let currentSessionId = null;
-    let attendanceCheckInterval = null;
-    let faceRecognitionActive = false;
-    let sessionStartTime = null;
-    let sessionTimerInterval = null;
-    let csrfToken = '<?php echo generate_csrf_token(); ?>';
+    let webcamStream = null;
+    let csrfToken = '<?php echo bin2hex(random_bytes(32)); ?>';
 
     // DOM elements
     const departmentSelect = document.getElementById('department');
@@ -679,16 +1105,8 @@ $userRole = $_SESSION['role'] ?? 'admin';
     const courseLoading = document.getElementById('course-loading');
     const startBtn = document.getElementById('start-session');
     const endBtn = document.getElementById('end-session');
-    const webcamPreview = document.getElementById('webcam-preview');
+    const markAttendanceBtn = document.getElementById('markAttendanceBtn');
     const sessionForm = document.getElementById('sessionForm');
-    const attendanceList = document.getElementById('attendance-list');
-    const attendanceLoading = document.getElementById('attendance-loading');
-    const attendanceTableContainer = document.getElementById('attendance-table-container');
-    const noAttendance = document.getElementById('no-attendance');
-    const sessionStatsSection = document.getElementById('session-stats-section');
-    const refreshAttendanceBtn = document.getElementById('refresh-attendance');
-    const exportAttendanceBtn = document.getElementById('export-attendance');
-    const testApiBtn = document.getElementById('test-api');
 
     // Course data storage
     let allCourses = [];
@@ -711,7 +1129,6 @@ $userRole = $_SESSION['role'] ?? 'admin';
       courseSearch.addEventListener('input', handleCourseSearch);
       courseSearch.addEventListener('focus', () => courseSearch.style.display = 'block');
       courseSearch.addEventListener('blur', () => {
-        // Hide search after 200ms delay to allow for selection
         setTimeout(() => {
           if (!courseSearch.matches(':focus')) {
             courseSearch.style.display = 'none';
@@ -720,13 +1137,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
       });
       startBtn.addEventListener('click', handleStartSession);
       endBtn.addEventListener('click', handleEndSession);
-      refreshAttendanceBtn.addEventListener('click', loadAttendanceRecords);
-      exportAttendanceBtn.addEventListener('click', exportAttendanceData);
-      testApiBtn.addEventListener('click', testApiConnection);
-
-      // Manual attendance modal
-      document.getElementById('manualMarkModal').addEventListener('show.bs.modal', loadStudentsForManualMarking);
-      document.querySelector('#manualMarkModal form').addEventListener('submit', handleManualAttendance);
+      markAttendanceBtn.addEventListener('click', handleMarkAttendance);
     }
 
     // Load departments from API
@@ -1081,17 +1492,28 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     // Validate form
     function validateForm() {
-       const isValid = departmentSelect.value && optionSelect.value && classSelect.value && courseSelect.value;
-       startBtn.disabled = !isValid;
+        const isValid = departmentSelect.value && optionSelect.value && classSelect.value && courseSelect.value;
+        startBtn.disabled = !isValid;
 
-       // Debug logging
-       console.log('Form validation:', {
-         department: departmentSelect.value,
-         option: optionSelect.value,
-         classLevel: classSelect.value,
-         course: courseSelect.value,
-         isValid: isValid
-       });
+        // Debug logging
+        console.log('Form validation:', {
+            department: departmentSelect.value,
+            option: optionSelect.value,
+            classLevel: classSelect.value,
+            course: courseSelect.value,
+            isValid: isValid
+        });
+
+        // Update button text to show validation status
+        if (isValid) {
+            startBtn.innerHTML = '<i class="fas fa-play me-2"></i> Start Session';
+            startBtn.classList.remove('btn-secondary');
+            startBtn.classList.add('btn-primary');
+        } else {
+            startBtn.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i> Fill All Fields';
+            startBtn.classList.remove('btn-primary');
+            startBtn.classList.add('btn-secondary');
+        }
     }
 
     // Check for existing session
@@ -1160,32 +1582,50 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
     // Handle start session
     async function handleStartSession(e) {
-       e.preventDefault();
+        e.preventDefault();
 
-       const formData = new FormData(sessionForm);
-       formData.append('csrf_token', csrfToken);
+        console.log('🚀 Starting session...');
 
-       // Debug logging
-       console.log('Starting session with data:', {
-         department_id: formData.get('department_id'),
-         option_id: formData.get('option_id'),
-         classLevel: formData.get('classLevel'),
-         course_id: formData.get('course_id'),
-         csrf_token: formData.get('csrf_token')
-       });
+        const formData = new FormData(sessionForm);
+        formData.append('csrf_token', csrfToken);
+
+        // Debug logging
+        console.log('Starting session with data:', {
+            department_id: formData.get('department_id'),
+            option_id: formData.get('option_id'),
+            classLevel: formData.get('classLevel'),
+            course_id: formData.get('course_id'),
+            csrf_token: formData.get('csrf_token')
+        });
+
+        // Validate required fields before submission
+        const departmentId = formData.get('department_id');
+        const optionId = formData.get('option_id');
+        const courseId = formData.get('course_id');
+
+        if (!departmentId || !optionId || !courseId) {
+            console.error('❌ Missing required fields');
+            showNotification('Please fill in all required fields (Department, Option, Course)', 'error');
+            return;
+        }
 
        try {
          showLoading('Starting session...');
+
+         console.log('📡 Sending request to API...');
 
          const response = await fetch('api/attendance-session-api.php?action=start_session', {
            method: 'POST',
            body: formData
          });
 
+         console.log('📡 Response status:', response.status);
+         console.log('📡 Response headers:', response.headers);
+
          const result = await response.json();
 
          // Debug logging
-         console.log('Session start response:', result);
+         console.log('📡 Session start response:', result);
 
          hideLoading();
 
@@ -1207,101 +1647,111 @@ $userRole = $_SESSION['role'] ?? 'admin';
        }
     }
 
-    // Handle end session
-    async function handleEndSession() {
+    // Handle mark attendance button
+    async function handleMarkAttendance() {
       if (!currentSessionId) {
-        showNotification('No active session to end', 'warning');
+        showNotification('No active session', 'error');
         return;
       }
 
       try {
-        showLoading('Ending session...');
+        // Show processing overlay
+        showWebcamOverlay('Processing...', 'processing');
 
+        // Capture image from webcam
+        const imageData = captureWebcamImage();
+
+        if (!imageData) {
+          hideWebcamOverlay();
+          showNotification('Failed to capture image from webcam', 'error');
+          return;
+        }
+
+        // Send to server for face recognition
         const formData = new FormData();
+        formData.append('action', 'process_face_recognition');
+        formData.append('image_data', imageData);
         formData.append('session_id', currentSessionId);
         formData.append('csrf_token', csrfToken);
 
-        const response = await fetch('api/attendance-session-api.php?action=end_session', {
+        const response = await fetch('attendance-session.php', {
           method: 'POST',
           body: formData
         });
 
         const result = await response.json();
 
-        hideLoading();
+        hideWebcamOverlay();
 
         if (result.status === 'success') {
-          showNotification('Session ended successfully!', 'success');
-          hideActiveSession();
-          stopAttendanceMonitoring();
+          // Show success result
+          showAttendanceResult('success', 'Attendance Marked!', `${result.student_name} (${result.student_reg}) - ${result.confidence}% confidence`);
+          showNotification(`✅ Attendance marked for ${result.student_name}!`, 'success');
+
+          // Reload session stats
           loadSessionStats();
         } else {
-          showNotification('Error ending session: ' + result.message, 'error');
+          // Show error result
+          showAttendanceResult('error', 'No Match Found', result.message || 'Face not recognized');
+          showNotification('❌ ' + (result.message || 'No face match found'), 'error');
         }
+
       } catch (error) {
-        hideLoading();
-        console.error('Error ending session:', error);
-        showNotification('Failed to end session', 'error');
+        hideWebcamOverlay();
+        console.error('Face recognition error:', error);
+        showAttendanceResult('error', 'Error', 'Face recognition failed');
+        showNotification('Face recognition error: ' + error.message, 'error');
       }
     }
 
-    // Show active session UI
-    function showActiveSession(sessionData) {
+    // Capture image from webcam
+    function captureWebcamImage() {
+      const video = document.getElementById('webcam-preview');
+      const canvas = document.createElement('canvas');
 
-      startBtn.disabled = true;
-      endBtn.disabled = false;
-      sessionStatsSection.style.display = 'block';
-
-      // Show session status indicator
-      const statusIndicator = document.getElementById('session-status-indicator');
-      const statusText = document.getElementById('session-status-text');
-      if (statusIndicator && statusText) {
-        statusText.textContent = `Session Active - ${sessionData.course_name || 'Course'}`;
-        statusIndicator.classList.remove('d-none');
+      if (!video.videoWidth || !video.videoHeight) {
+        return null;
       }
 
-      // Make end button more prominent
-      endBtn.classList.add('btn-danger', 'pulse');
-      endBtn.innerHTML = '<i class="fas fa-stop me-2"></i> End Session (Active)';
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
 
-      // Start session timer
-      startSessionTimer();
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
 
-      // Start webcam
-      startWebcam();
-
-      // Load initial attendance data
-      loadAttendanceRecords();
-      loadSessionStats();
+      return canvas.toDataURL('image/jpeg', 0.8);
     }
 
-    // Hide active session UI
-    function hideActiveSession() {
-      startBtn.disabled = false;
-      endBtn.disabled = true;
-      sessionStatsSection.style.display = 'none';
-      currentSessionId = null;
+    // Show webcam overlay
+    function showWebcamOverlay(message, type = 'processing') {
+      const overlay = document.getElementById('webcam-overlay');
+      const status = document.getElementById('webcam-status');
 
-      // Hide session status indicator
-      const statusIndicator = document.getElementById('session-status-indicator');
-      if (statusIndicator) {
-        statusIndicator.classList.add('d-none');
-      }
+      status.textContent = message;
+      overlay.className = `webcam-overlay ${type}`;
+      overlay.style.display = 'flex';
+    }
 
-      // Reset end button
-      endBtn.classList.remove('btn-danger', 'pulse');
-      endBtn.innerHTML = '<i class="fas fa-stop me-2"></i> End Session';
+    // Hide webcam overlay
+    function hideWebcamOverlay() {
+      document.getElementById('webcam-overlay').style.display = 'none';
+    }
 
-      // Stop session timer
-      stopSessionTimer();
+    // Show attendance result
+    function showAttendanceResult(type, title, message) {
+      const resultDiv = document.getElementById('attendanceResult');
+      const titleDiv = document.getElementById('resultTitle');
+      const messageDiv = document.getElementById('resultMessage');
 
-      // Stop webcam
-      stopWebcam();
+      resultDiv.className = `attendance-result ${type}`;
+      titleDiv.textContent = title;
+      messageDiv.textContent = message;
+      resultDiv.style.display = 'block';
 
-      // Clear attendance data
-      attendanceList.innerHTML = '';
-      noAttendance.style.display = 'block';
-      attendanceTableContainer.style.display = 'none';
+      // Auto-hide after 5 seconds
+      setTimeout(() => {
+        resultDiv.style.display = 'none';
+      }, 5000);
     }
 
     // Start webcam
@@ -1314,267 +1764,55 @@ $userRole = $_SESSION['role'] ?? 'admin';
             facingMode: 'user'
           }
         });
-        webcamPreview.srcObject = stream;
-        faceRecognitionActive = true;
+
+        const video = document.getElementById('webcam-preview');
+        const placeholder = document.getElementById('webcam-placeholder');
+
+        video.srcObject = stream;
+        webcamStream = stream;
+
+        video.style.display = 'block';
+        placeholder.style.display = 'none';
+
+        // Enable mark attendance button
+        markAttendanceBtn.disabled = false;
+
       } catch (error) {
-        console.error('Error accessing webcam:', error);
-        showNotification('Could not access webcam. Face recognition will be disabled.', 'warning');
+        console.error('Webcam error:', error);
+        showNotification('Could not access webcam. Please check permissions.', 'error');
+        markAttendanceBtn.disabled = true;
       }
     }
 
     // Stop webcam
     function stopWebcam() {
-      if (webcamPreview.srcObject) {
-        webcamPreview.srcObject.getTracks().forEach(track => track.stop());
-        webcamPreview.srcObject = null;
-      }
-      faceRecognitionActive = false;
-    }
-
-    // Start attendance monitoring
-    function startAttendanceMonitoring() {
-      // Load attendance records every 5 seconds
-      attendanceCheckInterval = setInterval(loadAttendanceRecords, 5000);
-    }
-
-    // Stop attendance monitoring
-    function stopAttendanceMonitoring() {
-      if (attendanceCheckInterval) {
-        clearInterval(attendanceCheckInterval);
-        attendanceCheckInterval = null;
-      }
-    }
-
-    // Start session timer
-    function startSessionTimer() {
-      sessionStartTime = new Date();
-      updateSessionTimer();
-
-      sessionTimerInterval = setInterval(updateSessionTimer, 1000);
-    }
-
-    // Stop session timer
-    function stopSessionTimer() {
-      if (sessionTimerInterval) {
-        clearInterval(sessionTimerInterval);
-        sessionTimerInterval = null;
-      }
-      sessionStartTime = null;
-      document.getElementById('session-timer').textContent = '00:00:00';
-    }
-
-    // Update session timer display
-    function updateSessionTimer() {
-      if (!sessionStartTime) return;
-
-      const now = new Date();
-      const elapsed = Math.floor((now - sessionStartTime) / 1000);
-
-      const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
-      const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
-      const seconds = (elapsed % 60).toString().padStart(2, '0');
-
-      document.getElementById('session-timer').textContent = `${hours}:${minutes}:${seconds}`;
-    }
-
-    // Load attendance records
-    async function loadAttendanceRecords() {
-      if (!currentSessionId) return;
-
-      try {
-        attendanceLoading.style.display = 'block';
-        attendanceTableContainer.style.display = 'none';
-        noAttendance.style.display = 'none';
-
-        const response = await fetch(`api/attendance-session-api.php?action=get_attendance_history&session_id=${currentSessionId}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          }
-        });
-
-        const result = await response.json();
-
-        attendanceLoading.style.display = 'none';
-
-        if (result.status === 'success') {
-          if (result.data && result.data.length > 0) {
-            displayAttendanceRecords(result.data);
-            attendanceTableContainer.style.display = 'block';
-          } else {
-            noAttendance.style.display = 'block';
-          }
-        } else {
-          showNotification('Error loading attendance records: ' + result.message, 'error');
-          noAttendance.style.display = 'block';
-        }
-      } catch (error) {
-        attendanceLoading.style.display = 'none';
-        console.error('Error loading attendance records:', error);
-        showNotification('Failed to load attendance records', 'error');
-        noAttendance.style.display = 'block';
-      }
-    }
-
-    // Display attendance records
-    function displayAttendanceRecords(records) {
-      attendanceList.innerHTML = '';
-
-      records.forEach(record => {
-        const row = document.createElement('tr');
-
-        const statusBadge = record.status === 'present'
-          ? '<span class="badge bg-success">Present</span>'
-          : '<span class="badge bg-danger">Absent</span>';
-
-        const methodText = record.method === 'face_recognition' ? 'Face Recognition' :
-                          record.method === 'fingerprint' ? 'Fingerprint' : (record.method || 'Manual');
-
-        row.innerHTML = `
-          <td>${record.student_id}</td>
-          <td>
-            <div class="d-flex align-items-center">
-              ${record.profile_image ? `<img src="${record.profile_image}" class="rounded-circle me-2" width="32" height="32">` : '<i class="fas fa-user-circle me-2"></i>'}
-              ${record.full_name}
-            </div>
-          </td>
-          <td>${new Date(record.recorded_at).toLocaleTimeString()}</td>
-          <td>${statusBadge}</td>
-          <td>${methodText}</td>
-          <td>
-            <button class="btn btn-sm btn-outline-primary" onclick="editAttendance(${record.id})">
-              <i class="fas fa-edit"></i>
-            </button>
-          </td>
-        `;
-
-        attendanceList.appendChild(row);
-      });
-    }
-
-    // Load session statistics
-    async function loadSessionStats() {
-      if (!currentSessionId) return;
-
-      try {
-        const response = await fetch(`api/attendance-session-api.php?action=get_session_stats&session_id=${currentSessionId}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          }
-        });
-
-        const result = await response.json();
-
-        if (result.status === 'success') {
-          const stats = result.data;
-          document.getElementById('total-students').textContent = stats.total_students;
-          document.getElementById('present-count').textContent = stats.present_count;
-          document.getElementById('absent-count').textContent = stats.absent_count;
-          document.getElementById('attendance-rate').textContent = stats.attendance_rate + '%';
-
-          displayMethodBreakdown(stats.method_breakdown);
-        }
-      } catch (error) {
-        console.error('Error loading session stats:', error);
-      }
-    }
-
-    // Display method breakdown
-    function displayMethodBreakdown(methods) {
-      const container = document.getElementById('method-breakdown');
-      container.innerHTML = '';
-
-      if (!methods || methods.length === 0) {
-        container.innerHTML = '<p class="text-muted">No attendance methods recorded yet.</p>';
-        return;
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+        webcamStream = null;
       }
 
-      methods.forEach(method => {
-        const percentage = method.count > 0 ? ((method.present_count / method.count) * 100).toFixed(1) : 0;
-        const icon = method.method === 'face_recognition' ? 'fas fa-camera' :
-                    method.method === 'fingerprint' ? 'fas fa-fingerprint' : 'fas fa-pen';
+      const video = document.getElementById('webcam-preview');
+      const placeholder = document.getElementById('webcam-placeholder');
 
-        const col = document.createElement('div');
-        col.className = 'col-md-4';
-        col.innerHTML = `
-          <div class="card border-0 shadow-sm">
-            <div class="card-body text-center">
-              <i class="${icon} fa-2x text-info mb-2"></i>
-              <h6 class="mb-1">${method.method.replace('_', ' ').toUpperCase()}</h6>
-              <p class="mb-0">${method.count} records (${percentage}% present)</p>
-            </div>
-          </div>
-        `;
-        container.appendChild(col);
-      });
+      video.style.display = 'none';
+      video.srcObject = null;
+      placeholder.style.display = 'block';
     }
 
-    // Load students for manual marking
-    async function loadStudentsForManualMarking() {
-      const departmentId = departmentSelect.value;
-      const optionId = optionSelect.value;
-
-      if (!departmentId || !optionId) {
-        showNotification('Please select department and option first', 'warning');
-        return;
-      }
-
-      try {
-        const response = await fetch(
-          `api/attendance-session-api.php?action=get_students&department_id=${departmentId}&option_id=${optionId}&year_level=${classSelect.value}`,
-          {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Requested-With': 'XMLHttpRequest'
-            }
-          }
-        );
-
-        const result = await response.json();
-
-        if (result.status === 'success') {
-          const studentSelect = document.getElementById('studentName');
-          studentSelect.innerHTML = '<option selected disabled>Select Student</option>';
-
-          result.data.forEach(student => {
-            const option = document.createElement('option');
-            option.value = student.id;
-            option.textContent = `${student.full_name} (${student.student_id})`;
-            studentSelect.appendChild(option);
-          });
-        }
-      } catch (error) {
-        console.error('Error loading students:', error);
-        showNotification('Failed to load students', 'error');
-      }
-    }
-
-    // Handle manual attendance
-    async function handleManualAttendance(e) {
-      e.preventDefault();
-
-      const studentId = document.getElementById('studentName').value;
-      const date = document.getElementById('attendanceDate').value;
-      const status = document.querySelector('input[name="attendanceStatus"]:checked').value;
-
-      if (!currentSessionId || !studentId || !date || !status) {
-        showNotification('Please fill in all required fields', 'warning');
+    // Handle end session
+    async function handleEndSession() {
+      if (!currentSessionId) {
+        showNotification('No active session to end', 'warning');
         return;
       }
 
       try {
         const formData = new FormData();
+        formData.append('action', 'end_session');
         formData.append('session_id', currentSessionId);
-        formData.append('student_id', studentId);
-        formData.append('status', status);
-        formData.append('date', date);
         formData.append('csrf_token', csrfToken);
 
-        const response = await fetch('api/attendance-session-api.php?action=manual_attendance', {
+        const response = await fetch('api/attendance-session-api.php', {
           method: 'POST',
           body: formData
         });
@@ -1582,117 +1820,80 @@ $userRole = $_SESSION['role'] ?? 'admin';
         const result = await response.json();
 
         if (result.status === 'success') {
-          showNotification('Manual attendance recorded successfully!', 'success');
-          bootstrap.Modal.getInstance(document.getElementById('manualMarkModal')).hide();
-          loadAttendanceRecords();
-          loadSessionStats();
+          showNotification('Session ended successfully!', 'success');
+          hideActiveSession();
         } else {
-          showNotification('Error recording attendance: ' + result.message, 'error');
+          showNotification('Error ending session: ' + result.message, 'error');
         }
       } catch (error) {
-        console.error('Error recording manual attendance:', error);
-        showNotification('Failed to record attendance', 'error');
+        console.error('Error ending session:', error);
+        showNotification('Failed to end session', 'error');
       }
     }
 
-    // Test API connection
-    async function testApiConnection() {
+    // Show active session UI
+    function showActiveSession(sessionData) {
+      document.getElementById('sessionSetupSection').style.display = 'none';
+      document.getElementById('activeSessionSection').classList.remove('d-none');
+
+      // Update session info
+      document.getElementById('sessionInfo').innerHTML = `
+        <strong>Course:</strong> ${sessionData.course_name || 'Unknown'}<br>
+        <strong>Department:</strong> ${sessionData.department_name || 'Unknown'}<br>
+        <strong>Option:</strong> ${sessionData.option_name || 'Unknown'}<br>
+        <strong>Started:</strong> ${new Date(sessionData.start_time).toLocaleString()}
+      `;
+
+      // Enable mark attendance button
+      markAttendanceBtn.disabled = false;
+
+      // Start webcam
+      startWebcam();
+
+      // Load session stats
+      loadSessionStats();
+    }
+
+    // Hide active session UI
+    function hideActiveSession() {
+      document.getElementById('activeSessionSection').classList.add('d-none');
+      document.getElementById('sessionSetupSection').style.display = 'block';
+
+      currentSessionId = null;
+      markAttendanceBtn.disabled = true;
+
+      // Stop webcam
+      stopWebcam();
+    }
+
+    // Load session statistics
+    async function loadSessionStats() {
+      if (!currentSessionId) return;
+
       try {
-        showLoading('Testing API connection...');
-
-        const response = await fetch('api/attendance-session-api.php?action=test_courses', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          }
-        });
-
+        const response = await fetch(`api/attendance-session-api.php?action=get_session_stats&session_id=${currentSessionId}`);
         const result = await response.json();
 
-        hideLoading();
-
         if (result.status === 'success') {
-          showNotification(`API test successful! Found ${result.count} courses.`, 'success');
-          console.log('API Test Results:', result.data);
-
-          // If we got courses, try to populate the dropdown
-          if (result.data && result.data.length > 0) {
-            courseSelect.innerHTML = '<option value="" disabled selected>Select Course</option>';
-            result.data.forEach(course => {
-              const option = document.createElement('option');
-              option.value = course.id;
-              option.textContent = `${course.name} (${course.course_code}) - ${course.lecturer_name}`;
-              courseSelect.appendChild(option);
-            });
-            courseSelect.disabled = false;
-            updateCourseInfo(`API test loaded ${result.count} courses`);
-          }
-        } else {
-          showNotification('API test failed: ' + result.message, 'error');
-          console.error('API Test Error:', result);
+          const stats = result.data;
+          document.getElementById('sessionStats').innerHTML = `
+            <div class="alert alert-info">
+              <strong>Session Statistics:</strong><br>
+              Total Students: ${stats.total_students}<br>
+              Present: ${stats.present_count}<br>
+              Absent: ${stats.absent_count}<br>
+              Attendance Rate: ${stats.attendance_rate}%
+            </div>
+          `;
         }
       } catch (error) {
-        hideLoading();
-        console.error('Error testing API:', error);
-        showNotification('API test error: ' + error.message, 'error');
+        console.error('Error loading session stats:', error);
       }
     }
 
-    // Export attendance data
-    function exportAttendanceData() {
-      if (!currentSessionId) {
-        showNotification('No active session to export', 'warning');
-        return;
-      }
 
-      // Create CSV content
-      const csvContent = generateAttendanceCSV();
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `attendance_session_${currentSessionId}_${new Date().toISOString().split('T')[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
 
-      showNotification('Attendance data exported successfully!', 'success');
-    }
-
-    // Generate CSV content
-    function generateAttendanceCSV() {
-      const headers = ['Student ID', 'Name', 'Time', 'Status', 'Method'];
-      const rows = Array.from(attendanceList.querySelectorAll('tr')).map(row => {
-        const cells = row.querySelectorAll('td');
-        return [
-          cells[0].textContent,
-          cells[1].textContent.replace(/\s+/g, ' ').trim(),
-          cells[2].textContent,
-          cells[3].textContent.replace(/<[^>]*>/g, '').trim(),
-          cells[4].textContent
-        ];
-      });
-
-      return [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
-    }
-
-    // Edit attendance record
-    function editAttendance(recordId) {
-      showNotification('Edit functionality will be implemented', 'info');
-    }
-
-    // Utility functions
-    function showLoading(message = 'Loading...') {
-      // You can implement a loading modal here
-      console.log(message);
-    }
-
-    function hideLoading() {
-      // Hide loading modal
-    }
 
     function showNotification(message, type = 'info') {
       // Create and show notification
@@ -1739,38 +1940,83 @@ $userRole = $_SESSION['role'] ?? 'admin';
         .join('');
     }
 
-    // Real face recognition using API
+    // Enhanced face recognition using API with better error handling
     async function processFaceRecognition(imageData) {
-      console.log('Processing face recognition with API...');
-    
+      console.log('🔍 Processing face recognition with API...');
+
       try {
         const formData = new FormData();
         formData.append('image_data', imageData);
         formData.append('session_id', currentSessionId);
         formData.append('csrf_token', csrfToken);
-    
+
+        // Add timeout for the request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
         const response = await fetch('api/attendance-session-api.php?action=process_face_recognition', {
           method: 'POST',
-          body: formData
+          body: formData,
+          signal: controller.signal
         });
-    
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
         const result = await response.json();
-        console.log('Face recognition API result:', result);
-    
+        console.log('📊 Face recognition API result:', result);
+
         if (result.status === 'success') {
-          return {
-            recognized: result.recognized,
-            student_id: result.student_id,
-            confidence: result.confidence,
-            student_name: result.student_name
+          // Enhanced result processing
+          const enhancedResult = {
+            recognized: result.recognized || false,
+            student_id: result.student_id || null,
+            confidence: result.confidence || 0,
+            confidence_level: result.confidence_level || 'low',
+            student_name: result.student_name || null,
+            student_reg: result.student_reg || null,
+            auto_mark: result.auto_mark || false,
+            faces_detected: result.faces_detected || 0,
+            top_matches: result.top_matches || [],
+            timestamp: result.timestamp || new Date().toISOString(),
+            message: result.message || null
           };
+
+          // Log detailed recognition info
+          if (enhancedResult.recognized) {
+            console.log(`✅ Face recognized: ${enhancedResult.student_name || `ID ${enhancedResult.student_id}`} (${enhancedResult.confidence}% confidence, ${enhancedResult.confidence_level} level)`);
+          } else {
+            console.log(`❌ No face match found. Faces detected: ${enhancedResult.faces_detected}`);
+          }
+
+          return enhancedResult;
         } else {
-          console.error('Face recognition API error:', result.message);
-          return { recognized: false };
+          console.error('🚫 Face recognition API error:', result.message);
+          return {
+            recognized: false,
+            error: result.message || 'Face recognition failed',
+            faces_detected: 0
+          };
         }
       } catch (error) {
-        console.error('Face recognition request failed:', error);
-        return { recognized: false };
+        if (error.name === 'AbortError') {
+          console.error('⏰ Face recognition request timed out');
+          return {
+            recognized: false,
+            error: 'Face recognition request timed out',
+            timeout: true
+          };
+        }
+
+        console.error('💥 Face recognition request failed:', error);
+        return {
+          recognized: false,
+          error: error.message || 'Network error during face recognition',
+          network_error: true
+        };
       }
     }
 
@@ -1875,15 +2121,34 @@ $userRole = $_SESSION['role'] ?? 'admin';
       }
     });
 
-    // Face Recognition Implementation
+    // Enhanced Face Recognition Implementation
     let faceRecognitionInterval = null;
+    let lastRecognitionTime = 0;
+    let recognitionCooldown = 5000; // 5 seconds cooldown after successful recognition
+    let consecutiveFailures = 0;
+    let maxConsecutiveFailures = 3;
 
     function startFaceRecognition() {
       if (!faceRecognitionActive || !webcamPreview.srcObject) return;
 
+      console.log('🚀 Starting enhanced face recognition...');
+
       faceRecognitionInterval = setInterval(async () => {
         try {
+          // Check if we're in cooldown period
+          const now = Date.now();
+          if (now - lastRecognitionTime < recognitionCooldown) {
+            return; // Skip this cycle
+          }
+
           const video = webcamPreview;
+
+          // Ensure video is ready
+          if (video.videoWidth === 0 || video.videoHeight === 0) {
+            console.log('Video not ready yet, skipping...');
+            return;
+          }
+
           const canvas = document.createElement('canvas');
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
@@ -1893,38 +2158,87 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
           const imageData = canvas.toDataURL('image/jpeg', 0.8);
 
-          // Show processing overlay
-          updateFaceRecognitionStatus('🔍 Scanning faces...', 'info');
+          // Show processing overlay with enhanced feedback
+          updateFaceRecognitionStatus('🔍 Scanning for faces...', 'processing');
 
           const result = await processFaceRecognition(imageData);
 
           if (result.recognized && currentSessionId) {
-            // Show success status
+            // Successful recognition
+            consecutiveFailures = 0; // Reset failure counter
+            lastRecognitionTime = now;
+
+            // Enhanced success feedback with validation info
             const studentInfo = result.student_name || `ID ${result.student_id}`;
-            updateFaceRecognitionStatus(`✅ ${studentInfo} recognized!`, 'success');
+            const confidenceText = result.confidence ? ` (${result.confidence}% confidence)` : '';
+            const confidenceLevel = result.confidence_level || 'unknown';
 
-            // Record attendance
-            await recordAttendance(result.student_id, 'face_recognition', 'present');
+            // Check validation results for additional feedback
+            const validation = result.validation || {};
+            let validationMessage = '';
 
-            // Show notification
-            const notificationText = result.student_name ?
-              `${result.student_name} (${result.confidence}% confidence)` :
-              `Student ID ${result.student_id} (${result.confidence}% confidence)`;
-            showNotification(`${notificationText} marked present via face recognition`, 'success');
+            if (!validation.face_size_ok) {
+              validationMessage += ' (Face size improved)';
+            }
+            if (!validation.face_centered) {
+              validationMessage += ' (Positioning improved)';
+            }
+            if (!validation.confidence_margin_ok) {
+              validationMessage += ' (Lighting improved)';
+            }
 
-            // Hide overlay after success
-            setTimeout(() => hideFaceRecognitionOverlay(), 2000);
+            // Show detailed success status
+            const statusMessage = `✅ Face Matched — ${studentInfo}${confidenceText}${validationMessage}`;
+            updateFaceRecognitionStatus(statusMessage, 'success');
+
+            // Record attendance with enhanced logging
+            const attendanceRecorded = await recordAttendance(result.student_id, 'face_recognition', 'present');
+
+            if (attendanceRecorded) {
+              // Enhanced notification with more details
+              const notificationText = result.student_name ?
+                `${result.student_name}${confidenceText}` :
+                `Student ID ${result.student_id}${confidenceText}`;
+
+              showNotification(`🎯 Face Recognition Success: Attendance marked for ${notificationText}`, 'success');
+
+              // Show success overlay longer for better visibility
+              setTimeout(() => hideFaceRecognitionOverlay(), 4000);
+
+              // Add visual feedback to webcam container
+              flashWebcamContainer('success');
+            } else {
+              updateFaceRecognitionStatus('⚠️ Face recognized but attendance recording failed', 'warning');
+              setTimeout(() => hideFaceRecognitionOverlay(), 3000);
+            }
+
           } else {
-            // Show no match status briefly
-            updateFaceRecognitionStatus('❌ No face recognized', 'error');
+            // No match found
+            consecutiveFailures++;
+
+            if (consecutiveFailures >= maxConsecutiveFailures) {
+              // Show different message after multiple failures
+              updateFaceRecognitionStatus('🔄 Scanning... No matches yet', 'info');
+            } else {
+              updateFaceRecognitionStatus('❌ No face match found', 'error');
+            }
+
+            // Hide overlay after shorter time for non-matches
             setTimeout(() => hideFaceRecognitionOverlay(), 1500);
           }
 
         } catch (error) {
           console.error('Face recognition error:', error);
-          hideFaceRecognitionOverlay();
+          consecutiveFailures++;
+
+          if (consecutiveFailures >= maxConsecutiveFailures) {
+            updateFaceRecognitionStatus('⚠️ Face recognition temporarily unavailable', 'warning');
+            setTimeout(() => hideFaceRecognitionOverlay(), 2000);
+          } else {
+            hideFaceRecognitionOverlay();
+          }
         }
-      }, 3000); // Check every 3 seconds
+      }, 2500); // Check every 2.5 seconds for better responsiveness
     }
 
     function stopFaceRecognition() {
@@ -1951,12 +2265,23 @@ $userRole = $_SESSION['role'] ?? 'admin';
 
       // Update styling based on type
       status.className = '';
+      overlay.className = 'webcam-overlay'; // Reset classes
+
       if (type === 'success') {
         status.classList.add('text-success', 'fw-bold');
+        overlay.classList.add('success');
       } else if (type === 'error') {
         status.classList.add('text-danger', 'fw-bold');
+        overlay.classList.add('error');
+      } else if (type === 'warning') {
+        status.classList.add('text-warning', 'fw-bold');
+        overlay.classList.add('warning');
+      } else if (type === 'processing') {
+        status.classList.add('text-info', 'fw-bold');
+        overlay.classList.add('processing');
       } else {
         status.classList.add('text-light');
+        overlay.classList.add('info');
       }
 
       overlay.style.display = 'flex';
@@ -1965,6 +2290,24 @@ $userRole = $_SESSION['role'] ?? 'admin';
     function hideFaceRecognitionOverlay() {
       const overlay = document.getElementById('webcam-overlay');
       overlay.style.display = 'none';
+      overlay.className = 'webcam-overlay'; // Reset classes
+    }
+
+    // Enhanced visual feedback function
+    function flashWebcamContainer(type = 'success') {
+      const container = document.getElementById('webcam-container');
+      if (!container) return;
+
+      // Remove existing flash classes
+      container.classList.remove('flash-success', 'flash-error', 'flash-info');
+
+      // Add appropriate flash class
+      container.classList.add(`flash-${type}`);
+
+      // Remove flash class after animation
+      setTimeout(() => {
+        container.classList.remove(`flash-${type}`);
+      }, 1000);
     }
 
     // Enhanced webcam start with face recognition
@@ -1973,6 +2316,7 @@ $userRole = $_SESSION['role'] ?? 'admin';
       await originalStartWebcam();
       if (faceRecognitionActive) {
         startFaceRecognition();
+        updateFaceRecognitionIndicator('active');
       }
     };
 
@@ -1980,7 +2324,37 @@ $userRole = $_SESSION['role'] ?? 'admin';
     stopWebcam = function() {
       originalStopWebcam();
       stopFaceRecognition();
+      updateFaceRecognitionIndicator('inactive');
     };
+
+    // Face recognition indicator control
+    function updateFaceRecognitionIndicator(status) {
+      const indicator = document.getElementById('face-recognition-indicator');
+      const light = indicator.querySelector('.indicator-light');
+      const text = indicator.querySelector('.indicator-text');
+
+      if (!indicator) return;
+
+      light.className = 'indicator-light';
+
+      switch (status) {
+        case 'active':
+          indicator.classList.remove('d-none');
+          light.classList.add('active');
+          text.textContent = 'Face Recognition Active';
+          break;
+        case 'inactive':
+          indicator.classList.add('d-none');
+          break;
+        case 'error':
+          indicator.classList.remove('d-none');
+          light.classList.add('error');
+          text.textContent = 'Face Recognition Error';
+          break;
+        default:
+          indicator.classList.add('d-none');
+      }
+    }
 
     // Fingerprint Authentication
     async function handleFingerprintAuth() {

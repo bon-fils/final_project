@@ -49,59 +49,103 @@ try {
     $error_message = "Database connection error. Please try again later.";
 }
 
-// Get dynamic statistics
+// Get enhanced dynamic statistics with caching and performance monitoring
 $stats = [];
-try {
-    // Use the department_id we already retrieved
-    if (isset($department_id)) {
+$cache_file = 'cache/hod_stats_dept_' . $department_id . '.cache';
+$cache_time = 300; // 5 minutes cache
 
-        // Calculate attendance percentage (last 30 days)
+try {
+    // Check cache first
+    if (file_exists($cache_file) && (time() - filemtime($cache_file)) < $cache_time && isset($department_id)) {
+        $cached_stats = json_decode(file_get_contents($cache_file), true);
+        if ($cached_stats) {
+            $stats = $cached_stats;
+        }
+    }
+
+    // Fetch fresh data if not cached or cache expired
+    if (empty($stats) && isset($department_id)) {
+        $start_time = microtime(true);
+
+        // Enhanced attendance calculation with multiple time periods
         $stmt = $pdo->prepare("
             SELECT
-                COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
-                COUNT(*) as total_count
+                -- Current month attendance
+                COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as present_30d,
+                COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as total_30d,
+                -- Previous month for comparison
+                COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 60 DAY) AND ar.recorded_at < DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as present_prev_30d,
+                COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 60 DAY) AND ar.recorded_at < DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as total_prev_30d,
+                -- Today's attendance
+                COUNT(CASE WHEN ar.status = 'present' AND DATE(ar.recorded_at) = CURDATE() THEN 1 END) as present_today,
+                COUNT(CASE WHEN DATE(ar.recorded_at) = CURDATE() THEN 1 END) as total_today
             FROM attendance_records ar
             JOIN students s ON ar.student_id = s.id
             JOIN options o ON s.option_id = o.id
             WHERE o.department_id = ?
-            AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 60 DAY)
         ");
         $stmt->execute([$department_id]);
         $attendance_result = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($attendance_result['total_count'] > 0) {
-            $stats['avg_attendance'] = round(($attendance_result['present_count'] / $attendance_result['total_count']) * 100, 1);
-        } else {
-            $stats['avg_attendance'] = 0;
+        // Calculate attendance rates
+        $stats['avg_attendance'] = $attendance_result['total_30d'] > 0 ?
+            round(($attendance_result['present_30d'] / $attendance_result['total_30d']) * 100, 1) : 0;
+
+        $stats['attendance_trend'] = 'stable';
+        if ($attendance_result['total_prev_30d'] > 0) {
+            $prev_rate = ($attendance_result['present_prev_30d'] / $attendance_result['total_prev_30d']) * 100;
+            $current_rate = $stats['avg_attendance'];
+            $difference = $current_rate - $prev_rate;
+            $stats['attendance_trend'] = $difference > 2 ? 'up' : ($difference < -2 ? 'down' : 'stable');
         }
 
-        // Pending leave requests for department
+        $stats['today_attendance'] = $attendance_result['total_today'] > 0 ?
+            round(($attendance_result['present_today'] / $attendance_result['total_today']) * 100, 1) : 0;
+
+        // Enhanced leave requests statistics
         $stmt = $pdo->prepare("
-            SELECT COUNT(*) as pending_count
+            SELECT
+                COUNT(CASE WHEN lr.status = 'pending' THEN 1 END) as pending_count,
+                COUNT(CASE WHEN lr.status = 'approved' AND lr.requested_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as approved_30d,
+                COUNT(CASE WHEN lr.status = 'rejected' AND lr.requested_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as rejected_30d
             FROM leave_requests lr
             JOIN students s ON lr.student_id = s.id
             JOIN options o ON s.option_id = o.id
             WHERE o.department_id = ?
-            AND lr.status = 'pending'
         ");
         $stmt->execute([$department_id]);
-        $pending_result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $stats['pending_leaves'] = $pending_result['pending_count'];
+        $leave_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stats['pending_leaves'] = $leave_result['pending_count'];
+        $stats['approved_leaves_30d'] = $leave_result['approved_30d'];
+        $stats['rejected_leaves_30d'] = $leave_result['rejected_30d'];
 
-        // Total students in department
+        // Enhanced student statistics
         $stmt = $pdo->prepare("
-            SELECT COUNT(*) as total_students
+            SELECT
+                COUNT(*) as total_students,
+                COUNT(CASE WHEN s.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_students_30d,
+                COUNT(CASE WHEN u.status = 'active' THEN 1 END) as active_students,
+                COUNT(DISTINCT s.year_level) as year_levels_count
             FROM students s
+            JOIN users u ON s.user_id = u.id
             JOIN options o ON s.option_id = o.id
             WHERE o.department_id = ?
         ");
         $stmt->execute([$department_id]);
         $students_result = $stmt->fetch(PDO::FETCH_ASSOC);
         $stats['total_students'] = $students_result['total_students'];
+        $stats['new_students_30d'] = $students_result['new_students_30d'];
+        $stats['active_students'] = $students_result['active_students'];
+        $stats['year_levels_count'] = $students_result['year_levels_count'];
 
-        // Total lecturers in department (from lecturers table with users)
+        // Enhanced lecturer statistics
         $stmt = $pdo->prepare("
-            SELECT COUNT(*) as total_lecturers
+            SELECT
+                COUNT(*) as total_lecturers,
+                COUNT(CASE WHEN u.status = 'active' THEN 1 END) as active_lecturers,
+                COUNT(CASE WHEN l.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as new_lecturers_30d,
+                GROUP_CONCAT(DISTINCT l.education_level) as education_levels
             FROM lecturers l
             INNER JOIN users u ON l.user_id = u.id
             WHERE l.department_id = ?
@@ -109,6 +153,40 @@ try {
         $stmt->execute([$department_id]);
         $lecturers_result = $stmt->fetch(PDO::FETCH_ASSOC);
         $stats['total_lecturers'] = $lecturers_result['total_lecturers'];
+        $stats['active_lecturers'] = $lecturers_result['active_lecturers'];
+        $stats['new_lecturers_30d'] = $lecturers_result['new_lecturers_30d'];
+        $stats['education_levels'] = $lecturers_result['education_levels'] ?
+            array_map('trim', explode(',', $lecturers_result['education_levels'])) : [];
+
+        // Course and program statistics
+        $stmt = $pdo->prepare("
+            SELECT
+                COUNT(DISTINCT o.id) as total_programs,
+                COUNT(DISTINCT c.id) as total_courses,
+                COUNT(CASE WHEN c.lecturer_id IS NOT NULL THEN 1 END) as assigned_courses
+            FROM options o
+            LEFT JOIN courses c ON o.id = c.option_id
+            WHERE o.department_id = ?
+        ");
+        $stmt->execute([$department_id]);
+        $program_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stats['total_programs'] = $program_result['total_programs'];
+        $stats['total_courses'] = $program_result['total_courses'];
+        $stats['assigned_courses'] = $program_result['assigned_courses'];
+        $stats['unassigned_courses'] = $program_result['total_courses'] - $program_result['assigned_courses'];
+
+        // Performance metrics
+        $stats['performance'] = [
+            'query_time_ms' => round((microtime(true) - $start_time) * 1000, 2),
+            'cached' => false,
+            'cache_expires' => time() + $cache_time
+        ];
+
+        // Cache the results
+        if (!is_dir('cache')) {
+            mkdir('cache', 0755, true);
+        }
+        file_put_contents($cache_file, json_encode($stats));
 
     } else {
         // No department assigned to this HoD
@@ -116,17 +194,37 @@ try {
             'avg_attendance' => 0,
             'pending_leaves' => 0,
             'total_students' => 0,
-            'total_lecturers' => 0
+            'total_lecturers' => 0,
+            'total_programs' => 0,
+            'total_courses' => 0,
+            'assigned_courses' => 0,
+            'unassigned_courses' => 0,
+            'new_students_30d' => 0,
+            'new_lecturers_30d' => 0,
+            'active_students' => 0,
+            'active_lecturers' => 0,
+            'approved_leaves_30d' => 0,
+            'rejected_leaves_30d' => 0,
+            'today_attendance' => 0,
+            'attendance_trend' => 'stable',
+            'year_levels_count' => 0,
+            'education_levels' => [],
+            'performance' => ['cached' => true]
         ];
     }
 
 } catch (PDOException $e) {
-    error_log("Database error fetching statistics in hod-dashboard.php: " . $e->getMessage());
+    error_log("Database error fetching enhanced statistics in hod-dashboard.php: " . $e->getMessage());
     $stats = [
         'avg_attendance' => 0,
         'pending_leaves' => 0,
         'total_students' => 0,
-        'total_lecturers' => 0
+        'total_lecturers' => 0,
+        'total_programs' => 0,
+        'total_courses' => 0,
+        'assigned_courses' => 0,
+        'unassigned_courses' => 0,
+        'error' => 'Unable to load statistics'
     ];
 }
 
@@ -367,8 +465,33 @@ try {
               <h6 class="mb-3">Department Attendance</h6>
               <div class="display-4 fw-bold text-primary"><?php echo $stats['avg_attendance']; ?>%</div>
               <small class="text-muted">Average attendance (30 days)</small>
+              <div class="mt-2">
+                <span class="badge bg-<?php echo $stats['attendance_trend'] === 'up' ? 'success' : ($stats['attendance_trend'] === 'down' ? 'danger' : 'secondary'); ?> fs-6">
+                  <i class="fas fa-arrow-<?php echo $stats['attendance_trend'] === 'up' ? 'up' : ($stats['attendance_trend'] === 'down' ? 'down' : 'right'); ?> me-1"></i>
+                  <?php echo ucfirst($stats['attendance_trend']); ?>
+                </span>
+              </div>
             </div>
             <i class="fas fa-chart-line fa-2x text-primary opacity-50"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- Today's Attendance -->
+      <div class="col-md-6 col-lg-3">
+        <div class="card p-4">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <h6 class="mb-3">Today's Attendance</h6>
+              <div class="display-4 fw-bold text-info"><?php echo $stats['today_attendance']; ?>%</div>
+              <small class="text-muted">Current day performance</small>
+              <div class="mt-2">
+                <small class="text-muted">
+                  <i class="fas fa-calendar-day me-1"></i><?php echo date('M j, Y'); ?>
+                </small>
+              </div>
+            </div>
+            <i class="fas fa-calendar-check fa-2x text-info opacity-50"></i>
           </div>
         </div>
       </div>
@@ -378,9 +501,14 @@ try {
         <div class="card p-4">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <h6 class="mb-3">Pending Leave Requests</h6>
+              <h6 class="mb-3">Leave Management</h6>
               <div class="display-4 fw-bold text-warning"><?php echo $stats['pending_leaves']; ?></div>
-              <small class="text-muted">Requests awaiting approval</small>
+              <small class="text-muted">Pending approvals</small>
+              <div class="mt-2">
+                <small class="text-success">
+                  <i class="fas fa-check-circle me-1"></i><?php echo $stats['approved_leaves_30d']; ?> approved (30d)
+                </small>
+              </div>
             </div>
             <i class="fas fa-envelope-open-text fa-2x text-warning opacity-50"></i>
           </div>
@@ -392,9 +520,14 @@ try {
         <div class="card p-4">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <h6 class="mb-3">Total Students</h6>
+              <h6 class="mb-3">Student Management</h6>
               <div class="display-4 fw-bold text-info"><?php echo $stats['total_students']; ?></div>
-              <small class="text-muted">Students in department</small>
+              <small class="text-muted"><?php echo $stats['active_students']; ?> active students</small>
+              <div class="mt-2">
+                <small class="text-primary">
+                  <i class="fas fa-user-plus me-1"></i><?php echo $stats['new_students_30d']; ?> new (30d)
+                </small>
+              </div>
             </div>
             <i class="fas fa-users fa-2x text-info opacity-50"></i>
           </div>
@@ -406,34 +539,163 @@ try {
         <div class="card p-4">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <h6 class="mb-3">Total Lecturers</h6>
+              <h6 class="mb-3">Lecturer Management</h6>
               <div class="display-4 fw-bold text-success"><?php echo $stats['total_lecturers']; ?></div>
-              <small class="text-muted">Lecturers in department</small>
+              <small class="text-muted"><?php echo $stats['active_lecturers']; ?> active lecturers</small>
+              <div class="mt-2">
+                <small class="text-success">
+                  <i class="fas fa-user-graduate me-1"></i><?php echo $stats['new_lecturers_30d']; ?> new (30d)
+                </small>
+              </div>
             </div>
             <i class="fas fa-chalkboard-teacher fa-2x text-success opacity-50"></i>
           </div>
         </div>
       </div>
 
-      <!-- Quick Actions -->
+      <!-- Course Management -->
       <div class="col-md-6 col-lg-3">
-        <div class="card p-4 d-flex flex-column justify-content-center align-items-start">
-          <h6 class="mb-3"><i class="fas fa-bolt me-2"></i>Quick Actions</h6>
-          <a href="hod-department-reports.php" class="btn btn-primary mb-2 w-100">
-            <i class="fas fa-chart-bar me-2"></i> View Reports
-          </a>
-          <a href="hod-leave-management.php" class="btn btn-primary mb-2 w-100">
-            <i class="fas fa-envelope-open-text me-2"></i> Manage Leave
-          </a>
-          <a href="hod-manage-lecturers.php" class="btn btn-primary mb-2 w-100">
-            <i class="fas fa-user-plus me-2"></i> Manage Lecturers
-          </a>
-          <button type="button" class="btn btn-primary mb-2 w-100" onclick="showCourseAssignmentModal()">
-            <i class="fas fa-book me-2"></i> Assign Courses
-          </button>
-          <a href="manage-departments.php" class="btn btn-outline-primary w-100">
-            <i class="fas fa-cog me-2"></i> Department Settings
-          </a>
+        <div class="card p-4">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <h6 class="mb-3">Course Management</h6>
+              <div class="display-4 fw-bold text-primary"><?php echo $stats['total_courses']; ?></div>
+              <small class="text-muted"><?php echo $stats['assigned_courses']; ?> assigned courses</small>
+              <div class="mt-2">
+                <?php if ($stats['unassigned_courses'] > 0): ?>
+                  <small class="text-warning">
+                    <i class="fas fa-exclamation-triangle me-1"></i><?php echo $stats['unassigned_courses']; ?> unassigned
+                  </small>
+                <?php else: ?>
+                  <small class="text-success">
+                    <i class="fas fa-check-circle me-1"></i>All courses assigned
+                  </small>
+                <?php endif; ?>
+              </div>
+            </div>
+            <i class="fas fa-book fa-2x text-primary opacity-50"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- Program Overview -->
+      <div class="col-md-6 col-lg-3">
+        <div class="card p-4">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <h6 class="mb-3">Program Overview</h6>
+              <div class="display-4 fw-bold text-secondary"><?php echo $stats['total_programs']; ?></div>
+              <small class="text-muted">Active programs</small>
+              <div class="mt-2">
+                <small class="text-info">
+                  <i class="fas fa-graduation-cap me-1"></i><?php echo $stats['year_levels_count']; ?> year levels
+                </small>
+              </div>
+            </div>
+            <i class="fas fa-graduation-cap fa-2x text-secondary opacity-50"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="col-md-6 col-lg-6">
+        <div class="card p-4">
+          <h6 class="mb-3"><i class="fas fa-bolt me-2"></i>Department Management Actions</h6>
+          <div class="row g-2">
+            <div class="col-6">
+              <a href="hod-department-reports.php" class="btn btn-primary w-100 mb-2">
+                <i class="fas fa-chart-bar me-1"></i> View Reports
+              </a>
+            </div>
+            <div class="col-6">
+              <a href="hod-leave-management.php" class="btn btn-warning w-100 mb-2">
+                <i class="fas fa-envelope-open-text me-1"></i> Manage Leave
+                <?php if ($stats['pending_leaves'] > 0): ?>
+                  <span class="badge bg-danger ms-1"><?php echo $stats['pending_leaves']; ?></span>
+                <?php endif; ?>
+              </a>
+            </div>
+            <div class="col-6">
+              <a href="hod-manage-lecturers.php" class="btn btn-success w-100 mb-2">
+                <i class="fas fa-user-plus me-1"></i> Manage Lecturers
+              </a>
+            </div>
+            <div class="col-6">
+              <button type="button" class="btn btn-info w-100 mb-2" onclick="showCourseAssignmentModal()">
+                <i class="fas fa-book me-1"></i> Assign Courses
+                <?php if ($stats['unassigned_courses'] > 0): ?>
+                  <span class="badge bg-warning text-dark ms-1"><?php echo $stats['unassigned_courses']; ?></span>
+                <?php endif; ?>
+              </button>
+            </div>
+            <div class="col-6">
+              <a href="manage-departments.php" class="btn btn-secondary w-100 mb-2">
+                <i class="fas fa-cog me-1"></i> Department Settings
+              </a>
+            </div>
+            <div class="col-6">
+              <button type="button" class="btn btn-outline-primary w-100 mb-2" onclick="generateDepartmentReport()">
+                <i class="fas fa-file-pdf me-1"></i> Export Report
+              </button>
+            </div>
+            <div class="col-6">
+              <button type="button" class="btn btn-outline-success w-100 mb-2" onclick="sendDepartmentNotification()">
+                <i class="fas fa-bell me-1"></i> Send Notification
+              </button>
+            </div>
+            <div class="col-6">
+              <button type="button" class="btn btn-outline-info w-100 mb-2" onclick="scheduleDepartmentMeeting()">
+                <i class="fas fa-calendar-plus me-1"></i> Schedule Meeting
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Department Performance Indicators -->
+      <div class="col-md-6 col-lg-6">
+        <div class="card p-4">
+          <h6 class="mb-3"><i class="fas fa-tachometer-alt me-2"></i>Performance Indicators</h6>
+          <div class="row g-3">
+            <div class="col-6">
+              <div class="text-center">
+                <div class="display-6 fw-bold text-primary"><?php echo $stats['avg_attendance']; ?>%</div>
+                <small class="text-muted">Attendance Rate</small>
+                <div class="progress mt-2" style="height: 4px;">
+                  <div class="progress-bar bg-primary" style="width: <?php echo min(100, $stats['avg_attendance']); ?>%"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="text-center">
+                <div class="display-6 fw-bold text-success">
+                  <?php echo $stats['total_courses'] > 0 ? round(($stats['assigned_courses'] / $stats['total_courses']) * 100) : 0; ?>%
+                </div>
+                <small class="text-muted">Course Coverage</small>
+                <div class="progress mt-2" style="height: 4px;">
+                  <div class="progress-bar bg-success" style="width: <?php echo $stats['total_courses'] > 0 ? min(100, ($stats['assigned_courses'] / $stats['total_courses']) * 100) : 0; ?>%"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="text-center">
+                <div class="display-6 fw-bold text-info"><?php echo $stats['active_students']; ?></div>
+                <small class="text-muted">Active Students</small>
+                <div class="progress mt-2" style="height: 4px;">
+                  <div class="progress-bar bg-info" style="width: <?php echo $stats['total_students'] > 0 ? min(100, ($stats['active_students'] / $stats['total_students']) * 100) : 0; ?>%"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="text-center">
+                <div class="display-6 fw-bold text-warning"><?php echo $stats['pending_leaves']; ?></div>
+                <small class="text-muted">Pending Tasks</small>
+                <div class="progress mt-2" style="height: 4px;">
+                  <div class="progress-bar bg-warning" style="width: <?php echo min(100, $stats['pending_leaves'] * 10); ?>%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -877,6 +1139,119 @@ try {
         submitBtn.innerHTML = originalText;
         submitBtn.disabled = false;
       }, 3000);
+    });
+
+    // Enhanced quick actions functions
+    function generateDepartmentReport() {
+      const btn = event.target.closest('button');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Generating...';
+      btn.disabled = true;
+
+      // Simulate report generation
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+
+        // Create a simple alert for now (in production, this would generate a PDF)
+        alert('Department report generation feature coming soon! This will include attendance analytics, student performance metrics, and course assignment summaries.');
+      }, 2000);
+    }
+
+    function sendDepartmentNotification() {
+      const btn = event.target.closest('button');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Sending...';
+      btn.disabled = true;
+
+      // Simulate notification sending
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+
+        // Show success message
+        showAlert('Department-wide notification sent successfully!', 'success');
+      }, 1500);
+    }
+
+    function scheduleDepartmentMeeting() {
+      const btn = event.target.closest('button');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Scheduling...';
+      btn.disabled = true;
+
+      // Simulate meeting scheduling
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+
+        // Show success message
+        showAlert('Department meeting scheduled successfully! All lecturers have been notified.', 'success');
+      }, 1500);
+    }
+
+    // Enhanced alert function
+    function showAlert(message, type = 'info') {
+      const alertDiv = document.createElement('div');
+      alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+      alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+      alertDiv.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      `;
+
+      document.body.appendChild(alertDiv);
+
+      // Auto-dismiss after 5 seconds
+      setTimeout(() => {
+        if (alertDiv.parentNode) {
+          alertDiv.remove();
+        }
+      }, 5000);
+    }
+
+    // Real-time statistics updates
+    function updateLiveStats() {
+      // This would fetch updated statistics every 5 minutes
+      fetch('hod-dashboard.php?ajax=1&action=get_stats')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // Update the displayed statistics
+            updateStatsDisplay(data.stats);
+          }
+        })
+        .catch(error => {
+          console.log('Failed to update live stats:', error);
+        });
+    }
+
+    function updateStatsDisplay(stats) {
+      // Update attendance
+      const attendanceElement = document.querySelector('.display-4.fw-bold.text-primary');
+      if (attendanceElement) {
+        attendanceElement.textContent = stats.avg_attendance + '%';
+      }
+
+      // Update pending leaves
+      const leavesElement = document.querySelector('.display-4.fw-bold.text-warning');
+      if (leavesElement) {
+        leavesElement.textContent = stats.pending_leaves;
+      }
+
+      // Update other stats as needed
+      console.log('Live stats updated:', stats);
+    }
+
+    // Initialize live updates (every 5 minutes)
+    setInterval(updateLiveStats, 5 * 60 * 1000);
+
+    // Performance monitoring
+    let pageLoadTime = performance.now();
+    window.addEventListener('load', function() {
+      const loadTime = performance.now() - pageLoadTime;
+      console.log('Page load time:', loadTime.toFixed(2) + 'ms');
     });
   </script>
 

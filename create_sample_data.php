@@ -1,6 +1,29 @@
 <?php
 require_once 'config.php';
 
+echo "=== CREATING TEST STUDENT REGISTRATION DATA ===\n\n";
+
+// Create test_students table for testing
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS test_students (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            reg_no VARCHAR(50) NOT NULL UNIQUE,
+            first_name VARCHAR(100) NOT NULL,
+            last_name VARCHAR(100) NOT NULL,
+            face_image_1 VARCHAR(255),
+            face_image_2 VARCHAR(255),
+            face_image_3 VARCHAR(255),
+            face_image_4 VARCHAR(255),
+            status ENUM('active','inactive') DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+    echo "✅ Test students table created\n";
+} catch (Exception $e) {
+    echo "❌ Error creating test table: " . $e->getMessage() . "\n";
+}
+
 echo "=== CREATING SAMPLE ATTENDANCE DATA ===\n\n";
 
 try {

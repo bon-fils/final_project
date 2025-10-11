@@ -49,12 +49,6 @@ require_once 'backend/classes/DepartmentManager.php';
 require_once 'backend/classes/ValidationManager.php';
 require_once 'backend/classes/Logger.php';
 
-// Include configuration and required classes
-require_once 'config.php';
-require_once 'backend/classes/DepartmentManager.php';
-require_once 'backend/classes/ValidationManager.php';
-require_once 'backend/classes/Logger.php';
-
 session_start();
 
 // Security headers
@@ -100,10 +94,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
     file_put_contents($rateLimitFile, json_encode($rateLimitData), LOCK_EX);
 }
 
-// Check authentication
+// Check authentication - handle AJAX requests differently
+$is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+
 if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
-    header('Location: login.php');
-    exit;
+    if ($is_ajax) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Session expired or insufficient permissions. Please login again.',
+            'error_code' => 'AUTHENTICATION_FAILED',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+        exit;
+    } else {
+        header('Location: login.php');
+        exit;
+    }
 }
 
 // Initialize CSRF token
@@ -111,10 +119,35 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// Initialize managers
-$departmentManager = new DepartmentManager($pdo);
-$validator = new ValidationManager();
-$logger = new Logger();
+// Initialize managers (only when needed for AJAX or form processing)
+$departmentManager = null;
+$validator = null;
+$logger = null;
+
+function getDepartmentManager() {
+    global $departmentManager, $pdo, $logger;
+    if ($departmentManager === null) {
+        $logger = new Logger();
+        $departmentManager = new DepartmentManager($pdo);
+    }
+    return $departmentManager;
+}
+
+function getValidator() {
+    global $validator;
+    if ($validator === null) {
+        $validator = new ValidationManager();
+    }
+    return $validator;
+}
+
+function getLogger() {
+    global $logger;
+    if ($logger === null) {
+        $logger = new Logger();
+    }
+    return $logger;
+}
 
 // Utility Functions
 function jsonResponse($status, $message, $data = [], $httpCode = 200) {
@@ -137,7 +170,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
         // Validate CSRF token for state-changing operations
         $csrfActions = ['add_department', 'delete_department', 'add_program', 'delete_program', 'update_department_hod'];
         if (in_array($action, $csrfActions)) {
-            $csrfValidation = $validator->validateCSRF($_POST['csrf_token'] ?? '', $_SESSION['csrf_token']);
+            $csrfValidation = getValidator()->validateCSRF($_POST['csrf_token'] ?? '', $_SESSION['csrf_token']);
             if (!$csrfValidation['valid']) {
                 jsonResponse('error', $csrfValidation['message'], [], 403);
             }
@@ -145,7 +178,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
         switch ($action) {
             case 'list_departments':
-                $result = $departmentManager->getAllDepartments();
+                $result = getDepartmentManager()->getAllDepartments();
                 if ($result['success']) {
                     jsonResponse('success', 'Departments retrieved', [
                         'departments' => $result['data'],
@@ -157,16 +190,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 break;
 
             case 'get_available_hods':
-                $hods = $departmentManager->getAvailableHoDs();
+                $hods = getDepartmentManager()->getAvailableHoDs();
                 jsonResponse('success', 'Available HODs retrieved', ['hods' => $hods]);
                 break;
 
             case 'add_department':
-                $name = $validator->sanitizeInput($_POST['department_name'] ?? '');
+                $name = getValidator()->sanitizeInput($_POST['department_name'] ?? '');
                 $hodId = !empty($_POST['hod_id']) ? (int)$_POST['hod_id'] : null;
-                $programs = $validator->sanitizeInput($_POST['programs'] ?? []);
+                $programs = getValidator()->sanitizeInput($_POST['programs'] ?? []);
 
-                $result = $departmentManager->createDepartment($name, $hodId, $programs);
+                $result = getDepartmentManager()->createDepartment($name, $hodId, $programs);
                 if ($result['success']) {
                     jsonResponse('success', $result['message'], $result['data']);
                 } else {
@@ -176,12 +209,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             case 'delete_department':
                 $deptId = (int)($_POST['department_id'] ?? 0);
-                $idValidation = $validator->validateId($deptId, 'Department ID');
+                $idValidation = getValidator()->validateId($deptId, 'Department ID');
                 if (!$idValidation['valid']) {
                     jsonResponse('error', $idValidation['message'], [], 400);
                 }
 
-                $result = $departmentManager->deleteDepartment($deptId);
+                $result = getDepartmentManager()->deleteDepartment($deptId);
                 if ($result['success']) {
                     jsonResponse('success', $result['message'], $result['data']);
                 } else {
@@ -191,15 +224,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             case 'add_program':
                 $deptId = (int)($_POST['department_id'] ?? 0);
-                $programName = $validator->sanitizeInput($_POST['program_name'] ?? '');
-                $status = $validator->sanitizeInput($_POST['status'] ?? 'active');
+                $programName = getValidator()->sanitizeInput($_POST['program_name'] ?? '');
+                $status = getValidator()->sanitizeInput($_POST['status'] ?? 'active');
 
-                $deptValidation = $validator->validateId($deptId, 'Department ID');
+                $deptValidation = getValidator()->validateId($deptId, 'Department ID');
                 if (!$deptValidation['valid']) {
                     jsonResponse('error', $deptValidation['message'], [], 400);
                 }
 
-                $result = $departmentManager->addProgram($deptId, $programName, $status);
+                $result = getDepartmentManager()->addProgram($deptId, $programName, $status);
                 if ($result['success']) {
                     jsonResponse('success', $result['message'], $result['data']);
                 } else {
@@ -209,9 +242,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             case 'update_program_status':
                 $progId = (int)($_POST['program_id'] ?? 0);
-                $status = $validator->sanitizeInput($_POST['status'] ?? '');
+                $status = getValidator()->sanitizeInput($_POST['status'] ?? '');
 
-                $idValidation = $validator->validateId($progId, 'Program ID');
+                $idValidation = getValidator()->validateId($progId, 'Program ID');
                 if (!$idValidation['valid']) {
                     jsonResponse('error', $idValidation['message'], [], 400);
                 }
@@ -220,7 +253,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                     jsonResponse('error', 'Invalid status value', [], 400);
                 }
 
-                $result = $departmentManager->updateProgramStatus($progId, $status);
+                $result = getDepartmentManager()->updateProgramStatus($progId, $status);
                 if ($result['success']) {
                     jsonResponse('success', $result['message']);
                 } else {
@@ -230,12 +263,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             case 'get_program_details':
                 $progId = (int)($_GET['program_id'] ?? 0);
-                $idValidation = $validator->validateId($progId, 'Program ID');
+                $idValidation = getValidator()->validateId($progId, 'Program ID');
                 if (!$idValidation['valid']) {
                     jsonResponse('error', $idValidation['message'], [], 400);
                 }
 
-                $result = $departmentManager->getProgramDetails($progId);
+                $result = getDepartmentManager()->getProgramDetails($progId);
                 if ($result['success']) {
                     jsonResponse('success', 'Program details retrieved', $result['data']);
                 } else {
@@ -290,17 +323,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
 
             case 'delete_program':
                 $progId = (int)($_POST['program_id'] ?? 0);
-                $idValidation = $validator->validateId($progId, 'Program ID');
+                $idValidation = getValidator()->validateId($progId, 'Program ID');
                 if (!$idValidation['valid']) {
                     jsonResponse('error', $idValidation['message'], [], 400);
                 }
 
-                $result = $departmentManager->deleteProgram($progId);
+                $result = getDepartmentManager()->deleteProgram($progId);
                 if ($result['success']) {
                     jsonResponse('success', $result['message']);
                 } else {
                     // Log the detailed error for debugging
-                    $logger->error("Delete program failed: " . $result['message']);
+                    getLogger()->error("Delete program failed: " . $result['message']);
                     jsonResponse('error', $result['message'], [], 400);
                 }
                 break;
@@ -309,12 +342,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 $deptId = (int)($_POST['department_id'] ?? 0);
                 $hodId = !empty($_POST['hod_id']) ? (int)$_POST['hod_id'] : null;
 
-                $deptValidation = $validator->validateId($deptId, 'Department ID');
+                $deptValidation = getValidator()->validateId($deptId, 'Department ID');
                 if (!$deptValidation['valid']) {
                     jsonResponse('error', $deptValidation['message'], [], 400);
                 }
 
-                $result = $departmentManager->updateDepartmentHod($deptId, $hodId);
+                $result = getDepartmentManager()->updateDepartmentHod($deptId, $hodId);
                 if ($result['success']) {
                     jsonResponse('success', $result['message'], $result['data']);
                 } else {
@@ -323,7 +356,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 break;
 
             case 'get_statistics':
-                $result = $departmentManager->getStatistics();
+                $result = getDepartmentManager()->getStatistics();
                 if ($result['success']) {
                     jsonResponse('success', 'Statistics retrieved', $result['data']);
                 } else {
@@ -335,7 +368,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                 jsonResponse('error', 'Invalid action', [], 400);
         }
     } catch (Exception $e) {
-        $logger->error("API Error: " . $e->getMessage());
+        getLogger()->error("API Error: " . $e->getMessage());
         jsonResponse('error', 'An unexpected error occurred', [], 500);
     }
     exit;
@@ -1009,7 +1042,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['action'])) {
                                     aria-describedby="hodHelp">
                                 <option value="">-- Select HoD (Optional) --</option>
                                 <?php
-                                $hods = $departmentManager->getAvailableHoDs();
+                                $hods = getDepartmentManager()->getAvailableHoDs();
                                 foreach ($hods as $hod) {
                                     echo "<option value='{$hod['id']}'>{$hod['username']}</option>";
                                 }

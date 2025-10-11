@@ -6,17 +6,38 @@
  */
 
 class DatabaseManager {
+    private static $instance = null;
     private $pdo;
     private $logger;
     private $queryCount = 0;
     private $queryTime = 0;
     private $slowQueryThreshold = 1.0; // seconds
 
-    public function __construct($pdo, $logger = null) {
+    private function __construct($pdo, $logger = null) {
         $this->pdo = $pdo;
         $this->logger = $logger;
         $this->initializeTables();
         $this->createIndexes();
+    }
+
+    /**
+     * Get singleton instance
+     */
+    public static function getInstance($pdo = null, $logger = null) {
+        if (self::$instance === null) {
+            if ($pdo === null) {
+                throw new Exception('PDO connection required for first DatabaseManager instance');
+            }
+            self::$instance = new self($pdo, $logger);
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Get database connection
+     */
+    public function getConnection() {
+        return $this->pdo;
     }
 
     /**

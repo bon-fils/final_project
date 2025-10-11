@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Facial Recognition Attendance Test</title>
+  <style>
+    video, canvas { 
+      display: block; 
+      margin: 10px auto; 
+    }
+    button {
+       display: block;
+       margin: 10px auto;
+       padding: 10px 20px;
+       font-size: 16px;
+    }
+    @keyframes spin {
+       0% { transform: rotate(0deg); }
+       100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="text-align:center;">🎯 Test Attendance Facial Recognition</h2>
+    <p style="text-align:center; color: #666;">Test the facial recognition attendance system. <a href="test-student-registration.html" style="color: #007bff;">Register a student first</a> if you haven't already.</p>
+    <video id="video" width="400" height="300" autoplay style="display: block; margin: 0 auto;"></video>
+  <canvas id="canvas" width="400" height="300" style="display:none;"></canvas>
+  <button id="captureBtn">📸 Capture & Send</button>
+
+  <div id="loading" style="text-align:center; margin-top:20px; display:none;">
+      <div style="border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto 10px;"></div>
+      <p>🔍 Processing face recognition...</p>
+      <p style="font-size: 14px; color: #666;">This may take a few seconds</p>
+  </div>
+
+  <div id="result" style="text-align:center; margin-top:20px;"></div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const resultDiv = document.getElementById('result');
+
+    // Start webfcam
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => { video.srcObject = stream; })
+      .catch(err => { alert('Camera access denied: ' + err); });
+
+    // Capture image and send to PHP
+    document.getElementById('captureBtn').addEventListener('click', () => {
+      const context = canvas.getContext('2d');
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = canvas.toDataURL('image/jpeg');
+
+      // Show loading indicator
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('result').innerHTML = '';
+
+      // Disable button during processing
+      document.getElementById('captureBtn').disabled = true;
+      document.getElementById('captureBtn').textContent = '🔄 Processing...';
+
+      fetch('test-face-match.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageData })
+      })
+      .then(response => response.json())
+      .then(data => {
+        // Hide loading indicator
+        document.getElementById('loading').style.display = 'none';
+
+        // Re-enable button
+        document.getElementById('captureBtn').disabled = false;
+        document.getElementById('captureBtn').textContent = '📸 Capture & Send';
+
+        let html = '<div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin: 10px 0;">';
+
+        if (data.success) {
+          html += '<h3 style="color: #28a745; margin-top: 0;">✅ Recognition Successful</h3>';
+
+          if (data.matched_student) {
+            html += '<p><strong>Student:</strong> ' + data.matched_student.reg_no + '</p>';
+            html += '<p><strong>Confidence:</strong> ' + (data.matched_student.match_score * 100).toFixed(1) + '%</p>';
+          }
+
+          if (data.attendance_recorded) {
+            html += '<p style="color: #28a745;"><strong>✓ Attendance recorded successfully</strong></p>';
+          } else {
+            html += '<p style="color: #ffc107;"><strong>⚠️ ' + (data.message || 'Attendance already recorded') + '</strong></p>';
+          }
+        } else {
+          html += '<h3 style="color: #dc3545; margin-top: 0;">❌ Recognition Failed</h3>';
+          html += '<p>' + (data.message || 'No matching student found') + '</p>';
+          html += '<p style="font-size: 14px; color: #666;">💡 <strong>Tip:</strong> Make sure to register your face first using the <a href="test-student-registration.html" target="_blank">Student Registration</a> form.</p>';
+        }
+
+        if (data.recognition_details && data.recognition_details.method) {
+          html += '<p style="color: #17a2b8; font-size: 12px;"><em>🔧 Method: ' + data.recognition_details.method + '</em></p>';
+        } else if (data.recognition_details && data.recognition_details.simulation) {
+          html += '<p style="color: #17a2b8; font-size: 12px;"><em>🔧 Using simulation mode</em></p>';
+        }
+
+        html += '</div>';
+        resultDiv.innerHTML = html;
+      })
+      .catch(err => {
+        // Hide loading indicator on error
+        document.getElementById('loading').style.display = 'none';
+
+        // Re-enable button
+        document.getElementById('captureBtn').disabled = false;
+        document.getElementById('captureBtn').textContent = '📸 Capture & Send';
+
+        console.error(err);
+        resultDiv.innerHTML = '<div style="border: 1px solid #dc3545; padding: 15px; border-radius: 5px; margin: 10px 0; background: #f8d7da;"><h3 style="color: #721c24; margin-top: 0;">❌ Network Error</h3><p>Failed to connect to the server. Please try again.</p></div>';
+      });
+    });
+  </script>
+  </div>
+</body>
+</html>

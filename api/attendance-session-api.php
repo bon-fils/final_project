@@ -359,13 +359,14 @@ function handleGetCourses(PDO $pdo): array {
         throw new Exception('Invalid department ID');
     }
 
-    // Note: year_level is optional for course loading since courses don't have year levels
+    // Note: year_level is optional for course loading since courses have year column
     // Year level filtering should be applied when getting students, not courses
 
     $user_id = $_SESSION['user_id'];
     $user_role = $_SESSION['role'];
 
-    // For admins, skip department validation - they can access all departments
+    // Get lecturer information for filtering courses
+    $lecturer_info = null;
     if ($user_role !== 'admin') {
         if ($user_role === 'hod') {
             // For HODs, get department from departments table where they are assigned as HOD
@@ -374,16 +375,19 @@ function handleGetCourses(PDO $pdo): array {
             $department = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$department) {
+                // Return empty result instead of error for better UX
                 return [
-                    'status' => 'error',
-                    'message' => 'No department assigned to this HOD'
+                    'status' => 'success',
+                    'message' => 'No department assigned to this HOD',
+                    'data' => [],
+                    'count' => 0
                 ];
             }
 
             $lecturer_department_id = $department['id'];
             $lecturer_id = null; // HODs don't have lecturer_id
         } else {
-            // For lecturers, get department from lecturers table
+            // For lecturers, get department and lecturer info from lecturers table
             $stmt = $pdo->prepare("
                 SELECT l.id as lecturer_id, l.department_id
                 FROM lecturers l
@@ -393,40 +397,23 @@ function handleGetCourses(PDO $pdo): array {
             $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$lecturer || !$lecturer['department_id']) {
+                // Return empty result instead of error for better UX
                 return [
-                    'status' => 'error',
-                    'message' => 'No department assigned to this lecturer'
+                    'status' => 'success',
+                    'message' => 'No department assigned to this lecturer',
+                    'data' => [],
+                    'count' => 0
                 ];
             }
 
             $lecturer_department_id = $lecturer['department_id'];
             $lecturer_id = $lecturer['lecturer_id'];
+            $lecturer_info = $lecturer;
         }
 
         // Verify that the requested department matches the user's department
         if ($department_id != $lecturer_department_id) {
-            return [
-                'status' => 'error',
-                'message' => 'You can only access courses from your assigned department'
-            ];
-        }
-    }
-
-    // Debug: Check if tables exist and have data
-    try {
-        $pdo->query("SELECT 1 FROM courses LIMIT 1");
-        $pdo->query("SELECT 1 FROM lecturers LIMIT 1");
-        $pdo->query("SELECT 1 FROM attendance_sessions LIMIT 1");
-        $pdo->query("SELECT 1 FROM attendance_records LIMIT 1");
-
-        // Check for data issues
-        $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM courses WHERE department_id = ?");
-        $stmt->execute([$department_id]);
-        $course_count = $stmt->fetch()['count'];
-
-        if ($course_count == 0) {
-            error_log("No courses found for department $department_id - returning empty result");
-            // Return empty result instead of throwing exception
+            // Return empty result instead of error
             return [
                 'status' => 'success',
                 'message' => 'No courses available for the selected department',
@@ -434,46 +421,50 @@ function handleGetCourses(PDO $pdo): array {
                 'count' => 0
             ];
         }
+    }
 
-        $stmt = $pdo->query("SELECT COUNT(*) as count FROM lecturers");
-        $lecturer_count = $stmt->fetch()['count'];
+    // Check if courses exist for the lecturer in the department
+    try {
+        $query = "SELECT COUNT(*) as count FROM courses WHERE department_id = ?";
+        $params = [$department_id];
 
-        if ($lecturer_count == 0) {
-            error_log("No lecturers found in database - this may cause issues with course display");
-            // Don't throw exception, just log and continue - courses can still be displayed without lecturer info
+        // For lecturers, also check lecturer_id
+        if ($lecturer_id) {
+            $query .= " AND lecturer_id = ?";
+            $params[] = $lecturer_id;
         }
 
-        // Check if lecturer_id values in courses match lecturers table (but don't fail)
-        $stmt = $pdo->prepare("
-            SELECT c.lecturer_id, COUNT(*) as course_count
-            FROM courses c
-            WHERE c.department_id = ?
-            GROUP BY c.lecturer_id
-        ");
-        $stmt->execute([$department_id]);
-        $lecturer_usage = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt = $pdo->prepare($query);
+        $stmt->execute($params);
+        $course_count = $stmt->fetch()['count'];
 
-        foreach ($lecturer_usage as $usage) {
-            $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM lecturers WHERE id = ?");
-            $stmt->execute([$usage['lecturer_id']]);
-            $lecturer_exists = $stmt->fetch()['count'];
-
-            if ($lecturer_exists == 0) {
-                error_log("Course references non-existent lecturer_id: " . $usage['lecturer_id'] . " - will use fallback");
-                // Don't throw exception, just log and continue
-            }
+        if ($course_count == 0) {
+            // Return empty result instead of throwing exception
+            $message = $lecturer_id ?
+                'No courses assigned to you in the selected department' :
+                'No courses available for the selected department';
+            return [
+                'status' => 'success',
+                'message' => $message,
+                'data' => [],
+                'count' => 0
+            ];
         }
-
-        error_log("Database validation passed: $course_count courses, $lecturer_count lecturers");
 
     } catch (PDOException $e) {
-        error_log("Table check failed: " . $e->getMessage());
-        throw new Exception('Database validation failed: ' . $e->getMessage());
+        error_log("Course count check failed: " . $e->getMessage());
+        // Return empty result on error
+        return [
+            'status' => 'success',
+            'message' => 'Unable to load courses at this time',
+            'data' => [],
+            'count' => 0
+        ];
     }
 
     $params = [$department_id];
 
-    // Get courses for the department
+    // Get courses for the lecturer (courses assigned to them)
     $query = "
         SELECT DISTINCT
             c.id,
@@ -487,17 +478,19 @@ function handleGetCourses(PDO $pdo): array {
         WHERE c.department_id = ?
     ";
 
-    // Add option filtering if specified
-    if ($option_id && $option_id > 0) {
+    // For lecturers, filter by lecturer_id to show only assigned courses
+    if ($lecturer_id) {
+        $query .= " AND c.lecturer_id = ?";
+        $params[] = $lecturer_id;
+    }
+
+    // Add option filtering if specified (but not for lecturers - they should see all their courses)
+    if ($option_id && $option_id > 0 && !$lecturer_id) {
         $query .= " AND c.option_id = ?";
         $params[] = $option_id;
     }
 
     $query .= " ORDER BY c.name";
-
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
-    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     try {
         $stmt = $pdo->prepare($query);
@@ -506,8 +499,6 @@ function handleGetCourses(PDO $pdo): array {
 
         // Log successful query for debugging
         error_log("Courses query executed successfully. Found " . count($courses) . " courses for department $department_id");
-        error_log("Query: $query");
-        error_log("Params: " . implode(', ', $params));
 
         return [
             'status' => 'success',
@@ -519,29 +510,14 @@ function handleGetCourses(PDO $pdo): array {
         error_log("Error in handleGetCourses: " . $e->getMessage());
         error_log("Query: $query");
         error_log("Params: " . implode(', ', $params));
-        error_log("Full error details: " . print_r($e, true));
 
-        // Let's also check if the tables exist and have data
-        try {
-            $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM courses WHERE department_id = ?");
-            $stmt->execute([$department_id]);
-            $course_count = $stmt->fetch()['count'];
-            error_log("Found $course_count courses for department $department_id");
-
-            $stmt = $pdo->query("SELECT COUNT(*) as count FROM lecturers");
-            $lecturer_count = $stmt->fetch()['count'];
-            error_log("Found $lecturer_count lecturers total");
-
-            $stmt = $pdo->prepare("SELECT lecturer_id, COUNT(*) as count FROM courses WHERE department_id = ? GROUP BY lecturer_id");
-            $stmt->execute([$department_id]);
-            $lecturer_usage = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            error_log("Lecturer usage in courses: " . print_r($lecturer_usage, true));
-
-        } catch (Exception $debug_e) {
-            error_log("Debug query failed: " . $debug_e->getMessage());
-        }
-
-        throw new Exception('Database query failed: ' . $e->getMessage());
+        // Return empty result on error instead of throwing exception
+        return [
+            'status' => 'success',
+            'message' => 'Unable to load courses at this time',
+            'data' => [],
+            'count' => 0
+        ];
     }
 }
 
@@ -1144,7 +1120,7 @@ function handleDebugCourses(PDO $pdo): array {
 }
 
 /**
- * Process face recognition by comparing captured image with student photos
+ * Process face recognition using Python script via exec()
  */
 function handleProcessFaceRecognition(PDO $pdo): array {
     try {
@@ -1173,110 +1149,142 @@ function handleProcessFaceRecognition(PDO $pdo): array {
             throw new Exception('Active session not found');
         }
 
-        // Get students with photos for this department/option
-        $params = [$session['department_id']];
-        $query = "
-            SELECT s.id, s.reg_no, s.first_name, s.last_name, s.photo
-            FROM students s
-            WHERE s.department_id = ? AND s.photo IS NOT NULL AND s.photo != ''
-        ";
+        // Create temporary file for the captured image
+        $tempDir = sys_get_temp_dir();
+        $tempFile = tempnam($tempDir, 'face_capture_');
+        $imageFile = $tempFile . '.jpg';
 
-        if ($session['option_id']) {
-            $query .= " AND s.option_id = ?";
-            $params[] = $session['option_id'];
+        // Remove the .tmp extension and add .jpg
+        if (file_exists($tempFile)) {
+            unlink($tempFile);
         }
 
-        $stmt = $pdo->prepare($query);
-        $stmt->execute($params);
-        $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            // Decode base64 image data
+            if (strpos($imageData, 'data:image') === 0) {
+                $imageData = explode(',', $imageData)[1];
+            }
+            $imageBinary = base64_decode($imageData);
 
-        if (empty($students)) {
-            return [
-                'status' => 'success',
-                'message' => 'No students with photos found for face recognition',
-                'recognized' => false,
-                'student_id' => null
-            ];
-        }
-
-        // Process the captured image
-        $capturedImage = processBase64Image($imageData);
-        if (!$capturedImage) {
-            throw new Exception('Failed to process captured image');
-        }
-
-        $bestMatch = null;
-        $bestSimilarity = 0;
-        $recognitionResults = [];
-
-        // Compare with each student's photo
-        foreach ($students as $student) {
-            $studentPhotoPath = findStudentPhoto($student['photo']);
-
-            if (!$studentPhotoPath) {
-                continue; // Skip this student if photo not found
+            if ($imageBinary === false) {
+                throw new Exception('Invalid base64 image data');
             }
 
-            // Perform multiple comparison methods for better accuracy
-            $similarity = compareFaces($capturedImage, $studentPhotoPath);
+            // Save image to temporary file
+            if (file_put_contents($imageFile, $imageBinary) === false) {
+                throw new Exception('Failed to save temporary image file');
+            }
 
-            $recognitionResults[] = [
-                'student_id' => $student['id'],
-                'student_name' => $student['first_name'] . ' ' . $student['last_name'],
-                'similarity' => $similarity
-            ];
+            // Set proper permissions (readable by all, but we'll clean up)
+            chmod($imageFile, 0644);
 
-            if ($similarity > $bestSimilarity) {
-                $bestSimilarity = $similarity;
-                $bestMatch = $student;
+        } catch (Exception $e) {
+            // Clean up temp file if it exists
+            if (file_exists($imageFile)) {
+                unlink($imageFile);
+            }
+            throw new Exception('Image processing failed: ' . $e->getMessage());
+        }
+
+        // Call Python face recognition script
+        $pythonScript = __DIR__ . '/../face_match.py';
+        $pythonExecutable = 'python3'; // or 'python' depending on system
+
+        // Build command with proper escaping
+        $command = escapeshellcmd($pythonExecutable) . ' ' .
+                   escapeshellarg($pythonScript) . ' ' .
+                   escapeshellarg($imageFile);
+
+        // Set environment variables for database connection
+        $env = [
+            'DB_HOST=' . getenv('DB_HOST') ?: 'localhost',
+            'DB_NAME=' . getenv('DB_NAME') ?: 'rp_attendance_system',
+            'DB_USER=' . getenv('DB_USER') ?: 'root',
+            'DB_PASS=' . getenv('DB_PASS') ?: ''
+        ];
+
+        // Execute Python script
+        $descriptors = [
+            0 => ['pipe', 'r'], // stdin
+            1 => ['pipe', 'w'], // stdout
+            2 => ['pipe', 'w']  // stderr
+        ];
+
+        $process = proc_open($command, $descriptors, $pipes, null, $env);
+
+        if (!is_resource($process)) {
+            throw new Exception('Failed to start Python face recognition script');
+        }
+
+        // Get output and error
+        $output = stream_get_contents($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+
+        // Close pipes
+        fclose($pipes[0]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        // Get exit code
+        $exitCode = proc_close($process);
+
+        // Clean up temporary file
+        if (file_exists($imageFile)) {
+            unlink($imageFile);
+        }
+
+        // Log execution details
+        error_log("Face recognition command: $command");
+        error_log("Exit code: $exitCode");
+        error_log("Output: $output");
+        if (!empty($error)) {
+            error_log("Error: $error");
+        }
+
+        // Check for execution errors
+        if ($exitCode !== 0) {
+            error_log("Python script exited with code $exitCode");
+            if (!empty($error)) {
+                throw new Exception("Face recognition script error: $error");
+            } else {
+                throw new Exception("Face recognition script failed with exit code $exitCode");
             }
         }
 
-        // Sort results by similarity for debugging
-        usort($recognitionResults, function($a, $b) {
-            return $b['similarity'] <=> $a['similarity'];
-        });
-
-        // Enhanced confidence thresholds based on multiple factors
-        $confidence = round($bestSimilarity * 100, 1);
-        $isHighConfidence = $confidence >= 75;
-        $isMediumConfidence = $confidence >= 60;
-
-        if ($bestMatch && $isHighConfidence) {
-            return [
-                'status' => 'success',
-                'message' => 'Face recognized with high confidence',
-                'recognized' => true,
-                'student_id' => $bestMatch['id'],
-                'student_name' => $bestMatch['first_name'] . ' ' . $bestMatch['last_name'],
-                'student_reg' => $bestMatch['reg_no'],
-                'confidence' => $confidence,
-                'confidence_level' => 'high'
-            ];
-        } elseif ($bestMatch && $isMediumConfidence) {
-            return [
-                'status' => 'success',
-                'message' => 'Face recognized with medium confidence - manual verification recommended',
-                'recognized' => true,
-                'student_id' => $bestMatch['id'],
-                'student_name' => $bestMatch['first_name'] . ' ' . $bestMatch['last_name'],
-                'student_reg' => $bestMatch['reg_no'],
-                'confidence' => $confidence,
-                'confidence_level' => 'medium'
-            ];
-        } else {
-            // Return top 3 matches for debugging
-            $topMatches = array_slice($recognitionResults, 0, 3);
-
-            return [
-                'status' => 'success',
-                'message' => 'Face not recognized with sufficient confidence',
-                'recognized' => false,
-                'student_id' => null,
-                'confidence' => $confidence,
-                'top_matches' => $topMatches
-            ];
+        // Parse JSON output
+        $result = json_decode($output, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            error_log('Invalid JSON output from face recognition script: ' . $output);
+            throw new Exception('Invalid JSON response from face recognition script');
         }
+
+        // Log the recognition result
+        error_log('Face recognition result: ' . json_encode($result));
+
+        // Normalize result format for consistency
+        $normalizedResult = [
+            'status' => $result['status'] ?? 'error',
+            'message' => $result['message'] ?? 'Face recognition completed',
+            'recognized' => in_array($result['status'], ['success', 'low_confidence']),
+            'student_id' => $result['student_id'] ?? null,
+            'student_name' => $result['student_name'] ?? null,
+            'student_reg' => $result['student_reg'] ?? null,
+            'distance' => $result['distance'] ?? null,
+            'confidence' => $result['confidence'] ?? 0,
+            'confidence_level' => $result['status'] === 'success' ? 'high' :
+                                ($result['status'] === 'low_confidence' ? 'medium' : 'low'),
+            'auto_mark' => $result['status'] === 'success',
+            'requires_confirmation' => $result['status'] === 'low_confidence',
+            'faces_detected' => $result['faces_detected'] ?? 0,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+
+        // Add top_matches if available (for future enhancement)
+        if (isset($result['top_matches'])) {
+            $normalizedResult['top_matches'] = $result['top_matches'];
+        }
+
+        return $normalizedResult;
 
     } catch (Exception $e) {
         error_log('Face recognition error: ' . $e->getMessage());
@@ -1284,428 +1292,12 @@ function handleProcessFaceRecognition(PDO $pdo): array {
             'status' => 'error',
             'message' => 'Face recognition failed: ' . $e->getMessage(),
             'recognized' => false,
-            'student_id' => null
+            'student_id' => null,
+            'distance' => null
         ];
     }
 }
 
-/**
- * Find student photo path
- */
-function findStudentPhoto($photoFilename) {
-    if (!$photoFilename) {
-        return false;
-    }
-
-    // Try different possible locations
-    $possiblePaths = [
-        __DIR__ . '/../uploads/students/' . $photoFilename,
-        __DIR__ . '/../uploads/' . $photoFilename,
-        __DIR__ . '/../uploads/lecturers/' . $photoFilename
-    ];
-
-    foreach ($possiblePaths as $path) {
-        if (file_exists($path)) {
-            return $path;
-        }
-    }
-
-    return false;
-}
-
-/**
- * Process base64 image data
- */
-function processBase64Image($base64Data) {
-    // Remove data URL prefix if present
-    if (strpos($base64Data, 'data:image') === 0) {
-        $parts = explode(',', $base64Data);
-        $base64Data = $parts[1];
-    }
-
-    $imageData = base64_decode($base64Data);
-    if (!$imageData) {
-        return false;
-    }
-
-    // Create temporary file
-    $tempFile = tempnam(sys_get_temp_dir(), 'face_recognition_');
-    file_put_contents($tempFile, $imageData);
-
-    return $tempFile;
-}
-
-/**
- * Enhanced face comparison using multiple methods
- */
-function compareFaces($image1Path, $image2Path) {
-    try {
-        // Load images
-        $img1 = @imagecreatefromstring(file_get_contents($image1Path));
-        $img2 = @imagecreatefromstring(file_get_contents($image2Path));
-
-        if (!$img1 || !$img2) {
-            return 0;
-        }
-
-        // Method 1: Color histogram similarity
-        $histSimilarity = compareImagesHistogram($img1, $img2);
-
-        // Method 2: Structural similarity (SSIM-like)
-        $ssimSimilarity = calculateSSIMSimilarity($img1, $img2);
-
-        // Method 3: Edge detection similarity
-        $edgeSimilarity = compareImagesEdges($img1, $img2);
-
-        // Method 4: Face region detection (simple skin color detection)
-        $faceSimilarity = compareFaceRegions($img1, $img2);
-
-        // Weighted combination of methods
-        $weights = [
-            'histogram' => 0.3,
-            'ssim' => 0.3,
-            'edges' => 0.2,
-            'face_region' => 0.2
-        ];
-
-        $combinedSimilarity = (
-            $histSimilarity * $weights['histogram'] +
-            $ssimSimilarity * $weights['ssim'] +
-            $edgeSimilarity * $weights['edges'] +
-            $faceSimilarity * $weights['face_region']
-        );
-
-        // Clean up
-        imagedestroy($img1);
-        imagedestroy($img2);
-
-        // Remove temporary file
-        if (strpos($image1Path, sys_get_temp_dir()) === 0) {
-            unlink($image1Path);
-        }
-
-        return min(1.0, max(0.0, $combinedSimilarity));
-
-    } catch (Exception $e) {
-        error_log('Face comparison error: ' . $e->getMessage());
-        return 0;
-    }
-}
-
-/**
- * Compare two images using histogram similarity (legacy method)
- */
-function compareImages($image1Path, $image2Path) {
-    try {
-        // Get image dimensions and basic properties
-        $img1 = @imagecreatefromstring(file_get_contents($image1Path));
-        $img2 = @imagecreatefromstring(file_get_contents($image2Path));
-
-        if (!$img1 || !$img2) {
-            return 0;
-        }
-
-        $width1 = imagesx($img1);
-        $height1 = imagesy($img1);
-        $width2 = imagesx($img2);
-        $height2 = imagesy($img2);
-
-        // Resize images to same size for comparison
-        $size = 100; // 100x100 for comparison
-        $resized1 = imagecreatetruecolor($size, $size);
-        $resized2 = imagecreatetruecolor($size, $size);
-
-        imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
-        imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
-
-        // Calculate histogram similarity
-        $hist1 = calculateHistogram($resized1);
-        $hist2 = calculateHistogram($resized2);
-
-        $similarity = calculateHistogramSimilarity($hist1, $hist2);
-
-        // Clean up
-        imagedestroy($img1);
-        imagedestroy($img2);
-        imagedestroy($resized1);
-        imagedestroy($resized2);
-
-        return $similarity;
-
-    } catch (Exception $e) {
-        error_log('Image comparison error: ' . $e->getMessage());
-        return 0;
-    }
-}
-
-/**
- * Compare images using histogram similarity
- */
-function compareImagesHistogram($img1, $img2) {
-    $width1 = imagesx($img1);
-    $height1 = imagesy($img1);
-    $width2 = imagesx($img2);
-    $height2 = imagesy($img2);
-
-    // Resize to same size
-    $size = 64;
-    $resized1 = imagecreatetruecolor($size, $size);
-    $resized2 = imagecreatetruecolor($size, $size);
-
-    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
-    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
-
-    $hist1 = calculateHistogram($resized1);
-    $hist2 = calculateHistogram($resized2);
-
-    $similarity = calculateHistogramSimilarity($hist1, $hist2);
-
-    imagedestroy($resized1);
-    imagedestroy($resized2);
-
-    return $similarity;
-}
-
-/**
- * Calculate SSIM-like structural similarity
- */
-function calculateSSIMSimilarity($img1, $img2) {
-    $width1 = imagesx($img1);
-    $height1 = imagesy($img1);
-    $width2 = imagesx($img2);
-    $height2 = imagesy($img2);
-
-    // Resize to same size
-    $size = 32;
-    $resized1 = imagecreatetruecolor($size, $size);
-    $resized2 = imagecreatetruecolor($size, $size);
-
-    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
-    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
-
-    // Convert to grayscale and calculate basic structural similarity
-    $gray1 = imagecreatetruecolor($size, $size);
-    $gray2 = imagecreatetruecolor($size, $size);
-
-    imagefilter($resized1, IMG_FILTER_GRAYSCALE);
-    imagefilter($resized2, IMG_FILTER_GRAYSCALE);
-
-    $diffSum = 0;
-    $pixelCount = $size * $size;
-
-    for ($x = 0; $x < $size; $x++) {
-        for ($y = 0; $y < $size; $y++) {
-            $rgb1 = imagecolorat($resized1, $x, $y);
-            $rgb2 = imagecolorat($resized2, $x, $y);
-
-            $gray1_val = ($rgb1 >> 16) & 0xFF;
-            $gray2_val = ($rgb2 >> 16) & 0xFF;
-
-            $diffSum += abs($gray1_val - $gray2_val);
-        }
-    }
-
-    imagedestroy($resized1);
-    imagedestroy($resized2);
-    imagedestroy($gray1);
-    imagedestroy($gray2);
-
-    // Convert difference to similarity (lower difference = higher similarity)
-    $avgDiff = $diffSum / $pixelCount;
-    return max(0, 1 - ($avgDiff / 128)); // Normalize to 0-1 range
-}
-
-/**
- * Compare images using edge detection
- */
-function compareImagesEdges($img1, $img2) {
-    $width1 = imagesx($img1);
-    $height1 = imagesy($img1);
-    $width2 = imagesx($img2);
-    $height2 = imagesy($img2);
-
-    // Resize to same size
-    $size = 64;
-    $resized1 = imagecreatetruecolor($size, $size);
-    $resized2 = imagecreatetruecolor($size, $size);
-
-    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
-    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
-
-    // Convert to grayscale
-    imagefilter($resized1, IMG_FILTER_GRAYSCALE);
-    imagefilter($resized2, IMG_FILTER_GRAYSCALE);
-
-    // Simple edge detection using Sobel-like operator
-    $edges1 = detectEdges($resized1);
-    $edges2 = detectEdges($resized2);
-
-    // Compare edge maps
-    $edgeSimilarity = compareEdgeMaps($edges1, $edges2);
-
-    imagedestroy($resized1);
-    imagedestroy($resized2);
-
-    return $edgeSimilarity;
-}
-
-/**
- * Simple edge detection
- */
-function detectEdges($image) {
-    $width = imagesx($image);
-    $height = imagesy($image);
-    $edges = imagecreatetruecolor($width, $height);
-
-    for ($x = 1; $x < $width - 1; $x++) {
-        for ($y = 1; $y < $height - 1; $y++) {
-            // Simple gradient calculation
-            $center = imagecolorat($image, $x, $y) & 0xFF;
-            $right = imagecolorat($image, $x + 1, $y) & 0xFF;
-            $bottom = imagecolorat($image, $x, $y + 1) & 0xFF;
-
-            $gradient = abs($center - $right) + abs($center - $bottom);
-            $edgeValue = min(255, $gradient * 2);
-
-            $color = imagecolorallocate($edges, $edgeValue, $edgeValue, $edgeValue);
-            imagesetpixel($edges, $x, $y, $color);
-        }
-    }
-
-    return $edges;
-}
-
-/**
- * Compare edge maps
- */
-function compareEdgeMaps($edges1, $edges2) {
-    $width = imagesx($edges1);
-    $height = imagesy($edges1);
-    $totalPixels = $width * $height;
-    $matchingPixels = 0;
-
-    for ($x = 0; $x < $width; $x++) {
-        for ($y = 0; $y < $height; $y++) {
-            $edge1 = imagecolorat($edges1, $x, $y) & 0xFF;
-            $edge2 = imagecolorat($edges2, $x, $y) & 0xFF;
-
-            // Consider edges similar if they're both significant or both insignificant
-            $isEdge1 = $edge1 > 50;
-            $isEdge2 = $edge2 > 50;
-
-            if ($isEdge1 === $isEdge2) {
-                $matchingPixels++;
-            }
-        }
-    }
-
-    imagedestroy($edges1);
-    imagedestroy($edges2);
-
-    return $matchingPixels / $totalPixels;
-}
-
-/**
- * Compare face regions using simple skin color detection
- */
-function compareFaceRegions($img1, $img2) {
-    $width1 = imagesx($img1);
-    $height1 = imagesy($img1);
-    $width2 = imagesx($img2);
-    $height2 = imagesy($img2);
-
-    // Resize to same size
-    $size = 64;
-    $resized1 = imagecreatetruecolor($size, $size);
-    $resized2 = imagecreatetruecolor($size, $size);
-
-    imagecopyresampled($resized1, $img1, 0, 0, 0, 0, $size, $size, $width1, $height1);
-    imagecopyresampled($resized2, $img2, 0, 0, 0, 0, $size, $size, $width2, $height2);
-
-    // Detect skin regions
-    $skinPixels1 = countSkinPixels($resized1);
-    $skinPixels2 = countSkinPixels($resized2);
-
-    $totalPixels = $size * $size;
-
-    // Compare skin pixel ratios
-    $skinRatio1 = $skinPixels1 / $totalPixels;
-    $skinRatio2 = $skinPixels2 / $totalPixels;
-
-    $ratioSimilarity = 1 - abs($skinRatio1 - $skinRatio2);
-
-    imagedestroy($resized1);
-    imagedestroy($resized2);
-
-    return $ratioSimilarity;
-}
-
-/**
- * Count skin-colored pixels
- */
-function countSkinPixels($image) {
-    $width = imagesx($image);
-    $height = imagesy($image);
-    $skinCount = 0;
-
-    for ($x = 0; $x < $width; $x++) {
-        for ($y = 0; $y < $height; $y++) {
-            $rgb = imagecolorat($image, $x, $y);
-            $r = ($rgb >> 16) & 0xFF;
-            $g = ($rgb >> 8) & 0xFF;
-            $b = $rgb & 0xFF;
-
-            // Simple skin color detection (rough approximation)
-            if ($r > 60 && $g > 40 && $b > 20 &&
-                $r > $g && $r > $b &&
-                abs($r - $g) > 15) {
-                $skinCount++;
-            }
-        }
-    }
-
-    return $skinCount;
-}
-
-/**
- * Calculate color histogram for an image
- */
-function calculateHistogram($image) {
-    $histogram = array_fill(0, 768, 0); // 256 * 3 colors
-
-    $width = imagesx($image);
-    $height = imagesy($image);
-
-    for ($x = 0; $x < $width; $x++) {
-        for ($y = 0; $y < $height; $y++) {
-            $rgb = imagecolorat($image, $x, $y);
-            $r = ($rgb >> 16) & 0xFF;
-            $g = ($rgb >> 8) & 0xFF;
-            $b = $rgb & 0xFF;
-
-            $histogram[$r]++;
-            $histogram[256 + $g]++;
-            $histogram[512 + $b]++;
-        }
-    }
-
-    return $histogram;
-}
-
-/**
- * Calculate similarity between two histograms
- */
-function calculateHistogramSimilarity($hist1, $hist2) {
-    $total = 0;
-    $matches = 0;
-
-    for ($i = 0; $i < count($hist1); $i++) {
-        $total += max($hist1[$i], $hist2[$i]);
-        $matches += min($hist1[$i], $hist2[$i]);
-    }
-
-    return $total > 0 ? $matches / $total : 0;
-}
 
 /**
  * Simple test to get courses without validation

@@ -1,4 +1,4 @@
-<?php
+t<?php
 /**
  * Complete Database Setup Script
  * Creates all required tables for the RP Attendance System
@@ -187,11 +187,18 @@ try {
 
     if ($userCount == 0) {
         echo "<p class='info'>Inserting sample users...</p>";
+        // Hash the default admin password securely
+        $adminPasswordHash = password_hash('Admin123!', PASSWORD_ARGON2ID, [
+            'memory_cost' => 65536,
+            'time_cost' => 4,
+            'threads' => 3
+        ]);
         $pdo->exec("
             INSERT INTO users (username, email, password, role, status) VALUES
-            ('admin', 'admin@rp.edu', 'admin123', 'admin', 'active')
+            ('admin', 'admin@rp.edu', '" . $adminPasswordHash . "', 'admin', 'active')
         ");
-        echo "<p class='success'>✅ Sample admin user inserted</p>";
+        echo "<p class='success'>✅ Sample admin user inserted with secure password</p>";
+        echo "<p class='warning'>⚠️  <strong>Important:</strong> Default admin credentials - Username: admin, Password: Admin123!</p>";
     } else {
         echo "<p class='info'>Users table already has data (count: $userCount)</p>";
     }
@@ -235,11 +242,44 @@ try {
     }
     echo "</div>";
 
+    // Create face recognition test logs table
+    echo "<div class='card'>";
+    echo "<h2>📊 Setting up Face Recognition Test Logs Table...</h2>";
+    echo "<p class='info'>Dropping existing table if it exists...</p>";
+    $pdo->exec("DROP TABLE IF EXISTS face_recognition_logs");
+
+    echo "<p class='info'>Creating face recognition logs table...</p>";
+    $pdo->exec("
+        CREATE TABLE face_recognition_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            captured_image_path VARCHAR(255),
+            captured_image_size INT,
+            student_id INT,
+            student_reg_no VARCHAR(50),
+            student_type ENUM('regular', 'test') DEFAULT 'regular',
+            comparison_score DECIMAL(5,4),
+            confidence_level ENUM('high', 'medium', 'low'),
+            processing_method VARCHAR(50),
+            distance DECIMAL(5,4),
+            pixel_similarity DECIMAL(5,4),
+            size_similarity DECIMAL(5,4),
+            match_found BOOLEAN DEFAULT FALSE,
+            processing_time DECIMAL(5,2),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_student (student_id),
+            INDEX idx_student_type (student_type),
+            INDEX idx_created_at (created_at),
+            INDEX idx_match_found (match_found)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ");
+    echo "<p class='success'>✅ Face recognition logs table created successfully</p>";
+    echo "</div>";
+
     // Show final statistics
     echo "<div class='card'>";
     echo "<h2>📈 Final Database Statistics</h2>";
 
-    $tables = ['departments', 'lecturers', 'users', 'options', 'leave_requests'];
+    $tables = ['departments', 'lecturers', 'users', 'options', 'leave_requests', 'face_recognition_logs'];
     foreach ($tables as $table) {
         try {
             $stmt = $pdo->query("SELECT COUNT(*) as count FROM $table");

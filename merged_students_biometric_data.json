@@ -1,0 +1,343 @@
+{
+  "export_info": {
+    "title": "RP Attendance System - Complete Student Biometric Data",
+    "export_date": "2025-10-07T21:47:20Z",
+    "version": "2.0",
+    "description": "Merged student data with biometric information (face images and fingerprints)",
+    "source_tables": ["students", "student_images"],
+    "total_students": 4,
+    "students_with_biometric_data": 3
+  },
+  "students": [
+    {
+      "id": 14,
+      "user_id": 26,
+      "option_id": 17,
+      "year_level": "1",
+      "personal_info": {
+        "telephone": null,
+        "sex": null,
+        "dob": "2005-05-17",
+        "cell": "1010701",
+        "sector": "10107",
+        "district": "101",
+        "province": "1"
+      },
+      "parent_info": {
+        "first_name": "Kabirigi",
+        "last_name": "john",
+        "contact": "0789778344"
+      },
+      "academic_info": {
+        "reg_no": "25RP07656",
+        "student_id_number": "",
+        "department_id": null,
+        "status": "active"
+      },
+      "biometric_data": {
+        "face_images": [],
+        "fingerprint": null,
+        "fingerprint_path": null,
+        "fingerprint_quality": 0,
+        "has_biometric_data": false
+      },
+      "photos": {
+        "main_photo": null,
+        "profile_photo": null,
+        "student_photos_json": null
+      },
+      "system_info": {
+        "password": null,
+        "created_at": null,
+        "updated_at": null
+      }
+    },
+    {
+      "id": 15,
+      "user_id": 38,
+      "option_id": 17,
+      "year_level": "1",
+      "personal_info": {
+        "telephone": null,
+        "sex": null,
+        "dob": null,
+        "cell": null,
+        "sector": null,
+        "district": null,
+        "province": null
+      },
+      "parent_info": {
+        "first_name": null,
+        "last_name": null,
+        "contact": null
+      },
+      "academic_info": {
+        "reg_no": "22RP06557",
+        "student_id_number": "",
+        "department_id": null,
+        "status": "active"
+      },
+      "biometric_data": {
+        "face_images": [],
+        "fingerprint": {
+          "template_id": "fp_68e3abb866943",
+          "path": "uploads/fingerprints/fingerprint_22RP06557_68e3abb866943.png",
+          "quality_score": 84,
+          "finger_type": "right_index",
+          "capture_device": "optical_scanner",
+          "minutiae_points": 45,
+          "capture_date": "2025-10-07T00:00:00Z"
+        },
+        "fingerprint_path": "uploads/fingerprints/fingerprint_22RP06557_68e3abb866943.png",
+        "fingerprint_quality": 84,
+        "has_biometric_data": true,
+        "biometric_types": ["fingerprint"]
+      },
+      "photos": {
+        "main_photo": null,
+        "profile_photo": null,
+        "student_photos_json": null
+      },
+      "system_info": {
+        "password": null,
+        "created_at": null,
+        "updated_at": null
+      }
+    },
+    {
+      "id": 16,
+      "user_id": 39,
+      "option_id": 17,
+      "year_level": "1",
+      "personal_info": {
+        "telephone": null,
+        "sex": null,
+        "dob": null,
+        "cell": null,
+        "sector": null,
+        "district": null,
+        "province": null
+      },
+      "parent_info": {
+        "first_name": null,
+        "last_name": null,
+        "contact": null
+      },
+      "academic_info": {
+        "reg_no": "22RP08976",
+        "student_id_number": "",
+        "department_id": null,
+        "status": "active"
+      },
+      "biometric_data": {
+        "face_images": [
+          {
+            "id": 1,
+            "template_id": "face_68e450744db00",
+            "image_path": "uploads/students/face_68e450744db00.jpg",
+            "image_type": "face_recognition",
+            "image_order": 1,
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 2,
+            "template_id": "face_68e450744de4f",
+            "image_path": "uploads/students/face_68e450744de4f.jpg",
+            "image_type": "face_recognition",
+            "image_order": 2,
+            "quality_score": 0.85,
+            "capture_angle": "slight_left",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 3,
+            "template_id": "face_68e4507452358",
+            "image_path": "uploads/students/face_68e4507452358.jpg",
+            "image_type": "face_recognition",
+            "image_order": 3,
+            "quality_score": 0.85,
+            "capture_angle": "slight_right",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 4,
+            "template_id": "face_68e45074528df",
+            "image_path": "uploads/students/face_68e45074528df.jpg",
+            "image_type": "face_recognition",
+            "image_order": 4,
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "smile",
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          }
+        ],
+        "fingerprint": null,
+        "fingerprint_path": null,
+        "fingerprint_quality": 0,
+        "has_biometric_data": true,
+        "biometric_types": ["face_recognition"],
+        "face_templates_count": 4,
+        "face_quality_average": 0.85,
+        "primary_face_template": "face_68e450744db00"
+      },
+      "photos": {
+        "main_photo": null,
+        "profile_photo": null,
+        "student_photos_json": null
+      },
+      "system_info": {
+        "password": null,
+        "created_at": null,
+        "updated_at": null
+      }
+    },
+    {
+      "id": 17,
+      "user_id": 40,
+      "option_id": 17,
+      "year_level": "1",
+      "personal_info": {
+        "telephone": null,
+        "sex": null,
+        "dob": null,
+        "cell": null,
+        "sector": null,
+        "district": null,
+        "province": null
+      },
+      "parent_info": {
+        "first_name": null,
+        "last_name": null,
+        "contact": null
+      },
+      "academic_info": {
+        "reg_no": "22RPP098474",
+        "student_id_number": "",
+        "department_id": null,
+        "status": "active"
+      },
+      "biometric_data": {
+        "face_images": [
+          {
+            "id": 5,
+            "template_id": "face_68e545e682e95",
+            "image_path": "uploads/students/face_68e545e682e95.jpg",
+            "image_type": "face_recognition",
+            "image_order": 1,
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 6,
+            "template_id": "face_68e545e683295",
+            "image_path": "uploads/students/face_68e545e683295.jpg",
+            "image_type": "face_recognition",
+            "image_order": 2,
+            "quality_score": 0.85,
+            "capture_angle": "slight_left",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 7,
+            "template_id": "face_68e545e6835f4",
+            "image_path": "uploads/students/face_68e545e6835f4.jpg",
+            "image_type": "face_recognition",
+            "image_order": 3,
+            "quality_score": 0.85,
+            "capture_angle": "slight_right",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 8,
+            "template_id": "face_68e545e6837da",
+            "image_path": "uploads/students/face_68e545e6837da.jpg",
+            "image_type": "face_recognition",
+            "image_order": 4,
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "smile",
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          }
+        ],
+        "fingerprint": null,
+        "fingerprint_path": null,
+        "fingerprint_quality": 0,
+        "has_biometric_data": true,
+        "biometric_types": ["face_recognition"],
+        "face_templates_count": 4,
+        "face_quality_average": 0.85,
+        "primary_face_template": "face_68e545e682e95"
+      },
+      "photos": {
+        "main_photo": null,
+        "profile_photo": null,
+        "student_photos_json": null
+      },
+      "system_info": {
+        "password": null,
+        "created_at": null,
+        "updated_at": null
+      }
+    }
+  ],
+  "summary": {
+    "total_students": 4,
+    "students_with_face_data": 2,
+    "students_with_fingerprint_data": 1,
+    "students_with_biometric_data": 3,
+    "total_face_images": 8,
+    "total_fingerprints": 1,
+    "average_face_quality": 0.85,
+    "average_fingerprint_quality": 84,
+    "biometric_coverage_percentage": 75
+  },
+  "data_quality": {
+    "face_images": {
+      "total_count": 8,
+      "quality_distribution": {
+        "excellent": 8,
+        "good": 0,
+        "fair": 0,
+        "poor": 0
+      },
+      "average_quality": 0.85,
+      "quality_threshold": 0.7
+    },
+    "fingerprints": {
+      "total_count": 1,
+      "quality_distribution": {
+        "excellent": 1,
+        "good": 0,
+        "fair": 0,
+        "poor": 0
+      },
+      "average_quality": 84,
+      "quality_threshold": 70
+    }
+  }
+}

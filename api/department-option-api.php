@@ -7,7 +7,6 @@
 
 require_once "../config.php";
 session_start();
-require_once "../session_check.php";
 
 // Allow demo access for department-option API when called from registration page
 $referer = $_SERVER['HTTP_REFERER'] ?? '';
@@ -15,6 +14,7 @@ $isFromRegistration = strpos($referer, 'register-student.php') !== false ||
                       strpos($referer, 'admin-register-lecturer.php') !== false;
 
 if (!$isFromRegistration) {
+    require_once "../session_check.php";
     require_role(['admin', 'lecturer', 'hod']);
 }
 

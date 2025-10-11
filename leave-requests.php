@@ -2,9 +2,12 @@
 session_start();
 require_once "config.php"; // $pdo
 require_once "session_check.php";
-require_role(['student', 'admin']);
+require_role(['student', 'admin', 'hod']);
 
 $userRole = $_SESSION['role'] ?? 'admin';
+
+// Normalize role for display (hod should see admin-like interface)
+$displayRole = in_array($userRole, ['admin', 'hod']) ? 'admin' : $userRole;
 
 // Resolve logged-in student (only for student role)
 $user_id = $_SESSION['user_id'] ?? null;
@@ -230,10 +233,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="text-center mb-4">
-      <h4><?php echo $userRole === 'admin' ? '👨‍💼 Admin' : '🎓 Student'; ?></h4>
+      <h4><?php echo $displayRole === 'admin' ? '👨‍💼 ' . ucfirst($userRole) : '🎓 Student'; ?></h4>
       <hr style="border-color: #ffffff66;">
     </div>
-    <?php if ($userRole === 'admin'): ?>
+    <?php if ($displayRole === 'admin'): ?>
       <a href="admin-dashboard.php"><i class="fas fa-home me-2"></i>Dashboard</a>
       <a href="admin-reports.php"><i class="fas fa-chart-bar me-2"></i>Reports & Analytics</a>
       <a href="attendance-session.php"><i class="fas fa-video me-2"></i>Attendance Session</a>
@@ -258,7 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
   <!-- Main Content -->
   <div class="main-content">
-    <?php if ($userRole === 'admin'): ?>
+    <?php if ($displayRole === 'admin'): ?>
       <!-- Admin View - Leave Management Dashboard -->
       <div class="card shadow-sm">
         <div class="card-header bg-primary text-white">
@@ -396,7 +399,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    <?php if ($userRole === 'admin'): ?>
+    <?php if ($displayRole === 'admin'): ?>
     // Admin functionality - Load leave requests data
     $(document).ready(function() {
       loadLeaveStatistics();
@@ -569,7 +572,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>`;
 
         // Insert at the appropriate location based on user role
-        if (userRole === 'admin') {
+        if ('<?php echo $displayRole; ?>' === 'admin') {
           $('.card-body').first().prepend(alertHtml);
         } else {
           $('.form-container').prepend(alertHtml);

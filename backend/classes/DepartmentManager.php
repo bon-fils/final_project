@@ -5,9 +5,9 @@
  * Handles all department and program related operations
  */
 
-require_once __DIR__ . '/../classes/DatabaseManager.php';
-require_once __DIR__ . '/../classes/ValidationManager.php';
-require_once __DIR__ . '/../classes/Logger.php';
+require_once __DIR__ . '/DatabaseManager.php';
+require_once __DIR__ . '/ValidationManager.php';
+require_once __DIR__ . '/Logger.php';
 
 class DepartmentManager {
     private $db;
@@ -15,9 +15,18 @@ class DepartmentManager {
     private $logger;
 
     public function __construct($pdo = null) {
-        $this->db = $pdo ?? DatabaseManager::getInstance()->getConnection();
-        $this->validator = new ValidationManager();
         $this->logger = new Logger();
+        if ($pdo) {
+            $this->db = DatabaseManager::getInstance($pdo, $this->logger)->getConnection();
+        } else {
+            // For backward compatibility, try to get existing instance
+            try {
+                $this->db = DatabaseManager::getInstance()->getConnection();
+            } catch (Exception $e) {
+                throw new Exception('DatabaseManager not initialized. PDO connection required.');
+            }
+        }
+        $this->validator = new ValidationManager();
     }
 
     /**
@@ -48,11 +57,11 @@ class DepartmentManager {
                 }));
             }
 
-            $this->logger->info("Retrieved " . count($departments) . " departments with detailed program info");
+            $this->logger->info("DepartmentManager", "Retrieved " . count($departments) . " departments with detailed program info");
             return ['success' => true, 'data' => $departments];
 
         } catch (PDOException $e) {
-            $this->logger->error("Database error retrieving departments: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Database error retrieving departments: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to retrieve departments'];
         }
     }
@@ -77,7 +86,7 @@ class DepartmentManager {
             return ['success' => true, 'data' => $program];
 
         } catch (PDOException $e) {
-            $this->logger->error("Error retrieving program details: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error retrieving program details: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to retrieve program details'];
         }
     }
@@ -99,11 +108,11 @@ class DepartmentManager {
                 return ['success' => false, 'message' => 'Program not found'];
             }
 
-            $this->logger->info("Updated program $programId status to $status");
+            $this->logger->info("DepartmentManager", "Updated program $programId status to $status");
             return ['success' => true, 'message' => 'Program status updated successfully'];
 
         } catch (PDOException $e) {
-            $this->logger->error("Error updating program status: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error updating program status: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to update program status'];
         }
     }
@@ -145,7 +154,7 @@ class DepartmentManager {
             }
 
             $this->db->commit();
-            $this->logger->info("Created department: $name with $programsAdded programs");
+            $this->logger->info("DepartmentManager", "Created department: $name with $programsAdded programs");
 
             return [
                 'success' => true,
@@ -159,7 +168,7 @@ class DepartmentManager {
 
         } catch (Exception $e) {
             $this->db->rollBack();
-            $this->logger->error("Error creating department: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error creating department: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to create department'];
         }
     }
@@ -193,7 +202,7 @@ class DepartmentManager {
             }
 
             $this->db->commit();
-            $this->logger->info("Deleted department: {$deptInfo['name']} with $programsDeleted programs");
+            $this->logger->info("DepartmentManager", "Deleted department: {$deptInfo['name']} with $programsDeleted programs");
 
             return [
                 'success' => true,
@@ -203,7 +212,7 @@ class DepartmentManager {
 
         } catch (Exception $e) {
             $this->db->rollBack();
-            $this->logger->error("Error deleting department: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error deleting department: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to delete department'];
         }
     }
@@ -229,7 +238,7 @@ class DepartmentManager {
             $stmt = $this->db->prepare("INSERT INTO options (name, department_id, status) VALUES (?, ?, ?)");
             $stmt->execute([$programName, $deptId, $status]);
 
-            $this->logger->info("Added program: $programName to department ID: $deptId");
+            $this->logger->info("DepartmentManager", "Added program: $programName to department ID: $deptId");
 
             return [
                 'success' => true,
@@ -241,7 +250,7 @@ class DepartmentManager {
             ];
 
         } catch (Exception $e) {
-            $this->logger->error("Error adding program: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error adding program: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to add program'];
         }
     }
@@ -279,7 +288,7 @@ class DepartmentManager {
             }
 
             $this->db->commit();
-            $this->logger->info("Deleted program: {$programInfo['name']} (ID: $progId)");
+            $this->logger->info("DepartmentManager", "Deleted program: {$programInfo['name']} (ID: $progId)");
 
             return [
                 'success' => true,
@@ -290,7 +299,7 @@ class DepartmentManager {
             if (isset($this->db)) {
                 $this->db->rollBack();
             }
-            $this->logger->error("Database error deleting program: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Database error deleting program: " . $e->getMessage());
 
             // Check for specific database errors
             if (strpos($e->getMessage(), 'foreign key') !== false) {
@@ -305,7 +314,7 @@ class DepartmentManager {
             if (isset($this->db)) {
                 $this->db->rollBack();
             }
-            $this->logger->error("Error deleting program: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error deleting program: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to delete program'];
         }
     }
@@ -319,7 +328,7 @@ class DepartmentManager {
             $stmt->execute([$progId]);
             return $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->error("Error getting program by ID: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error getting program by ID: " . $e->getMessage());
             return false;
         }
     }
@@ -357,7 +366,7 @@ class DepartmentManager {
             ];
 
         } catch (PDOException $e) {
-            $this->logger->error("Error checking program usage: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error checking program usage: " . $e->getMessage());
             return ['in_use' => false, 'tables' => ''];
         }
     }
@@ -383,7 +392,7 @@ class DepartmentManager {
             return ['success' => true, 'data' => $stats];
 
         } catch (PDOException $e) {
-            $this->logger->error("Error retrieving statistics: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error retrieving statistics: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to retrieve statistics'];
         }
     }
@@ -467,7 +476,7 @@ class DepartmentManager {
             }
 
             $action = $hodId ? 'assigned' : 'unassigned';
-            $this->logger->info("HOD $action for department: {$deptInfo['name']} (ID: $deptId)");
+            $this->logger->info("DepartmentManager", "HOD $action for department: {$deptInfo['name']} (ID: $deptId)");
 
             return [
                 'success' => true,
@@ -479,7 +488,7 @@ class DepartmentManager {
             ];
 
         } catch (PDOException $e) {
-            $this->logger->error("Error updating department HOD: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error updating department HOD: " . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to update department HOD'];
         }
     }
@@ -493,7 +502,7 @@ class DepartmentManager {
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->error("Error retrieving HoDs: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error retrieving HoDs: " . $e->getMessage());
             return [];
         }
     }
@@ -518,7 +527,7 @@ class DepartmentManager {
             $stmt->execute([$deptId, $deptId]);
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->error("Error retrieving department-specific HoDs: " . $e->getMessage());
+            $this->logger->error("DepartmentManager", "Error retrieving department-specific HoDs: " . $e->getMessage());
             return [];
         }
     }

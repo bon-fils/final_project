@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Test Student Registration</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .image-upload { margin-bottom: 10px; }
+        .image-upload input[type="file"] { margin-bottom: 5px; }
+        .image-preview { width: 150px; height: 150px; border: 2px dashed #ddd; display: inline-block; margin: 5px; text-align: center; position: relative; cursor: pointer; transition: border-color 0.3s; }
+        .image-preview:hover { border-color: #007bff; }
+        .image-preview.has-image { border-color: #28a745; }
+        .image-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
+        .image-placeholder { padding: 20px; color: #666; }
+        .image-placeholder small { color: #999; font-size: 11px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .image-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🧑‍🎓 Test Student Registration</h2>
+        <p>Register a student with 4 face images for testing the facial recognition system.</p>
+
+        <form id="registrationForm">
+            <div class="form-group">
+                <label for="regNo">Registration Number:</label>
+                <input type="text" id="regNo" required placeholder="e.g., TEST001">
+            </div>
+
+            <div class="form-group">
+                <label for="firstName">First Name:</label>
+                <input type="text" id="firstName" required placeholder="e.g., John">
+            </div>
+
+            <div class="form-group">
+                <label for="lastName">Last Name:</label>
+                <input type="text" id="lastName" required placeholder="e.g., Doe">
+            </div>
+
+            <div class="form-group">
+                <label>Face Images (4 required - one at a time):</label>
+                <div class="image-grid" id="imageGrid">
+                    <div class="image-preview" data-index="1">
+                        <div class="image-placeholder">Image 1<br><small>Front face</small></div>
+                        <input type="file" class="image-input" data-index="1" accept="image/*" style="display: none;">
+                    </div>
+                    <div class="image-preview" data-index="2">
+                        <div class="image-placeholder">Image 2<br><small>Slight left turn</small></div>
+                        <input type="file" class="image-input" data-index="2" accept="image/*" style="display: none;">
+                    </div>
+                    <div class="image-preview" data-index="3">
+                        <div class="image-placeholder">Image 3<br><small>Slight right turn</small></div>
+                        <input type="file" class="image-input" data-index="3" accept="image/*" style="display: none;">
+                    </div>
+                    <div class="image-preview" data-index="4">
+                        <div class="image-placeholder">Image 4<br><small>With smile</small></div>
+                        <input type="file" class="image-input" data-index="4" accept="image/*" style="display: none;">
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <button type="button" id="clearAllBtn" style="background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Clear All Images</button>
+                </div>
+                <small>Select each image individually by clicking on the preview areas. All 4 images are required for registration.</small>
+            </div>
+
+            <button type="submit">Register Student</button>
+        </form>
+
+        <div id="result" style="margin-top: 20px;"></div>
+    </div>
+
+    <script>
+        const resultDiv = document.getElementById('result');
+        const form = document.getElementById('registrationForm');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+
+        let selectedImages = [null, null, null, null];
+
+        // Handle individual image preview clicks
+        document.querySelectorAll('.image-preview').forEach(preview => {
+            preview.addEventListener('click', (e) => {
+                const index = parseInt(preview.dataset.index) - 1;
+                const fileInput = preview.querySelector('.image-input');
+                fileInput.click();
+            });
+        });
+
+        // Handle individual file selections
+        document.querySelectorAll('.image-input').forEach(input => {
+            input.addEventListener('change', (e) => {
+                const index = parseInt(e.target.dataset.index) - 1;
+                const file = e.target.files[0];
+                const preview = e.target.closest('.image-preview');
+
+                if (file) {
+                    selectedImages[index] = file;
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        preview.innerHTML = `
+                            <img src="${e.target.result}" alt="Image ${index + 1}">
+                            <input type="file" class="image-input" data-index="${index + 1}" accept="image/*" style="display: none;">
+                        `;
+                        preview.classList.add('has-image');
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+        });
+
+        // Clear all images
+        clearAllBtn.addEventListener('click', () => {
+            selectedImages = [null, null, null, null];
+            document.querySelectorAll('.image-preview').forEach((preview, index) => {
+                preview.classList.remove('has-image');
+                preview.innerHTML = `
+                    <div class="image-placeholder">Image ${index + 1}<br><small>${getImageDescription(index + 1)}</small></div>
+                    <input type="file" class="image-input" data-index="${index + 1}" accept="image/*" style="display: none;">
+                `;
+            });
+        });
+
+        function getImageDescription(index) {
+            const descriptions = {
+                1: 'Front face',
+                2: 'Slight left turn',
+                3: 'Slight right turn',
+                4: 'With smile'
+            };
+            return descriptions[index] || '';
+        }
+
+        // Handle form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const regNo = document.getElementById('regNo').value.trim();
+            const firstName = document.getElementById('firstName').value.trim();
+            const lastName = document.getElementById('lastName').value.trim();
+
+            if (!regNo || !firstName || !lastName) {
+                resultDiv.innerHTML = '<p class="error">Please fill in all fields</p>';
+                return;
+            }
+
+            if (selectedImages.filter(img => img !== null).length !== 4) {
+                resultDiv.innerHTML = '<p class="error">Please select exactly 4 face images</p>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<p>Processing registration...</p>';
+
+            try {
+                // Convert images to base64
+                const imagePromises = selectedImages.map(async (file, index) => {
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve({
+                            index: index + 1,
+                            data: reader.result,
+                            filename: `face_${regNo}_${index + 1}.jpg`
+                        });
+                        reader.readAsDataURL(file);
+                    });
+                });
+
+                const imageData = await Promise.all(imagePromises);
+
+                // Send to server
+                const response = await fetch('test-student-registration.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        reg_no: regNo,
+                        first_name: firstName,
+                        last_name: lastName,
+                        images: imageData
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    resultDiv.innerHTML = `<p class="success">✅ Student registered successfully!</p><pre>${JSON.stringify(result, null, 2)}</pre>`;
+                    form.reset();
+                    selectedImages = [null, null, null, null];
+                    clearAllBtn.click(); // Clear all images
+                } else {
+                    resultDiv.innerHTML = `<p class="error">❌ Registration failed: ${result.message}</p>`;
+                }
+
+            } catch (error) {
+                resultDiv.innerHTML = `<p class="error">❌ Error: ${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -375,7 +375,14 @@ function validate_phone(string $phone): bool {
  */
 function check_ip_rate_limit(string $key, int $max_requests, int $window_seconds): bool {
     $current_time = time();
-    $rate_limit_file = sys_get_temp_dir() . "/rate_limit_{$key}.txt";
+
+    // Use a more reliable temp directory path
+    $temp_dir = __DIR__ . '/../temp';
+    if (!is_dir($temp_dir)) {
+        mkdir($temp_dir, 0755, true);
+    }
+
+    $rate_limit_file = $temp_dir . DIRECTORY_SEPARATOR . "rate_limit_{$key}.txt";
 
     if (file_exists($rate_limit_file)) {
         $data = json_decode(file_get_contents($rate_limit_file), true);
@@ -385,7 +392,7 @@ function check_ip_rate_limit(string $key, int $max_requests, int $window_seconds
             }
         } else {
             // Reset window
-            unlink($rate_limit_file);
+            @unlink($rate_limit_file);
         }
     }
 
@@ -394,7 +401,13 @@ function check_ip_rate_limit(string $key, int $max_requests, int $window_seconds
         'count' => isset($data['count']) ? $data['count'] + 1 : 1,
         'window_start' => $current_time
     ];
-    file_put_contents($rate_limit_file, json_encode($data));
+
+    // Ensure we can write to the file
+    if (@file_put_contents($rate_limit_file, json_encode($data)) === false) {
+        // If we can't write to temp file, allow the request but log the issue
+        error_log("Warning: Could not write rate limit file: {$rate_limit_file}");
+        return true;
+    }
 
     return true;
 }
@@ -404,7 +417,10 @@ function check_ip_rate_limit(string $key, int $max_requests, int $window_seconds
  */
 function get_rate_limit_status(string $key, int $window_seconds, int $max_requests): array {
     $current_time = time();
-    $rate_limit_file = sys_get_temp_dir() . "/rate_limit_{$key}.txt";
+
+    // Use the same temp directory as check_ip_rate_limit
+    $temp_dir = __DIR__ . '/../temp';
+    $rate_limit_file = $temp_dir . DIRECTORY_SEPARATOR . "rate_limit_{$key}.txt";
 
     if (file_exists($rate_limit_file)) {
         $data = json_decode(file_get_contents($rate_limit_file), true);
@@ -428,19 +444,23 @@ function get_rate_limit_status(string $key, int $window_seconds, int $max_reques
  * Clean up expired rate limit files
  */
 function cleanup_rate_limits(): void {
-    $temp_dir = sys_get_temp_dir();
-    $files = glob($temp_dir . "/rate_limit_*.txt");
+    $temp_dir = __DIR__ . '/../temp';
+    if (!is_dir($temp_dir)) {
+        return; // No temp directory to clean
+    }
+
+    $files = glob($temp_dir . DIRECTORY_SEPARATOR . "rate_limit_*.txt");
 
     foreach ($files as $file) {
         $data = json_decode(file_get_contents($file), true);
         if (!$data || !isset($data['window_start'])) {
-            unlink($file);
+            @unlink($file);
             continue;
         }
 
         // Remove files older than 1 hour
         if ($data['window_start'] < (time() - 3600)) {
-            unlink($file);
+            @unlink($file);
         }
     }
 }

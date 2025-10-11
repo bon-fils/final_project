@@ -1,795 +1,1595 @@
 /**
- * Enhanced Student Registration JavaScript
- * Handles form validation, AJAX requests, and UI interactions
- * Version: 2.0 - Refined and optimized
+ * Enhanced Student Registration System - JavaScript
+ * Refined with better error handling, performance, and maintainability
  */
 
-// Global variables
-let videoStream = null;
-let currentPhotoData = null;
-let formAutoSave = null;
-
-/**
- * Initialize form when document is ready
- */
-$(document).ready(function() {
-    initializeForm();
-    setupEventListeners();
-    updateFormProgress();
-    initializeAutoSave();
-});
-
-/**
- * Initialize form components
- */
-function initializeForm() {
-    // Set current date/time
-    $('#currentDateTime').text(new Date().toLocaleString());
-
-    // Focus on first input
-    $('#first_name').focus();
-
-    // Initialize tooltips if available
-    if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
-        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-            return new bootstrap.Tooltip(tooltipTriggerEl);
-        });
-    }
-}
-
-/**
- * Setup all event listeners
- */
-function setupEventListeners() {
-    // Department change handler
-    $('#department').on('change', handleDepartmentChange);
-
-    // Real-time validation
-    setupRealTimeValidation();
-
-    // Photo upload handlers
-    setupPhotoUpload();
-
-    // Camera handlers
-    setupCameraHandlers();
-
-    // Fingerprint handlers
-    setupFingerprintHandlers();
-
-    // Form submission
-    $('#registrationForm').on('submit', handleFormSubmission);
-
-    // Form reset
-    $('#resetForm').on('click', resetForm);
-
-    // Preview button
-    $('#previewBtn').on('click', showPreview);
-
-    // Sidebar toggle for mobile
-    $('#sidebarToggle').on('click', toggleSidebar);
-
-    // Form progress tracking
-    $('input, select').on('input change', updateFormProgress);
-
-    // Auto-save on form changes
-    $('#registrationForm input, #registrationForm select').on('input change', function() {
-        clearTimeout(formAutoSave);
-        formAutoSave = setTimeout(saveFormData, 2000); // Auto-save after 2 seconds
-    });
-}
-
-/**
- * Handle department selection change
- */
-function handleDepartmentChange() {
-    const depId = $(this).val();
-    const optionSelect = $('#option');
-
-    if (depId) {
-        showLoading('Loading programs...');
-        optionSelect.prop('disabled', true);
-
-        $.ajax({
-            url: '',
-            method: 'POST',
-            data: { get_options: 1, dep_id: depId },
-            dataType: 'json',
-            success: function(response) {
-                hideLoading();
-                if (response.success) {
-                    let optionsHtml = '<option value="">-- Select Program --</option>';
-                    response.options.forEach(function(option) {
-                        optionsHtml += `<option value="${option.id}">${option.name}</option>`;
-                    });
-                    optionSelect.html(optionsHtml);
-                    optionSelect.prop('disabled', false);
-                } else {
-                    showAlert('danger', 'Failed to load programs. Please try again.');
-                }
-            },
-            error: function() {
-                hideLoading();
-                showAlert('danger', 'Network error. Please check your connection.');
-            }
-        });
-    } else {
-        optionSelect.html('<option value="">-- Select Program First --</option>');
-        optionSelect.prop('disabled', true);
-    }
-}
-
-/**
- * Setup real-time validation for form fields
- */
-function setupRealTimeValidation() {
-    const fields = ['email', 'reg_no', 'telephone'];
-
-    fields.forEach(field => {
-        $(`#${field}`).on('blur', function() {
-            validateField(field, $(this).val());
-        });
-
-        $(`#${field}`).on('input', function() {
-            clearFieldValidation(field);
-        });
-    });
-}
-
-/**
- * Validate individual field via AJAX
- */
-function validateField(field, value) {
-    if (!value.trim()) return;
-
-    const feedbackId = field + 'Feedback';
-    const inputElement = $(`#${field}`);
-
-    inputElement.removeClass('is-valid is-invalid');
-
-    $.ajax({
-        url: '',
-        method: 'POST',
-        data: { check_duplicate: 1, field: field, value: value },
-        dataType: 'json',
-        success: function(response) {
-            if (response.valid) {
-                inputElement.addClass('is-valid');
-                $(`#${feedbackId}`).text(response.message || 'Available').show();
-            } else {
-                inputElement.addClass('is-invalid');
-                $(`#${feedbackId}`).text(response.message || 'Already exists').show();
-            }
-        },
-        error: function() {
-            inputElement.addClass('is-invalid');
-            $(`#${feedbackId}`).text('Validation error').show();
-        }
-    });
-}
-
-/**
- * Clear field validation styling
- */
-function clearFieldValidation(field) {
-    const inputElement = $(`#${field}`);
-    const feedbackId = field + 'Feedback';
-
-    inputElement.removeClass('is-valid is-invalid');
-    $(`#${feedbackId}`).hide();
-}
-
-/**
- * Setup photo upload functionality
- */
-function setupPhotoUpload() {
-    const photoInput = $('#photoInput');
-    const uploadArea = $('#photoUploadArea');
-    const uploadContent = $('#uploadContent');
-    const previewContent = $('#previewContent');
-    const photoPreview = $('#photoPreview');
-
-    // Click to select file
-    $('#selectPhotoBtn').on('click', function() {
-        photoInput.click();
-    });
-
-    // File selection
-    photoInput.on('change', function(e) {
-        const file = e.target.files[0];
-        if (file) {
-            handleFileSelection(file);
-        }
-    });
-
-    // Drag and drop
-    uploadArea.on('dragover', function(e) {
-        e.preventDefault();
-        $(this).addClass('dragover');
-    });
-
-    uploadArea.on('dragleave', function(e) {
-        e.preventDefault();
-        $(this).removeClass('dragover');
-    });
-
-    uploadArea.on('drop', function(e) {
-        e.preventDefault();
-        $(this).removeClass('dragover');
-
-        const files = e.originalEvent.dataTransfer.files;
-        if (files.length > 0) {
-            handleFileSelection(files[0]);
-        }
-    });
-
-    // Remove photo
-    $('#removePhoto').on('click', function() {
-        clearPhoto();
-    });
-
-    // Change photo
-    $('#changePhoto').on('click', function() {
-        photoInput.click();
-    });
-
-    function handleFileSelection(file) {
-        // Validate file type
-        if (!file.type.startsWith('image/')) {
-            showAlert('danger', 'Please select a valid image file.');
-            return;
-        }
-
-        // Validate file size (5MB)
-        if (file.size > 5 * 1024 * 1024) {
-            showAlert('danger', 'File size must be less than 5MB.');
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            photoPreview.attr('src', e.target.result);
-            currentPhotoData = null; // Clear camera data
-            uploadContent.addClass('d-none');
-            previewContent.removeClass('d-none');
+class StudentRegistration {
+    constructor() {
+        this.config = {
+            retryAttempts: 3,
+            retryDelay: 1000,
+            maxFileSize: 5 * 1024 * 1024, // 5MB
+            validImageTypes: ['image/jpeg', 'image/png', 'image/webp'],
+            minFaceImages: 2,
+            maxFaceImages: 5
         };
-        reader.readAsDataURL(file);
+
+        this.state = {
+            csrfToken: window.csrfToken || null,
+            fingerprintCaptured: false,
+            fingerprintData: null,
+            fingerprintQuality: 0,
+            isCapturing: false,
+            isSubmitting: false,
+            selectedFaceImagesCount: 0
+        };
+
+        this.cache = {
+            districts: new Map(),
+            sectors: new Map(),
+            cells: new Map(),
+            programs: new Map()
+        };
+
+        this.selectors = {
+            form: '#registrationForm',
+            province: '#province',
+            district: '#district',
+            sector: '#sector',
+            cell: '#cell',
+            department: '#department',
+            program: '#option',
+            alertContainer: '#alertContainer',
+            loadingOverlay: '#loadingOverlay'
+        };
+
+        this.originalCellOptions = [];
+        this.init();
     }
 
-    function clearPhoto() {
-        photoInput.val('');
-        photoPreview.attr('src', '');
-        currentPhotoData = null;
-        uploadContent.removeClass('d-none');
-        previewContent.addClass('d-none');
+    /**
+     * Initialize the application
+     */
+    async init() {
+        try {
+            await this.initializeDependencies();
+            this.setupEventListeners();
+            this.initializeFormState();
+            this.showWelcomeMessage();
+            this.setupGlobalErrorHandler();
+
+            // Load provinces immediately for better UX
+            await this.loadProvinces();
+
+            // Non-blocking connectivity check
+            setTimeout(() => this.checkServerConnectivity(), 1000);
+        } catch (error) {
+            console.error('Initialization error:', error);
+            this.showAlert('System initialization failed. Please refresh the page.', 'error', false);
+        }
     }
-}
 
-/**
- * Setup camera functionality
- */
-function setupCameraHandlers() {
-    const cameraContainer = $('#cameraContainer');
-    const video = $('#video');
-    const captureBtn = $('#captureBtn');
-    const cancelBtn = $('#cancelCamera');
-    const cameraPhoto = $('#cameraPhoto');
+    /**
+     * Initialize required dependencies and state
+     */
+    async initializeDependencies() {
+        // CSRF token is already set from window.csrfToken
 
-    $('#useCameraBtn').on('click', function() {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            cameraContainer.show();
-            $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i>Starting Camera...');
+        // Wait for DOM to be fully ready
+        if (document.readyState !== 'complete') {
+            await new Promise(resolve => {
+                document.addEventListener('DOMContentLoaded', resolve);
+            });
+        }
+    }
 
-            navigator.mediaDevices.getUserMedia({
-                video: {
-                    width: 320,
-                    height: 240,
-                    facingMode: 'user'
-                }
-            })
-                .then(function(stream) {
-                    videoStream = stream;
-                    video[0].srcObject = stream;
-                    $('#useCameraBtn').prop('disabled', false).html('<i class="fas fa-camera me-2"></i>Use Camera');
-                })
-                .catch(function(error) {
-                    console.error('Camera error:', error);
-                    showAlert('danger', 'Unable to access camera. Please check permissions.');
-                    $('#useCameraBtn').prop('disabled', false).html('<i class="fas fa-camera me-2"></i>Use Camera');
-                    cameraContainer.hide();
-                });
+
+    /**
+     * Initialize form state and UI
+     */
+    initializeFormState() {
+        this.updateProgress();
+        this.initializeLocationFields();
+        this.initializeProgramField();
+        this.updateFingerprintUI('ready');
+
+        // Pre-validate form after a short delay
+        setTimeout(() => this.validateForm(), 500);
+    }
+
+    /**
+     * Initialize program field with all programs loaded
+     */
+    initializeProgramField() {
+        const $program = $(this.selectors.program);
+
+        // Enable the program field since all programs are pre-loaded
+        $program.prop('disabled', false);
+        $program.find('option:first').text('🎓 Select Your Program (All Departments)');
+
+        // Update help text
+        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
+        $('#programHelp small').html('<strong class="text-muted">Select your academic department above to filter available programs</strong>');
+
+        // Show program count
+        const totalPrograms = $program.find('option[data-department]').length;
+        if (totalPrograms > 0) {
+            $('#programCountText').text(`${totalPrograms} total program${totalPrograms !== 1 ? 's' : ''} available across all departments`);
+            $('#programCount').removeClass('d-none');
+        }
+    }
+
+    /**
+     * Initialize location fields and load provinces
+     */
+    initializeLocationFields() {
+        $(this.selectors.province).addClass('enabled');
+        this.resetLocationFields('province');
+        // Provinces will be loaded by loadProvinces() called in init()
+    }
+
+    /**
+     * Set up all event listeners
+     */
+    setupEventListeners() {
+        const { form, province, district, sector, cell, department } = this.selectors;
+        
+        // Location cascading with debouncing
+        $(province).on('change', this.debounce(this.handleProvinceChange.bind(this), 300));
+        $(district).on('change', this.debounce(this.handleDistrictChange.bind(this), 300));
+        $(sector).on('change', this.debounce(this.handleSectorChange.bind(this), 300));
+        $(cell).on('change', this.debounce(this.handleCellChange.bind(this), 300));
+        
+        // Department and program handling
+        $(department).on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
+        
+        // Form submission and validation
+        $(form).on('submit', this.handleSubmit.bind(this));
+        
+        // Real-time validation
+        $('input[required]').on('blur', this.validateField.bind(this));
+        $('input[required]').on('input', this.debounce(this.updateProgress.bind(this), 200));
+        
+        // Enhanced input validation
+        this.setupInputValidation();
+        
+        // File handling
+        this.setupFileHandlers();
+        
+        // Fingerprint functionality
+        this.setupFingerprintHandlers();
+        
+        // UI interactions
+        this.setupUIHandlers();
+    }
+
+    /**
+     * Set up input validation handlers
+     */
+    setupInputValidation() {
+        // Registration number validation
+        $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
+        
+        // Email validation
+        $('input[name="email"]').on('blur', this.validateEmailField.bind(this));
+        
+        // Phone validation
+        $('input[name="telephone"], input[name="parent_contact"]').on('blur', this.validatePhoneField.bind(this));
+        $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
+        
+        // Input filtering
+        $('input[name="telephone"]').on('input', (e) => {
+            e.target.value = e.target.value.replace(/[^0-9]/g, '').substring(0, 10);
+        });
+        
+        $('#studentIdNumber').on('input', (e) => {
+            e.target.value = e.target.value.replace(/[^0-9]/g, '');
+        });
+        
+        $('input[name="parent_contact"]').on('input', (e) => {
+            e.target.value = e.target.value.replace(/[^0-9]/g, '').substring(0, 10);
+        });
+    }
+
+    /**
+     * Set up file upload handlers
+     */
+    setupFileHandlers() {
+        // Photo selection
+        $('#selectPhotoBtn').on('click', () => $('#photoInput').click());
+        $('#photoInput').on('change', this.handlePhotoSelect.bind(this));
+        $('#removePhoto').on('click', this.removePhoto.bind(this));
+
+        // Face images
+        $('#faceImagesInput').on('change', this.handleFaceImagesSelect.bind(this));
+        $('#clearFaceImages').on('click', this.clearFaceImages.bind(this));
+        $(document).on('click', '.remove-image', this.removeFaceImage.bind(this));
+    }
+
+    /**
+     * Handle photo selection
+     */
+    handlePhotoSelect(e) {
+        const file = e.target.files[0];
+        if (file && this.validateImage(file)) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                $('#photoPreview').attr('src', e.target.result).removeClass('d-none');
+                $('#removePhoto').removeClass('d-none');
+                $('#selectPhotoBtn').addClass('d-none');
+                this.showAlert('✅ Photo selected successfully!', 'success');
+            };
+            reader.readAsDataURL(file);
         } else {
-            showAlert('danger', 'Camera not supported on this device.');
+            // Clear the input if file is invalid
+            e.target.value = '';
+            this.showAlert('❌ Invalid image file. Please select a JPEG, PNG, or WebP image under 5MB.', 'error');
         }
-    });
+    }
 
-    captureBtn.on('click', function() {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = video[0].videoWidth;
-        canvas.height = video[0].videoHeight;
-        context.drawImage(video[0], 0, 0);
+    /**
+     * Remove selected photo
+     */
+    removePhoto() {
+        $('#photoInput').val('');
+        $('#photoPreview').addClass('d-none').attr('src', '');
+        $('#removePhoto').addClass('d-none');
+        $('#selectPhotoBtn').removeClass('d-none');
+        this.showAlert('🗑️ Photo removed.', 'info');
+    }
 
-        const dataURL = canvas.toDataURL('image/png');
-        cameraPhoto.val(dataURL);
-        currentPhotoData = dataURL;
+    /**
+     * Handle face images selection
+     */
+    handleFaceImagesSelect(e) {
+        const files = Array.from(e.target.files);
+        const validFiles = [];
+        const maxFiles = 5; 
+        const minFiles = 2;
 
-        // Stop camera
-        if (videoStream) {
-            videoStream.getTracks().forEach(track => track.stop());
+        // Validate files
+        for (const file of files) {
+            if (this.validateImage(file)) {
+                validFiles.push(file);
+            }
         }
 
-        // Show preview
-        $('#photoPreview').attr('src', dataURL);
-        $('#uploadContent').addClass('d-none');
-        $('#previewContent').removeClass('d-none');
-        cameraContainer.hide();
-
-        showAlert('success', 'Photo captured successfully!');
-    });
-
-    cancelBtn.on('click', function() {
-        if (videoStream) {
-            videoStream.getTracks().forEach(track => track.stop());
-        }
-        cameraContainer.hide();
-    });
-}
-
-/**
- * Setup fingerprint functionality
- */
-function setupFingerprintHandlers() {
-    const captureBtn = $('#captureFingerprintBtn');
-    const clearBtn = $('#clearFingerprintBtn');
-    const fingerprintData = $('#fingerprintData');
-    const fingerprintTemplate = $('#fingerprintTemplate');
-
-    captureBtn.on('click', function() {
-        startFingerprintCapture();
-    });
-
-    clearBtn.on('click', function() {
-        clearFingerprint();
-    });
-
-    function startFingerprintCapture() {
-        // Check if WebUSB or fingerprint API is available
-        if (!navigator.usb && !window.Fingerprint && !window.webkitFingerprint) {
-            showFingerprintSimulation();
+        // Check file count limits
+        if (validFiles.length < minFiles) {
+            this.showAlert(`Please select at least ${minFiles} images for face recognition.`, 'error');
+            e.target.value = '';
             return;
         }
+
+        if (validFiles.length > maxFiles) {
+            this.showAlert(`Maximum ${maxFiles} images allowed. Please select fewer images.`, 'error');
+            e.target.value = '';
+            return;
+        }
+
+        // Clear existing previews
+        $('#faceImagesPreview').empty().removeClass('d-none');
+        $('#faceImagesUploadArea .face-images-placeholder').addClass('d-none');
+        $('#clearFaceImages').removeClass('d-none');
+
+        // Create previews for each valid file with enhanced quality feedback
+        validFiles.forEach((file, index) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const imageItem = document.createElement('div');
+                imageItem.className = 'face-image-item position-relative';
+
+                // Estimate image quality based on file size (rough approximation)
+                const qualityClass = file.size > 500000 ? 'text-success' : file.size > 200000 ? 'text-warning' : 'text-danger';
+                const qualityText = file.size > 500000 ? 'High' : file.size > 200000 ? 'Medium' : 'Low';
+
+                imageItem.innerHTML = `
+                    <img src="${e.target.result}" alt="Face image ${index + 1}" class="img-fluid rounded">
+                    <button type="button" class="remove-image btn btn-sm btn-danger position-absolute" data-index="${index}" title="Remove image" style="top: 5px; right: 5px;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <div class="image-info position-absolute bottom-0 start-0 bg-dark bg-opacity-75 text-white px-2 py-1 rounded-top">
+                        <small><i class="fas fa-image me-1"></i>${index + 1}</small>
+                        <span class="badge ${qualityClass} ms-1">${qualityText}</span>
+                    </div>
+                    <div class="image-size text-muted small mt-1">
+                        ${(file.size / 1024).toFixed(1)} KB
+                    </div>
+                `;
+                $('#faceImagesPreview').append(imageItem);
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Update count display
+        this.state.selectedFaceImagesCount = validFiles.length;
+        this.updateFaceImagesCount();
+        this.showAlert(`✅ ${validFiles.length} face images selected successfully!`, 'success');
+    }
+
+    /**
+     * Remove a face image
+     */
+    removeFaceImage(e) {
+        e.preventDefault();
+        const index = $(e.currentTarget).data('index');
+        const $imageItem = $(e.currentTarget).closest('.face-image-item');
+
+        // Remove the image item
+        $imageItem.remove();
+
+        // Update remaining image numbers
+        $('#faceImagesPreview .face-image-item').each(function(i) {
+            $(this).find('.image-number').text(i + 1);
+            $(this).find('.remove-image').attr('data-index', i);
+        });
+
+        // Update count
+        this.state.selectedFaceImagesCount--;
+        this.updateFaceImagesCount();
+
+        // Check if any images remain
+        const remainingImages = $('#faceImagesPreview .face-image-item').length;
+
+        if (remainingImages === 0) {
+            this.clearFaceImages();
+        } else {
+            this.showAlert(`Image removed. ${remainingImages} image${remainingImages !== 1 ? 's' : ''} remaining.`, 'info');
+        }
+    }
+
+    /**
+     * Clear all face images
+     */
+    clearFaceImages() {
+        $('#faceImagesInput').val('');
+        $('#faceImagesPreview').empty().addClass('d-none');
+        $('#faceImagesUploadArea .face-images-placeholder').removeClass('d-none');
+        $('#clearFaceImages').addClass('d-none');
+        this.state.selectedFaceImagesCount = 0;
+        this.updateFaceImagesCount();
+    }
+
+    /**
+     * Update face images count display
+     */
+    updateFaceImagesCount() {
+        const count = this.state.selectedFaceImagesCount;
+        const $countElement = $('#faceImagesCount');
+        if (count === 0) {
+            $countElement.text('0 images selected');
+            $countElement.removeClass('text-success text-warning').addClass('text-muted');
+        } else if (count >= 2 && count <= 5) {
+            $countElement.text(`${count} images selected`);
+            $countElement.removeClass('text-muted text-warning').addClass('text-success');
+        } else {
+            $countElement.text(`${count} images selected`);
+            $countElement.removeClass('text-muted text-success').addClass('text-warning');
+        }
+    }
+
+    /**
+     * Set up fingerprint handlers
+     */
+    setupFingerprintHandlers() {
+        $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
+        $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
+        $('#enrollFingerprintBtn').on('click', this.enrollFingerprint.bind(this));
+    }
+
+    /**
+     * Set up UI interaction handlers
+     */
+    setupUIHandlers() {
+        // Mobile menu
+        $('#mobileMenuToggle').on('click', () => {
+            $('#adminSidebar').toggleClass('show');
+            $('#mainContent').toggleClass('sidebar-open');
+        });
+
+        // Close sidebar when clicking outside (mobile)
+        $(document).on('click', (e) => {
+            if ($(window).width() <= 768 &&
+                !$(e.target).closest('#adminSidebar, #mobileMenuToggle').length) {
+                $('#adminSidebar').removeClass('show');
+                $('#mainContent').removeClass('sidebar-open');
+            }
+        });
+
+        // Reset form
+        $('#resetBtn').on('click', this.resetForm.bind(this));
+        
+        // Cell search
+        $('#cellSearch').on('input', this.debounce(this.handleCellSearch.bind(this), 300));
+    }
+
+    /**
+     * Load provinces data
+     */
+    async loadProvinces() {
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data: {
+                    action: 'get_provinces',
+                    csrf_token: this.state.csrfToken
+                }
+            });
+
+            if (response.success && response.provinces) {
+                this.populateSelect(this.selectors.province, response.provinces, '📍 Select Province');
+                this.showAlert(`📍 ${response.provinces.length} provinces loaded successfully!`, 'success');
+            } else {
+                throw new Error(response.message || 'Failed to load provinces');
+            }
+        } catch (error) {
+            this.handleDataLoadError(error, this.selectors.province, 'provinces');
+        }
+    }
+
+    /**
+     * Handle province change event
+     */
+    async handleProvinceChange() {
+        const provinceId = $(this.selectors.province).val();
+        const $district = $(this.selectors.district);
+
+        this.resetLocationFields('district');
+
+        if (!provinceId) return;
+
+        // Check cache first
+        if (this.cache.districts.has(provinceId)) {
+            this.populateDistricts(this.cache.districts.get(provinceId));
+            return;
+        }
+
+        await this.loadLocationData({
+            action: 'get_districts',
+            province_id: parseInt(provinceId, 10),
+            cacheKey: provinceId,
+            cache: this.cache.districts,
+            target: this.selectors.district,
+            populateMethod: this.populateDistricts.bind(this),
+            loadingText: 'Loading districts...',
+            successText: (count, provinceName) => 
+                `🏛️ ${count} district${count !== 1 ? 's' : ''} loaded for ${provinceName}`
+        });
+    }
+
+    /**
+     * Handle district change event
+     */
+    async handleDistrictChange() {
+        const districtId = $(this.selectors.district).val();
+        const provinceId = $(this.selectors.province).val();
+        const $sector = $(this.selectors.sector);
+
+        this.resetLocationFields('sector');
+
+        if (!districtId) return;
+
+        if (!provinceId) {
+            this.showAlert('Please select a province first.', 'error');
+            $(this.selectors.district).val('');
+            return;
+        }
+
+        // Check cache first
+        const cacheKey = `${provinceId}_${districtId}`;
+        if (this.cache.sectors.has(cacheKey)) {
+            this.populateSectors(this.cache.sectors.get(cacheKey));
+            return;
+        }
+
+        await this.loadLocationData({
+            action: 'get_sectors',
+            province_id: parseInt(provinceId, 10),
+            district_id: parseInt(districtId, 10),
+            cacheKey: cacheKey,
+            cache: this.cache.sectors,
+            target: this.selectors.sector,
+            populateMethod: this.populateSectors.bind(this),
+            loadingText: 'Loading sectors...',
+            successText: (count, sectorName) =>
+                `🏘️ ${count} sector${count !== 1 ? 's' : ''} loaded for ${sectorName}`
+        });
+    }
+
+    /**
+     * Generic method to load location data
+     */
+    async loadLocationData(options) {
+        const {
+            action,
+            province_id,
+            district_id,
+            sector_id,
+            cacheKey,
+            cache,
+            target,
+            populateMethod,
+            loadingText,
+            successText
+        } = options;
+
+        const $target = $(target);
+        
+        // Show loading state
+        $target.prop('disabled', true).html(`<option value="">${loadingText}</option>`);
+        this.showLocationLoading($target, true);
+
+        try {
+            const data = { action, csrf_token: this.state.csrfToken };
+            if (province_id) data.province_id = province_id;
+            if (district_id) data.district_id = district_id;
+            if (sector_id) data.sector_id = sector_id;
+
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data
+            });
+
+            if (response.success && response[action.replace('get_', '')]) {
+                const items = response[action.replace('get_', '')];
+                
+                // Cache the results
+                cache.set(cacheKey, items);
+                populateMethod(items);
+
+                const parentName = this.getParentLocationName(action);
+                this.showAlert(successText(items.length, parentName), 'success');
+            } else {
+                throw new Error(response.message || `No ${action.replace('get_', '')} found`);
+            }
+        } catch (error) {
+            this.handleDataLoadError(error, target, action.replace('get_', ''));
+        } finally {
+            this.showLocationLoading($target, false);
+            $target.prop('disabled', false);
+        }
+    }
+
+    /**
+     * Get parent location name for success messages
+     */
+    getParentLocationName(action) {
+        switch (action) {
+            case 'get_districts':
+                return $(this.selectors.province + ' option:selected').text();
+            case 'get_sectors':
+                return $(this.selectors.district + ' option:selected').text();
+            case 'get_cells':
+                return $(this.selectors.sector + ' option:selected').text();
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Populate districts select
+     */
+    populateDistricts(districts) {
+        this.populateSelect(this.selectors.district, districts, '🏛️ Select District');
+    }
+
+    /**
+     * Populate sectors select
+     */
+    populateSectors(sectors) {
+        this.populateSelect(this.selectors.sector, sectors, '🏘️ Select Sector');
+    }
+
+    /**
+     * Populate cells select
+     */
+    populateCells(cells) {
+        const $cell = $(this.selectors.cell);
+
+        if (cells.length === 0) {
+            $cell.html('<option value="">No cells available for this sector</option>')
+                  .addClass('enabled');
+            $('#cellSearchContainer').hide();
+            this.originalCellOptions = [];
+            return;
+        }
+
+        this.populateSelect(this.selectors.cell, cells, '📍 Select Cell');
+        this.originalCellOptions = cells;
+
+        // Show search container if there are many cells
+        $('#cellSearchContainer').toggle(cells.length > 5);
+        $('#cellSearch').val('');
+    }
+
+    /**
+     * Generic method to populate select elements
+     */
+    populateSelect(selector, items, placeholder) {
+        const $select = $(selector);
+        const options = items.map(item =>
+            `<option value="${item.id}">${this.escapeHtml(item.name)}</option>`
+        ).join('');
+
+        $select.html(`<option value="">${placeholder}</option>${options}`)
+               .addClass('enabled');
+    }
+
+    /**
+     * Reset location fields based on changed level
+     */
+    resetLocationFields(fromLevel) {
+        const levels = ['district', 'sector', 'cell'];
+        const levelIndex = levels.indexOf(fromLevel);
+
+        levels.forEach((level, index) => {
+            if (index > levelIndex) {
+                const $field = $(`#${level}`);
+                $field.prop('disabled', true).val('').removeClass('enabled');
+
+                const placeholders = {
+                    district: '🏛️ Select Province First',
+                    sector: '🏘️ Select District First',
+                    cell: '📍 Select Sector First'
+                };
+
+                $field.html(`<option value="">${placeholders[level]}</option>`);
+
+                // Clear cache for dependent levels
+                if (level === 'district') {
+                    this.cache.sectors.clear();
+                    this.cache.cells.clear();
+                } else if (level === 'sector') {
+                    this.cache.cells.clear();
+                }
+
+                // Hide cell information when resetting
+                if (level === 'cell') {
+                    $('#cellInfo').hide();
+                    $('#cellSearchContainer').hide();
+                    $('#cellSearch').val('');
+                    this.originalCellOptions = [];
+                }
+            }
+        });
+    }
+
+    /**
+     * Handle department change event
+     */
+    async handleDepartmentChange() {
+        const deptId = $(this.selectors.department).val();
+        const $program = $(this.selectors.program);
+
+        if (!deptId) {
+            this.resetProgramSelection();
+            return;
+        }
+
+        // Get department name for filtering
+        const deptName = $(this.selectors.department + ' option:selected').text().replace('📚 ', '');
+
+        // Filter existing programs by department
+        this.filterProgramsByDepartment(deptId, deptName);
+    }
+
+    /**
+     * Filter programs by selected department
+     */
+    filterProgramsByDepartment(departmentId, departmentName) {
+        const $program = $(this.selectors.program);
+        const $allOptions = $program.find('option[data-department]');
+        const $loadingSpinner = $('.program-loading');
 
         // Show loading state
-        captureBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i>Capturing...');
+        $loadingSpinner.removeClass('d-none');
+        $program.prop('disabled', true);
 
-        // Simulate fingerprint capture process
-        simulateFingerprintCapture();
-    }
+        // Reset help text
+        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
+        $('#programHelp small').html('<strong class="text-muted">Filtering programs for selected department...</strong>');
 
-    function simulateFingerprintCapture() {
-        let progress = 0;
-        const progressInterval = setInterval(() => {
-            progress += 10;
-            updateFingerprintProgress(progress);
+        // Hide all program options first
+        $allOptions.addClass('d-none');
 
-            if (progress >= 100) {
-                clearInterval(progressInterval);
-                completeFingerprintCapture();
-            }
-        }, 300);
-    }
+        // Show only programs for selected department
+        const $deptPrograms = $allOptions.filter(function() {
+            const optionDept = $(this).data('department');
+            return optionDept && optionDept.includes(departmentName.replace(' Department', '').trim());
+        });
 
-    function updateFingerprintProgress(progress) {
-        const statusDiv = $('#fingerprintStatus');
-        statusDiv.html(`
-            <div class="text-center">
-                <div class="mb-3">
-                    <i class="fas fa-fingerprint fa-3x text-primary mb-3"></i>
-                    <div class="progress" style="height: 8px;">
-                        <div class="progress-bar bg-primary" style="width: ${progress}%"></div>
-                    </div>
-                </div>
-                <h6 class="text-primary">Capturing Fingerprint</h6>
-                <small class="text-muted">Keep finger on scanner... ${progress}%</small>
-            </div>
-        `);
-    }
+        // Show matching programs
+        $deptPrograms.removeClass('d-none');
 
-    function completeFingerprintCapture() {
-        // Generate mock fingerprint data
-        const mockFingerprintData = generateMockFingerprintData();
-        const mockTemplate = generateMockTemplate();
-
-        // Store fingerprint data
-        fingerprintData.val(JSON.stringify(mockFingerprintData));
-        fingerprintTemplate.val(mockTemplate);
-
-        // Update UI
-        $('#fingerprintStatus').addClass('d-none');
-        $('#fingerprintCaptured').removeClass('d-none');
-        captureBtn.prop('disabled', false).html('<i class="fas fa-fingerprint me-2"></i>Recapture Fingerprint');
-        clearBtn.removeClass('d-none');
-
-        showAlert('success', 'Fingerprint captured successfully!');
-    }
-
-    function clearFingerprint() {
-        fingerprintData.val('');
-        fingerprintTemplate.val('');
-
-        $('#fingerprintStatus').removeClass('d-none');
-        $('#fingerprintCaptured').addClass('d-none');
-        captureBtn.prop('disabled', false).html('<i class="fas fa-fingerprint me-2"></i>Capture Fingerprint');
-        clearBtn.addClass('d-none');
-    }
-
-    function generateMockFingerprintData() {
-        // Generate mock fingerprint data for demonstration
-        const data = [];
-        for (let i = 0; i < 256; i++) {
-            data.push(Math.floor(Math.random() * 256));
+        // Update the first option text
+        const programCount = $deptPrograms.length;
+        if (programCount > 0) {
+            $program.find('option:first').text('🎓 Select Your Program');
+            $program.prop('disabled', false).addClass('programs-loaded').data('department-id', departmentId);
+            this.updateProgramUI(programCount, true);
+            this.showAlert(`✅ ${programCount} program${programCount !== 1 ? 's' : ''} available for ${departmentName}`, 'success');
+        } else {
+            $program.find('option:first').text('❌ No programs available for this department');
+            $program.prop('disabled', true).removeClass('programs-loaded');
+            this.updateProgramUI(0, false);
+            this.showAlert('⚠️ No programs found for this department', 'warning');
         }
-        return data;
+
+        // Hide loading spinner
+        $loadingSpinner.addClass('d-none');
     }
 
-    function generateMockTemplate() {
-        // Generate mock fingerprint template
-        return btoa(String.fromCharCode(...new Array(512).fill(0).map(() => Math.floor(Math.random() * 256))));
+    /**
+     * Update program selection UI
+     */
+    updateProgramUI(programCount, success) {
+        const $programCount = $('#programCount');
+        const $programIcon = $('#programLoadedIcon');
+        const $programHelp = $('#programHelp');
+
+        if (success && programCount > 0) {
+            $('#programCountText').text(`${programCount} program${programCount !== 1 ? 's' : ''} available for selection`);
+            $programCount.removeClass('d-none');
+            $programIcon.removeClass('d-none');
+            
+            $programHelp.find('.fas').removeClass('fa-info-circle text-info').addClass('fa-check-circle text-success');
+            $programHelp.find('small').html('<strong class="text-success">Programs loaded successfully!</strong> Choose your desired program from the dropdown above');
+        } else {
+            $programCount.addClass('d-none');
+            $programHelp.find('small').text(
+                programCount === 0 ? 
+                'No programs are currently available for this department' :
+                'Failed to load programs. Please try selecting the department again.'
+            );
+        }
     }
 
-    function showFingerprintSimulation() {
-        // Show simulation modal for demonstration
-        const modal = $(`
-            <div class="modal fade" id="fingerprintModal" tabindex="-1">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">
-                                <i class="fas fa-fingerprint me-2"></i>Fingerprint Capture
-                            </h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body text-center">
-                            <div class="mb-4">
-                                <i class="fas fa-fingerprint fa-4x text-primary mb-3"></i>
-                                <h6>Fingerprint Scanner Simulation</h6>
-                                <p class="text-muted">This is a simulation of fingerprint capture.</p>
-                            </div>
-
-                            <div class="alert alert-info">
-                                <strong>Note:</strong> In a real implementation, this would connect to a fingerprint scanner device.
-                            </div>
-
-                            <div class="mb-3">
-                                <small class="text-muted">Supported fingerprint scanners:</small>
-                                <ul class="text-start mt-2">
-                                    <li>DigitalPersona U.are.U</li>
-                                    <li>Futronic FS80</li>
-                                    <li>SecuGen Hamster</li>
-                                    <li>Integrated Windows Hello</li>
-                                </ul>
-                            </div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                            <button type="button" class="btn btn-primary" id="simulateCapture">
-                                <i class="fas fa-play me-1"></i>Simulate Capture
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `);
-
-        $('body').append(modal);
-        const bsModal = new bootstrap.Modal(modal[0]);
-        bsModal.show();
-
-        $('#simulateCapture').on('click', function() {
-            bsModal.hide();
-            modal.remove();
-            startFingerprintCapture();
-        });
-
-        modal.on('hidden.bs.modal', function() {
-            $(this).remove();
-        });
-    }
-}
-
-/**
- * Handle form submission with enhanced validation
- */
-function handleFormSubmission(e) {
-    e.preventDefault();
-
-    if (!validateForm()) {
-        showAlert('warning', 'Please fill in all required fields correctly.');
-        return;
+    /**
+     * Handle data load errors consistently
+     */
+    handleDataLoadError(error, target, dataType) {
+        console.error(`${dataType} loading error:`, error);
+        $(target).html(`<option value="">❌ Failed to load ${dataType}</option>`);
+        this.showAlert(`❌ Failed to load ${dataType}. Please try again.`, 'error');
     }
 
-    const formData = new FormData(this);
-    if (currentPhotoData) {
-        formData.set('camera_photo', currentPhotoData);
+    /**
+     * Handle program load errors
+     */
+    handleProgramLoadError(error) {
+        console.error('Program loading error:', error);
+        $(this.selectors.program).html('<option value="">Error loading programs</option>')
+                                .removeData('department-id');
+        this.updateProgramUI(0, false);
+        this.showAlert('❌ Failed to load programs. Please try again.', 'error');
     }
 
-    showLoading('Registering student...');
+    /**
+     * Retryable AJAX wrapper with exponential backoff
+     */
+    async retryableAjax(options, retries = this.config.retryAttempts) {
+        const defaultOptions = {
+            timeout: 10000,
+            dataType: 'json',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        };
 
-    $.ajax({
-        url: '',
-        method: 'POST',
-        data: formData,
-        processData: false,
-        contentType: false,
-        dataType: 'json',
-        success: function(response) {
-            hideLoading();
+        const finalOptions = { ...defaultOptions, ...options };
 
-            if (response.success) {
-                showAlert('success', response.message);
+        for (let attempt = 0; attempt < retries; attempt++) {
+            try {
+                const response = await $.ajax(finalOptions);
 
-                // Clear auto-save data
-                localStorage.removeItem('studentRegistrationData');
-
-                // Reset form after successful registration
-                setTimeout(function() {
-                    if (response.redirect) {
-                        window.location.href = response.redirect;
-                    } else {
-                        resetForm();
-                    }
-                }, 2000);
-            } else {
-                if (response.errors && Array.isArray(response.errors)) {
-                    // Show field-specific errors
-                    response.errors.forEach(function(error) {
-                        showAlert('danger', error);
-                    });
+                if (response && typeof response === 'object') {
+                    return response;
                 } else {
-                    showAlert('danger', response.message || 'Registration failed');
+                    throw new Error('Invalid response format');
+                }
+            } catch (error) {
+                const isLastAttempt = attempt === retries - 1;
+                
+                if (isLastAttempt) {
+                    console.error(`AJAX request failed after ${retries} attempts:`, this.getErrorMessage(error));
+                    throw error;
+                }
+
+                // Exponential backoff with jitter
+                const delay = this.config.retryDelay * Math.pow(2, attempt) + Math.random() * 1000;
+                console.log(`Retrying in ${Math.round(delay)}ms... (attempt ${attempt + 2}/${retries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    /**
+     * Handle sector change event
+     */
+    async handleSectorChange() {
+        const sectorId = $(this.selectors.sector).val();
+        const districtId = $(this.selectors.district).val();
+        const provinceId = $(this.selectors.province).val();
+        const $cell = $(this.selectors.cell);
+
+        this.resetLocationFields('cell');
+
+        if (!sectorId) return;
+
+        if (!provinceId || !districtId) {
+            this.showAlert('Please select province and district first.', 'error');
+            $(this.selectors.sector).val('');
+            return;
+        }
+
+        // Check cache first
+        const cacheKey = `${provinceId}_${districtId}_${sectorId}`;
+        if (this.cache.cells.has(cacheKey)) {
+            this.populateCells(this.cache.cells.get(cacheKey));
+            return;
+        }
+
+        await this.loadLocationData({
+            action: 'get_cells',
+            province_id: parseInt(provinceId, 10),
+            district_id: parseInt(districtId, 10),
+            sector_id: parseInt(sectorId, 10),
+            cacheKey: cacheKey,
+            cache: this.cache.cells,
+            target: this.selectors.cell,
+            populateMethod: this.populateCells.bind(this),
+            loadingText: 'Loading cells...',
+            successText: (count, sectorName) =>
+                `📍 ${count} cell${count !== 1 ? 's' : ''} loaded for ${sectorName}`
+        });
+    }
+
+    /**
+     * Handle cell change event
+     */
+    handleCellChange() {
+        const cellId = $(this.selectors.cell).val();
+
+        if (!cellId) {
+            $('#cellInfo').hide();
+            return;
+        }
+
+        // Find cell information
+        const selectedCell = this.originalCellOptions.find(cell => cell.id == cellId);
+        if (selectedCell) {
+            $('#cellInfo').show();
+            // Could display additional cell information here if available
+        }
+    }
+
+    /**
+     * Handle cell search functionality
+     */
+    handleCellSearch() {
+        const searchTerm = $('#cellSearch').val().toLowerCase();
+        const $cellSelect = $(this.selectors.cell);
+
+        if (!searchTerm) {
+            // Reset to original options
+            this.populateCells(this.originalCellOptions);
+            return;
+        }
+
+        // Filter cells based on search term
+        const filteredCells = this.originalCellOptions.filter(cell =>
+            cell.name.toLowerCase().includes(searchTerm)
+        );
+
+        if (filteredCells.length === 0) {
+            $cellSelect.html('<option value="">No cells match your search</option>');
+        } else {
+            this.populateSelect(this.selectors.cell, filteredCells, `📍 ${filteredCells.length} cell${filteredCells.length !== 1 ? 's' : ''} found`);
+        }
+    }
+
+    /**
+     * Validate individual field
+     */
+    validateField(e) {
+        const $field = $(e.target);
+        const fieldName = $field.attr('name');
+        const value = $field.val().trim();
+
+        // Remove previous validation classes
+        $field.removeClass('is-valid is-invalid');
+
+        // Check if field is required and empty
+        if ($field.prop('required') && !value) {
+            $field.addClass('is-invalid');
+            return false;
+        }
+
+        // Field-specific validation
+        switch (fieldName) {
+            case 'email':
+                return this.validateEmailField($field);
+            case 'telephone':
+            case 'parent_contact':
+                return this.validatePhoneField($field);
+            case 'student_id_number':
+                return this.validateStudentId($field);
+            case 'reg_no':
+                return this.validateRegistrationNumber($field);
+            default:
+                // For other fields, just check if required fields have value
+                if ($field.prop('required') && value) {
+                    $field.addClass('is-valid');
+                    return true;
+                }
+                return true;
+        }
+    }
+
+    /**
+     * Validate email field
+     */
+    validateEmailField($field) {
+        const email = $field.val().trim();
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        // Remove existing feedback
+        $field.siblings('.invalid-feedback').remove();
+        $field.siblings('.valid-feedback').remove();
+
+        if (!email) {
+            if ($field.prop('required')) {
+                $field.addClass('is-invalid');
+                $field.after('<div class="invalid-feedback">Email address is required.</div>');
+                return false;
+            }
+            return true;
+        }
+
+        if (!emailRegex.test(email)) {
+            $field.addClass('is-invalid');
+            $field.after('<div class="invalid-feedback">Please enter a valid email address (e.g., student@university.edu).</div>');
+            return false;
+        }
+
+        $field.addClass('is-valid');
+        $field.after('<div class="valid-feedback">Email address looks good!</div>');
+        return true;
+    }
+
+    /**
+     * Validate phone field
+     */
+    validatePhoneField($field) {
+        const phone = $field.val().trim();
+
+        // Remove existing feedback
+        $field.siblings('.invalid-feedback').remove();
+        $field.siblings('.valid-feedback').remove();
+
+        if (!phone) {
+            if ($field.prop('required')) {
+                $field.addClass('is-invalid');
+                $field.after('<div class="invalid-feedback">Phone number is required.</div>');
+                return false;
+            }
+            return true;
+        }
+
+        // Rwanda phone number format: starts with 0, followed by 9 digits
+        const phoneRegex = /^0\d{9}$/;
+
+        if (!phoneRegex.test(phone)) {
+            $field.addClass('is-invalid');
+            $field.after('<div class="invalid-feedback">Phone number must be 10 digits starting with 0 (e.g., 0781234567).</div>');
+            return false;
+        }
+
+        $field.addClass('is-valid');
+        $field.after('<div class="valid-feedback">Phone number is valid!</div>');
+        return true;
+    }
+
+    /**
+     * Validate student ID number
+     */
+    validateStudentId($field) {
+        const id = $field.val().trim();
+
+        if (!id) {
+            if ($field.prop('required')) {
+                $field.addClass('is-invalid');
+                return false;
+            }
+            return true;
+        }
+
+        // Student ID should be exactly 16 digits
+        if (!/^\d{16}$/.test(id)) {
+            $field.addClass('is-invalid');
+            return false;
+        }
+
+        $field.addClass('is-valid');
+        return true;
+    }
+
+    /**
+     * Validate registration number
+     */
+    validateRegistrationNumber($field) {
+        const regNo = $field.val().trim();
+
+        // Remove existing feedback
+        $field.siblings('.invalid-feedback').remove();
+        $field.siblings('.valid-feedback').remove();
+
+        if (!regNo) {
+            if ($field.prop('required')) {
+                $field.addClass('is-invalid');
+                $field.after('<div class="invalid-feedback">Registration number is required.</div>');
+                return false;
+            }
+            return true;
+        }
+
+        // Registration number: alphanumeric, underscores, hyphens, 5-20 chars
+        const regNoRegex = /^[A-Za-z0-9_-]{5,20}$/;
+
+        if (!regNoRegex.test(regNo)) {
+            $field.addClass('is-invalid');
+            $field.after('<div class="invalid-feedback">Registration number must be 5-20 characters, containing only letters, numbers, underscores, and hyphens.</div>');
+            return false;
+        }
+
+        $field.addClass('is-valid');
+        $field.after('<div class="valid-feedback">Registration number format is valid!</div>');
+        return true;
+    }
+
+    /**
+     * Validate entire form
+     */
+    validateForm() {
+        let isValid = true;
+        const $form = $(this.selectors.form);
+
+        // Clear previous validation
+        $form.find('.is-invalid').removeClass('is-invalid');
+        $form.find('.is-valid').removeClass('is-valid');
+
+        // Validate required fields
+        $form.find('[required]').each((index, element) => {
+            const $field = $(element);
+            const value = $field.val();
+
+            if (!value || value.trim() === '') {
+                $field.addClass('is-invalid');
+                isValid = false;
+            } else {
+                // Additional validation for specific fields
+                switch ($field.attr('name')) {
+                    case 'email':
+                        if (!this.validateEmailField($field)) isValid = false;
+                        break;
+                    case 'telephone':
+                        if (!this.validatePhoneField($field)) isValid = false;
+                        break;
+                    case 'student_id_number':
+                        if (!this.validateStudentId($field)) isValid = false;
+                        break;
+                    case 'reg_no':
+                        if (!this.validateRegistrationNumber($field)) isValid = false;
+                        break;
+                    default:
+                        $field.addClass('is-valid');
                 }
             }
-        },
-        error: function(xhr, status, error) {
-            hideLoading();
-            console.error('Registration error:', xhr.responseText);
-
-            let errorMessage = 'Network error. Please try again.';
-            if (xhr.status === 413) {
-                errorMessage = 'File too large. Please choose a smaller image.';
-            } else if (xhr.status === 403) {
-                errorMessage = 'Security token expired. Please refresh the page.';
-            }
-
-            showAlert('danger', errorMessage);
-        }
-    });
-}
-
-/**
- * Validate entire form before submission
- */
-function validateForm() {
-    let isValid = true;
-    const requiredFields = ['first_name', 'last_name', 'email', 'reg_no', 'department_id', 'option_id', 'telephone', 'year_level', 'sex'];
-
-    requiredFields.forEach(field => {
-        const element = $(`#${field}`);
-        if (!element.val().trim()) {
-            element.addClass('is-invalid');
-            isValid = false;
-        } else {
-            element.removeClass('is-invalid');
-        }
-    });
-
-    // Email validation
-    const email = $('#email').val();
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        $('#email').addClass('is-invalid');
-        isValid = false;
-    }
-
-    // Phone validation
-    const phone = $('#telephone').val();
-    if (phone && !/^[\d\s\-\+\(\)]+$/.test(phone)) {
-        $('#telephone').addClass('is-invalid');
-        isValid = false;
-    }
-
-    // Registration number validation
-    const regNo = $('#reg_no').val();
-    if (regNo && !/^[A-Za-z0-9]+$/.test(regNo)) {
-        $('#reg_no').addClass('is-invalid');
-        isValid = false;
-    }
-
-    return isValid;
-}
-
-/**
- * Reset form to initial state
- */
-function resetForm() {
-    $('#registrationForm')[0].reset();
-    $('#registrationForm input, #registrationForm select').removeClass('is-valid is-invalid');
-    $('.invalid-feedback, .valid-feedback').hide();
-    $('#uploadContent').removeClass('d-none');
-    $('#previewContent').addClass('d-none');
-    $('#photoPreview').attr('src', '');
-    $('#option').html('<option value="">-- Select Program First --</option>').prop('disabled', true);
-    $('#cameraContainer').hide();
-    currentPhotoData = null;
-    updateFormProgress();
-
-    // Clear auto-save data
-    localStorage.removeItem('studentRegistrationData');
-
-    // Clear any camera streams
-    if (videoStream) {
-        videoStream.getTracks().forEach(track => track.stop());
-    }
-}
-
-/**
- * Show registration preview modal
- */
-function showPreview() {
-    const data = {
-        first_name: $('#first_name').val(),
-        last_name: $('#last_name').val(),
-        email: $('#email').val(),
-        reg_no: $('#reg_no').val(),
-        telephone: $('#telephone').val(),
-        department: $('#department option:selected').text(),
-        option: $('#option option:selected').text(),
-        year_level: $('#year_level option:selected').text(),
-        sex: $('#sex').val()
-    };
-
-    let previewHtml = '<div class="card"><div class="card-header"><h6 class="mb-0">Registration Preview</h6></div><div class="card-body">';
-    previewHtml += '<div class="row g-3">';
-
-    Object.keys(data).forEach(key => {
-        if (data[key]) {
-            const label = key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-            previewHtml += `<div class="col-md-6"><strong>${label}:</strong> ${data[key]}</div>`;
-        }
-    });
-
-    previewHtml += '</div></div></div>';
-
-    // Create modal
-    const modal = $(`
-        <div class="modal fade" id="previewModal" tabindex="-1">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Registration Preview</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">${previewHtml}</div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        <button type="button" class="btn btn-primary" onclick="$('#submitBtn').click()">Confirm Registration</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `);
-
-    $('body').append(modal);
-    const bsModal = new bootstrap.Modal(modal[0]);
-    bsModal.show();
-
-    modal.on('hidden.bs.modal', function() {
-        $(this).remove();
-    });
-}
-
-/**
- * Update form progress bar
- */
-function updateFormProgress() {
-    const totalFields = $('input[required], select[required]').length;
-    const filledFields = $('input[required], select[required]').filter(function() {
-        return $(this).val().trim() !== '';
-    }).length;
-
-    const progress = totalFields > 0 ? (filledFields / totalFields) * 100 : 0;
-    $('#formProgress').css('width', progress + '%');
-}
-
-/**
- * Initialize auto-save functionality
- */
-function initializeAutoSave() {
-    // Load saved data on page load
-    const savedData = localStorage.getItem('studentRegistrationData');
-    if (savedData) {
-        try {
-            const data = JSON.parse(savedData);
-            Object.keys(data).forEach(key => {
-                $(`#${key}`).val(data[key]);
-            });
-            showAlert('info', 'Previous form data restored.');
-        } catch (e) {
-            console.error('Error loading saved data:', e);
-        }
-    }
-}
-
-/**
- * Save form data to localStorage
- */
-function saveFormData() {
-    const formData = {
-        first_name: $('#first_name').val(),
-        last_name: $('#last_name').val(),
-        email: $('#email').val(),
-        reg_no: $('#reg_no').val(),
-        telephone: $('#telephone').val(),
-        department_id: $('#department').val(),
-        option_id: $('#option').val(),
-        year_level: $('#year_level').val(),
-        sex: $('#sex').val()
-    };
-
-    localStorage.setItem('studentRegistrationData', JSON.stringify(formData));
-    console.log('Form data auto-saved');
-}
-
-/**
- * Show loading overlay
- */
-function showLoading(message = 'Processing...') {
-    $('#loadingOverlay .text-center h5').text(message);
-    $('#loadingOverlay').fadeIn();
-}
-
-/**
- * Hide loading overlay
- */
-function hideLoading() {
-    $('#loadingOverlay').fadeOut();
-}
-
-/**
- * Show alert message
- */
-function showAlert(type, message) {
-    const alertId = 'alert_' + Date.now();
-    const alertHtml = `
-        <div class="alert alert-${type} alert-dismissible fade show" id="${alertId}" role="alert">
-            <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'danger' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    `;
-
-    $('#alertContainer').append(alertHtml);
-
-    // Auto-dismiss after 5 seconds
-    setTimeout(function() {
-        $(`#${alertId}`).fadeOut(function() {
-            $(this).remove();
         });
-    }, 5000);
-}
 
-/**
- * Toggle sidebar for mobile
- */
-function toggleSidebar() {
-    $('#sidebar').toggleClass('show');
-}
+        // Validate face images
+        const faceImagesCount = $('#faceImagesInput')[0].files.length;
+        if (faceImagesCount < this.config.minFaceImages) {
+            this.showAlert(`Please select at least ${this.config.minFaceImages} face images.`, 'error');
+            isValid = false;
+        }
 
-/**
- * Cleanup on page unload
- */
-$(window).on('beforeunload', function() {
-    if (videoStream) {
-        videoStream.getTracks().forEach(track => track.stop());
+        // Validate file sizes and types
+        const files = Array.from($('#faceImagesInput')[0].files);
+        for (const file of files) {
+            if (!this.validateImage(file)) {
+                isValid = false;
+                break;
+            }
+        }
+
+        return isValid;
     }
+
+    /**
+     * Validate image file
+     */
+    validateImage(file) {
+        const validTypes = this.config.validImageTypes;
+        const maxSize = this.config.maxFileSize;
+
+        if (!validTypes.includes(file.type)) {
+            this.showAlert(`Invalid file type: ${file.name}. Please use JPEG, PNG, or WebP.`, 'error');
+            return false;
+        }
+
+        if (file.size > maxSize) {
+            this.showAlert(`File too large: ${file.name}. Maximum size is ${maxSize / (1024 * 1024)}MB.`, 'error');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Handle form submission
+     */
+    async handleSubmit(e) {
+        e.preventDefault();
+
+        if (this.state.isSubmitting) {
+            return; // Prevent double submission
+        }
+
+        if (!this.validateForm()) {
+            this.showAlert('Please correct the errors before submitting.', 'error');
+            return;
+        }
+
+        if (!await this.confirmSubmission()) {
+            return;
+        }
+
+        this.state.isSubmitting = true;
+
+        try {
+            this.showLoading(true);
+
+            const formData = new FormData(e.target);
+            formData.append('csrf_token', this.state.csrfToken);
+
+            const response = await this.retryableAjax({
+                url: 'submit-student-registration.php',
+                method: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                timeout: 30000
+            });
+
+            if (response.success) {
+                this.handleSubmissionSuccess(response);
+            } else {
+                this.handleSubmissionError(response);
+            }
+        } catch (error) {
+            this.handleNetworkError(error);
+        } finally {
+            this.state.isSubmitting = false;
+            this.showLoading(false);
+        }
+    }
+
+    /**
+     * Confirm submission with user
+     */
+    async confirmSubmission() {
+        return new Promise((resolve) => {
+            const confirmed = confirm('Are you sure you want to register this student? This action cannot be undone.');
+            resolve(confirmed);
+        });
+    }
+
+    /**
+     * Handle successful submission
+     */
+    handleSubmissionSuccess(response) {
+        this.showAlert(`✅ ${response.message}`, 'success');
+
+        // Reset form
+        this.resetForm();
+
+        // Show success details
+        setTimeout(() => {
+            alert(`Student registered successfully!\nStudent ID: ${response.student_id || 'N/A'}`);
+        }, 1000);
+    }
+
+    /**
+     * Handle submission error
+     */
+    handleSubmissionError(response) {
+        const message = response.message || 'An error occurred during registration.';
+        this.showAlert(`❌ ${message}`, 'error');
+
+        // Provide recovery suggestions based on error type
+        if (message.includes('email') && message.includes('already exists')) {
+            this.showAlert('💡 Try using a different email address or contact support if you believe this is an error.', 'info');
+        } else if (message.includes('registration number') && message.includes('already exists')) {
+            this.showAlert('💡 This registration number is already in use. Please verify your details or contact your department.', 'info');
+        } else if (message.includes('network') || message.includes('connection')) {
+            this.showAlert('🔄 Network error detected. Your data may have been saved. Please check your connection and try again.', 'warning');
+        } else if (message.includes('file') || message.includes('upload')) {
+            this.showAlert('📁 File upload failed. Please check your images and try again.', 'warning');
+        }
+
+        // Log error for debugging
+        console.error('Registration submission error:', response);
+    }
+
+    /**
+     * Handle network error
+     */
+    handleNetworkError(error) {
+        console.error('Network error:', error);
+        this.showAlert('❌ Network error. Please check your connection and try again.', 'error');
+
+        // Offer retry option for network errors
+        setTimeout(() => {
+            if (confirm('Network error occurred. Would you like to retry the submission?')) {
+                this.handleSubmit({ preventDefault: () => {} });
+            }
+        }, 2000);
+    }
+
+    /**
+     * Show loading overlay
+     */
+    showLoading(show) {
+        const $overlay = $(this.selectors.loadingOverlay);
+        const $submitBtn = $('#submitBtn');
+
+        if (show) {
+            $overlay.removeClass('d-none');
+            $submitBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-2"></i>Registering...');
+        } else {
+            $overlay.addClass('d-none');
+            $submitBtn.prop('disabled', false).html('<i class="fas fa-paper-plane me-2"></i>Register Student');
+        }
+    }
+
+    /**
+     * Show alert message
+     */
+    showAlert(message, type = 'info', autoDismiss = true) {
+        const alertClass = {
+            'success': 'alert-success',
+            'error': 'alert-danger',
+            'warning': 'alert-warning',
+            'info': 'alert-info'
+        }[type] || 'alert-info';
+
+        const icon = {
+            'success': 'fa-check-circle',
+            'error': 'fa-exclamation-triangle',
+            'warning': 'fa-exclamation-circle',
+            'info': 'fa-info-circle'
+        }[type] || 'fa-info-circle';
+
+        const $alertContainer = $(this.selectors.alertContainer);
+        const alert = $(`
+            <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                <i class="fas ${icon} me-2"></i>
+                ${this.escapeHtml(message)}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `);
+
+        $alertContainer.html(alert);
+
+        // Auto-dismiss after 5 seconds
+        if (autoDismiss) {
+            setTimeout(() => {
+                alert.alert('close');
+            }, 5000);
+        }
+    }
+
+    /**
+     * Update form progress
+     */
+    updateProgress() {
+        const $form = $(this.selectors.form);
+        const totalFields = $form.find('[required]').length;
+        const filledFields = $form.find('[required]').filter(function() {
+            return $(this).val().trim().length > 0;
+        }).length;
+
+        const progress = totalFields > 0 ? Math.round((filledFields / totalFields) * 100) : 0;
+
+        $('#formProgress').css('width', progress + '%');
+        $('#progressText').text(progress + '% complete');
+    }
+
+    /**
+     * Start fingerprint capture
+     */
+    async startFingerprintCapture() {
+        if (this.state.isCapturing) return;
+
+        this.state.isCapturing = true;
+        this.updateFingerprintUI('capturing');
+
+        try {
+            // Simulate fingerprint capture (replace with actual implementation)
+            this.showAlert('🔍 Starting fingerprint capture...', 'info');
+
+            // In a real implementation, this would interface with fingerprint hardware
+            // For now, we'll simulate the process
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Simulate successful capture
+            this.state.fingerprintCaptured = true;
+            this.state.fingerprintData = 'simulated_fingerprint_data_' + Date.now();
+            this.state.fingerprintQuality = Math.floor(Math.random() * 100) + 1;
+
+            this.updateFingerprintUI('captured');
+            this.showAlert('✅ Fingerprint captured successfully!', 'success');
+
+        } catch (error) {
+            console.error('Fingerprint capture error:', error);
+            this.updateFingerprintUI('error');
+            this.showAlert('❌ Failed to capture fingerprint. Please try again.', 'error');
+        } finally {
+            this.state.isCapturing = false;
+        }
+    }
+
+    /**
+     * Clear fingerprint data
+     */
+    clearFingerprint() {
+        this.state.fingerprintCaptured = false;
+        this.state.fingerprintData = null;
+        this.state.fingerprintQuality = 0;
+        this.updateFingerprintUI('ready');
+        this.showAlert('🗑️ Fingerprint data cleared.', 'info');
+    }
+
+    /**
+     * Enroll fingerprint
+     */
+    async enrollFingerprint() {
+        if (!this.state.fingerprintCaptured) {
+            this.showAlert('❌ No fingerprint captured to enroll.', 'error');
+            return;
+        }
+
+        try {
+            this.updateFingerprintUI('enrolling');
+
+            // Simulate enrollment process
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            // In a real implementation, send data to server for storage
+            this.showAlert('✅ Fingerprint enrolled successfully!', 'success');
+            this.updateFingerprintUI('enrolled');
+
+        } catch (error) {
+            console.error('Fingerprint enrollment error:', error);
+            this.updateFingerprintUI('error');
+            this.showAlert('❌ Failed to enroll fingerprint. Please try again.', 'error');
+        }
+    }
+
+    /**
+     * Update fingerprint UI state
+     */
+    updateFingerprintUI(state) {
+        const $canvas = $('#fingerprintCanvas');
+        const $placeholder = $('#fingerprintPlaceholder');
+        const $status = $('#fingerprintStatus');
+        const $captureBtn = $('#captureFingerprintBtn');
+        const $clearBtn = $('#clearFingerprintBtn');
+        const $enrollBtn = $('#enrollFingerprintBtn');
+
+        switch (state) {
+            case 'ready':
+                $canvas.addClass('d-none');
+                $placeholder.removeClass('d-none').html(`
+                    <i class="fas fa-fingerprint fa-3x text-muted mb-2"></i>
+                    <p class="text-muted small">No fingerprint captured</p>
+                `);
+                $status.text('Ready to capture fingerprint');
+                $captureBtn.removeClass('d-none');
+                $clearBtn.addClass('d-none');
+                $enrollBtn.addClass('d-none');
+                break;
+
+            case 'capturing':
+                $placeholder.html(`
+                    <i class="fas fa-spinner fa-spin fa-3x text-primary mb-2"></i>
+                    <p class="text-muted small">Capturing fingerprint...</p>
+                `);
+                $status.text('Capturing...');
+                $captureBtn.prop('disabled', true);
+                break;
+
+            case 'captured':
+                $canvas.removeClass('d-none');
+                $placeholder.addClass('d-none');
+                // In real implementation, draw fingerprint image on canvas
+                $status.html(`<span class="text-success">Captured (Quality: ${this.state.fingerprintQuality}%)</span>`);
+                $captureBtn.addClass('d-none');
+                $clearBtn.removeClass('d-none');
+                $enrollBtn.removeClass('d-none');
+                break;
+
+            case 'enrolling':
+                $status.html('<span class="text-warning"><i class="fas fa-spinner fa-spin me-1"></i>Enrolling...</span>');
+                $enrollBtn.prop('disabled', true);
+                break;
+
+            case 'enrolled':
+                $status.html('<span class="text-success">Enrolled successfully</span>');
+                $enrollBtn.addClass('d-none');
+                break;
+
+            case 'error':
+                $status.html('<span class="text-danger">Error occurred</span>');
+                $captureBtn.prop('disabled', false);
+                break;
+        }
+    }
+
+    /**
+     * Reset form
+     */
+    resetForm() {
+        const $form = $(this.selectors.form);
+
+        // Reset form fields
+        $form[0].reset();
+
+        // Clear validation classes
+        $form.find('.is-valid, .is-invalid').removeClass('is-valid is-invalid');
+
+        // Reset state
+        this.state.selectedFaceImagesCount = 0;
+        this.state.fingerprintCaptured = false;
+        this.state.fingerprintData = null;
+        this.state.fingerprintQuality = 0;
+
+        // Reset UI elements
+        this.clearFaceImages();
+        this.updateFingerprintUI('ready');
+        this.resetLocationFields('province');
+        this.resetProgramSelection();
+        this.updateProgress();
+
+        // Reset progress bar
+        $('#formProgress').css('width', '0%');
+        $('#progressText').text('0% complete');
+
+        // Clear alerts
+        $(this.selectors.alertContainer).empty();
+
+        this.showAlert('🔄 Form reset successfully.', 'info');
+    }
+
+    /**
+     * Show welcome message
+     */
+    showWelcomeMessage() {
+        this.showAlert('👋 Welcome to Student Registration! Please fill in all required fields.', 'info');
+    }
+
+    /**
+     * Set up global error handler
+     */
+    setupGlobalErrorHandler() {
+        window.addEventListener('error', (event) => {
+            console.error('Global error:', event.error);
+            this.showAlert('An unexpected error occurred. Please refresh the page if issues persist.', 'error');
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+            this.showAlert('An unexpected error occurred. Please try again.', 'error');
+        });
+    }
+
+    /**
+     * Check server connectivity
+     */
+    async checkServerConnectivity() {
+        try {
+            const response = await this.retryableAjax({
+                url: 'api/location-api.php',
+                method: 'POST',
+                data: {
+                    action: 'ping',
+                    csrf_token: this.state.csrfToken
+                },
+                timeout: 5000
+            });
+
+            if (response.success) {
+                console.log('Server connectivity check passed');
+            }
+        } catch (error) {
+            console.warn('Server connectivity check failed:', error);
+            this.showAlert('⚠️ Server connection may be slow. Some features might not work properly.', 'warning');
+        }
+    }
+
+    /**
+     * Get error message from AJAX error
+     */
+    getErrorMessage(error) {
+        if (error.responseJSON && error.responseJSON.message) {
+            return error.responseJSON.message;
+        }
+        if (error.statusText) {
+            return error.statusText;
+        }
+        return error.message || 'Unknown error';
+    }
+
+    /**
+     * Utility method to escape HTML
+     */
+    escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    /**
+     * Debounce function for performance
+     */
+    debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    /**
+     * Show loading state for location fields
+     */
+    showLocationLoading($element, show) {
+        const loadingClass = 'location-loading';
+        $element.toggleClass(loadingClass, show);
+    }
+
+    /**
+     * Reset program selection
+     */
+    resetProgramSelection() {
+        const $program = $(this.selectors.program);
+
+        // Show all programs again
+        $program.find('option[data-department]').removeClass('d-none');
+        $program.find('option:first').text('🎓 Select Your Program (All Departments)');
+        $program.prop('disabled', false)
+                .removeClass('programs-loaded')
+                .removeData('department-id');
+
+        $('#programCount').addClass('d-none');
+        $('#programLoadedIcon').addClass('d-none');
+        $('#programHelp .fas').removeClass('fa-check-circle text-success').addClass('fa-info-circle text-info');
+        $('#programHelp small').html('<strong class="text-muted">Select your academic department above to filter available programs</strong>');
+    }
+}
+
+// Initialize the application when DOM is ready
+$(document).ready(function() {
+    window.studentRegistration = new StudentRegistration();
 });

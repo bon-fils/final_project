@@ -260,12 +260,19 @@ function processLecturerRegistration($post_data) {
 
 
         // Insert into users table
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, created_at) VALUES (?, ?, ?, ?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $username,
             $data['email'],
             password_hash($password_plain, PASSWORD_DEFAULT),
             'lecturer',
+            $data['first_name'],
+            $data['last_name'],
+            $data['phone'] ?: null,
+            $data['gender'],
+            $data['dob'],
+            'active',
+            date('Y-m-d H:i:s'),
             date('Y-m-d H:i:s')
         ]);
 
@@ -273,15 +280,17 @@ function processLecturerRegistration($post_data) {
 
         // Insert into lecturers table
         $stmt = $pdo->prepare("INSERT INTO lecturers
-            (user_id, gender, dob, id_number, department_id, education_level)
-            VALUES (?, ?, ?, ?, ?, ?)");
+            (user_id, gender, dob, id_number, department_id, education_level, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $user_id,
             $data['gender'],
             $data['dob'],
             $data['id_number'],
             $data['department_id'],
-            $data['education_level']
+            $data['education_level'],
+            date('Y-m-d H:i:s'),
+            date('Y-m-d H:i:s')
         ]);
 
         $lecturer_id = (int)$pdo->lastInsertId();
@@ -295,18 +304,15 @@ function processLecturerRegistration($post_data) {
         require_once "cache_utils.php";
         cache_delete("lecturer_stats_dept_{$data['department_id']}");
 
-        // Generate success message
-        $course_count = $assignment_result['courses_assigned'];
-        $option_count = $assignment_result['options_assigned'];
-
-        $course_message = $course_count > 0 ? " and assigned to $course_count course(s)" : "";
-        $option_message = $option_count > 0 ? " with access to $option_count option(s)" : " (no option access assigned)";
-
         return [
             'success' => true,
-            'message' => "Lecturer registered successfully$course_message$option_message! Login credentials: Username: $username, Password: 12345",
+            'message' => "Lecturer registered successfully!",
             'username' => $username,
-            'password' => $password_plain
+            'password' => $password_plain,
+            'details' => [
+                'courses_assigned' => $assignment_result['courses_assigned'],
+                'options_assigned' => $assignment_result['options_assigned']
+            ]
         ];
 
     } catch (Exception $e) {
@@ -467,200 +473,579 @@ if (isset($_SESSION['success_message'])) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
     <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --warning-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --info-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --sidebar-width: 280px;
+            --topbar-height: 80px;
+            --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
+            --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
+            --border-radius: 1rem;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+            overflow-x: hidden;
         }
-        .registration-card {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.1);
-            overflow: hidden;
-            margin: 2rem auto;
-            max-width: 800px;
-        }
-        .card-header {
-            background: linear-gradient(135deg, #003366, #0059b3);
-            color: white;
-            padding: 2rem;
-            text-align: center;
-        }
-        .card-body {
-            padding: 2rem;
-        }
-        .form-control, .form-select {
-            border-radius: 8px;
-            border: 1px solid #ddd;
-            padding: 0.75rem;
-        }
-        .form-control:focus, .form-select:focus {
-            border-color: #0059b3;
-            box-shadow: 0 0 0 0.2rem rgba(0, 89, 179, 0.25);
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, #003366, #0059b3);
-            border: none;
-            padding: 0.75rem 2rem;
-            border-radius: 8px;
-            font-weight: 600;
-        }
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #0059b3, #003366);
-        }
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 250px;
-            height: 100vh;
-            background: linear-gradient(180deg, #003366 0%, #0059b3 100%);
-            color: white;
-            padding-top: 20px;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-            z-index: 1000;
-        }
-        .sidebar a {
-            display: block;
-            padding: 12px 20px;
-            color: #fff;
-            text-decoration: none;
-            transition: all 0.3s ease;
-        }
-        .sidebar a:hover, .sidebar a.active {
-            background-color: rgba(255,255,255,0.1);
-        }
-        .main-content {
-            margin-left: 250px;
-            padding: 2rem;
-        }
-        @media (max-width: 768px) {
-            .sidebar {
-                width: 100%;
-                height: auto;
-                position: relative;
-                margin-bottom: 1rem;
-            }
-            .sidebar a {
-                display: inline-block;
-                margin: 0.25rem;
-                padding: 0.5rem 1rem;
-            }
-            .main-content {
-                margin-left: 0;
-                padding: 1rem;
-            }
-            .registration-card {
-                margin: 1rem 0;
-                max-width: 100%;
-            }
-            .card-header {
-                padding: 1.5rem;
-            }
-            .card-body {
-                padding: 1.5rem;
-            }
-        }
+
+        /* Loading Overlay */
         .loading-overlay {
             position: fixed;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 9999;
-        }
-        .loading-overlay.show {
+            background: rgba(0, 0, 0, 0.85);
             display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(10px);
         }
-        .alert {
-            border-radius: 8px;
+
+        .loading-content {
+            text-align: center;
+            color: white;
+            max-width: 400px;
+            padding: 2rem;
+        }
+
+        .loading-spinner {
+            width: 4rem;
+            height: 4rem;
+            border-width: 0.3em;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: linear-gradient(180deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            z-index: 1000;
+            transition: transform 0.3s ease;
+            box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .sidebar .logo {
+            padding: 2rem 1.5rem 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+        }
+
+        .sidebar .logo h5 {
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .sidebar .logo small {
+            opacity: 0.7;
+            font-size: 0.8rem;
+        }
+
+        .sidebar-nav {
+            list-style: none;
+            padding: 1.5rem 0;
+        }
+
+        .sidebar-nav li {
+            margin-bottom: 0.5rem;
+        }
+
+        .sidebar-nav a {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
+        }
+
+        .sidebar-nav a:hover,
+        .sidebar-nav a.active {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-left-color: #3498db;
+        }
+
+        .sidebar-nav a i {
+            width: 1.5rem;
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        /* Mobile Menu */
+        .mobile-menu-toggle {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 1001;
+            background: var(--primary-gradient);
+            border: none;
+            color: white;
+            width: 3rem;
+            height: 3rem;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            min-height: 100vh;
+            transition: margin-left 0.3s ease;
+        }
+
+        /* Registration Card */
+        .registration-card {
+            background: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow-medium);
+            overflow: hidden;
+            margin: 2rem auto;
+            max-width: 900px;
             border: none;
         }
-        .course-item {
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 1rem;
+
+        .card-header {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+            border: none;
+        }
+
+        .card-header h3 {
+            font-weight: 700;
             margin-bottom: 0.5rem;
+        }
+
+        .card-header p {
+            opacity: 0.9;
+            margin-bottom: 0;
+        }
+
+        .card-body {
+            padding: 2.5rem;
+        }
+
+        /* Form Controls */
+        .form-control,
+        .form-select {
+            border-radius: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+
+        .form-control:focus,
+        .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Buttons */
+        .btn {
+            border-radius: 0.75rem;
+            font-weight: 500;
+            padding: 0.75rem 1.5rem;
+            transition: all 0.3s ease;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+        }
+
+        /* Alerts */
+        .alert {
+            border: none;
+            border-radius: var(--border-radius);
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Section Headers */
+        .section-header {
+            border-bottom: 3px solid #e9ecef;
+            padding-bottom: 1rem;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .section-header::after {
+            content: '';
+            position: absolute;
+            bottom: -3px;
+            left: 0;
+            width: 60px;
+            height: 3px;
+            background: var(--primary-gradient);
+            border-radius: 2px;
+        }
+
+        .section-header h6 {
+            font-weight: 700;
+            color: #495057;
+            margin-bottom: 0;
+            font-size: 1.1rem;
+        }
+
+        .section-header i {
+            color: #667eea;
+            margin-right: 0.5rem;
+        }
+
+        /* Course and Option Selection */
+        .option-selection-container,
+        .course-selection-container {
+            min-height: 120px;
+            border: 2px dashed #e9ecef;
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
             background: #f8f9fa;
             transition: all 0.3s ease;
         }
-        .course-item:hover {
-            border-color: #0059b3;
-            background: #f0f8ff;
+
+        .option-selection-container:hover,
+        .course-selection-container:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
         }
+
+        .course-item {
+            border: 1px solid #e0e0e0;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            background: white;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-light);
+        }
+
+        .course-item:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-medium);
+        }
+
         .course-info {
             font-size: 0.85rem;
             color: #666;
             margin-top: 0.5rem;
         }
-        .option-selection-container, .course-selection-container {
-            min-height: 100px;
-        }
+
+        /* Validation Messages */
         .validation-message {
             font-size: 0.8rem;
             margin-top: 0.25rem;
+            font-weight: 500;
         }
+
         .validation-message.success {
             color: #198754;
         }
+
         .validation-message.error {
             color: #dc3545;
         }
+
         .validation-message.info {
             color: #6c757d;
         }
-        .section-header {
-            border-bottom: 2px solid #e9ecef;
-            padding-bottom: 0.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .section-header h6 {
+
+        /* Selection Counters */
+        .selection-counter {
+            background: var(--success-gradient);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.85rem;
             font-weight: 600;
-            color: #0059b3;
-            margin-bottom: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
         }
-        .section-header i {
-            color: #0059b3;
+
+        .selection-counter i {
+            font-size: 0.75rem;
+        }
+
+        /* Table Styling */
+        .table {
+            background: white;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-light);
+        }
+
+        .table thead th {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            font-weight: 600;
+            padding: 1rem;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        .table tbody td {
+            padding: 1rem;
+            vertical-align: middle;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .table tbody tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        /* Checkboxes */
+        .form-check-input:checked {
+            background-color: #667eea;
+            border-color: #667eea;
+        }
+
+        .form-check-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+
+        /* Progress Indicators */
+        .progress {
+            border-radius: 1rem;
+            height: 6px;
+            background: #e9ecef;
+        }
+
+        .progress-bar {
+            border-radius: 1rem;
+            transition: width 0.6s ease;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.show {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .mobile-menu-toggle {
+                display: flex;
+            }
+
+            .registration-card {
+                margin: 1rem;
+                max-width: calc(100% - 2rem);
+            }
+
+            .card-header {
+                padding: 1.5rem;
+            }
+
+            .card-header h3 {
+                font-size: 1.5rem;
+            }
+
+            .card-body {
+                padding: 1.5rem;
+            }
+
+            .section-header h6 {
+                font-size: 1rem;
+            }
+
+            .table-responsive {
+                font-size: 0.9rem;
+            }
+
+            .btn {
+                padding: 0.6rem 1.2rem;
+                font-size: 0.9rem;
+            }
+        }
+
+        /* Accessibility */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 6px;
+            background: #000;
+            color: white;
+            padding: 8px;
+            z-index: 10000;
+            text-decoration: none;
+            border-radius: 0 0 4px 4px;
+        }
+
+        .skip-link:focus {
+            top: 0;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+
+        /* Animation Classes */
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(0); }
         }
     </style>
 </head>
 <body>
+    <!-- Skip Navigation for Accessibility -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
     <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="text-center mb-4">
-            <h4><i class="fas fa-graduation-cap me-2"></i>RP System</h4>
+    <div class="sidebar" id="sidebar">
+        <div class="logo">
+            <h5><i class="fas fa-graduation-cap me-2"></i>RP System</h5>
             <small>Admin Panel</small>
         </div>
-        <a href="admin-dashboard.php"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</a>
-        <a href="register-student.php"><i class="fas fa-user-plus me-2"></i>Register Student</a>
-        <a href="admin-register-lecturer.php" class="active"><i class="fas fa-chalkboard-teacher me-2"></i>Register Lecturer</a>
-        <a href="manage-users.php"><i class="fas fa-users-cog me-2"></i>Manage Users</a>
-        <a href="manage-departments.php"><i class="fas fa-building me-2"></i>Departments</a>
-        <a href="admin-reports.php"><i class="fas fa-chart-bar me-2"></i>Reports</a>
-        <a href="logout.php" class="mt-4 text-danger"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+
+        <ul class="sidebar-nav">
+            <li>
+                <a href="admin-dashboard.php">
+                    <i class="fas fa-tachometer-alt"></i>Dashboard
+                </a>
+            </li>
+            <li>
+                <a href="register-student.php">
+                    <i class="fas fa-user-plus"></i>Register Student
+                </a>
+            </li>
+            <li>
+                <a href="admin-register-lecturer.php" class="active">
+                    <i class="fas fa-chalkboard-teacher"></i>Register Lecturer
+                </a>
+            </li>
+            <li>
+                <a href="manage-users.php">
+                    <i class="fas fa-users-cog"></i>Manage Users
+                </a>
+            </li>
+            <li>
+                <a href="manage-departments.php">
+                    <i class="fas fa-building"></i>Departments
+                </a>
+            </li>
+            <li>
+                <a href="admin-reports.php">
+                    <i class="fas fa-chart-bar"></i>Reports
+                </a>
+            </li>
+            <li class="mt-4">
+                <a href="logout.php" class="text-danger">
+                    <i class="fas fa-sign-out-alt"></i>Logout
+                </a>
+            </li>
+        </ul>
     </div>
 
+    <!-- Mobile Menu Toggle -->
+    <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()" aria-label="Toggle navigation menu">
+        <i class="fas fa-bars"></i>
+    </button>
+
     <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="text-center text-white">
-            <div class="spinner-border mb-3" role="status" style="width: 3rem; height: 3rem;">
+    <!-- <div class="loading-overlay" id="loadingOverlay"> -->
+        <div class="loading-content">
+            <div class="spinner-border loading-spinner mb-3" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
             <h5 class="mb-2">Registering Lecturer</h5>
             <p class="mb-0">Please wait while we process the registration...</p>
+            <div class="progress mt-3" style="height: 4px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+            </div>
         </div>
     </div>
 
     <!-- Main Content -->
-    <div class="main-content">
-        <div class="registration-card">
+    <div class="main-content" id="main-content">
+        <div class="registration-card fade-in">
             <div class="card-header">
-                <h3 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Register New Lecturer</h3>
-                <p class="mb-0 mt-2 opacity-75">Add a new lecturer to the system</p>
+                <h3 class="mb-0">
+                    <i class="fas fa-chalkboard-teacher me-3"></i>Register New Lecturer
+                </h3>
+                <p class="mb-0 mt-2 opacity-90">Add a new lecturer to the system with full access permissions</p>
             </div>
             <div class="card-body">
                 <?php if(!empty($formError)): ?>
@@ -670,12 +1055,11 @@ if (isset($_SESSION['success_message'])) {
                     </div>
                 <?php endif; ?>
 
-                <?php if(isset($_SESSION['success_message'])): ?>
+                <?php if(!empty($successMessage)): ?>
                     <div class="alert alert-success">
                         <i class="fas fa-check-circle me-2"></i>
-                        <?= $_SESSION['success_message'] ?>
+                        <?= htmlspecialchars($successMessage) ?>
                     </div>
-                    <?php unset($_SESSION['success_message']); ?>
                 <?php endif; ?>
 
                 <form id="lecturerRegistrationForm" method="POST">
@@ -683,7 +1067,7 @@ if (isset($_SESSION['success_message'])) {
                     <input type="hidden" name="role" value="lecturer">
 
                     <!-- Personal Information Section -->
-                    <div class="row g-3 mb-4">
+                    <div class="row g-3 mb-4 fade-in">
                         <div class="col-12 section-header">
                             <h6>
                                 <i class="fas fa-user me-2"></i>Personal Information
@@ -745,7 +1129,7 @@ if (isset($_SESSION['success_message'])) {
                     </div>
 
                     <!-- Department & Education Section -->
-                    <div class="row g-3 mb-4">
+                    <div class="row g-3 mb-4 fade-in">
                         <div class="col-12 section-header">
                             <h6>
                                 <i class="fas fa-building me-2"></i>Department & Education
@@ -783,7 +1167,7 @@ if (isset($_SESSION['success_message'])) {
                     </div>
 
                     <!-- Contact & Identification Section -->
-                    <div class="row g-3 mb-4">
+                    <div class="row g-3 mb-4 fade-in">
                         <div class="col-12 section-header">
                             <h6>
                                 <i class="fas fa-id-card me-2"></i>Contact & Identification
@@ -849,23 +1233,27 @@ if (isset($_SESSION['success_message'])) {
                                                 <i class="fas fa-list me-2"></i>Option Access (Required)
                                                 <small class="text-muted fw-normal">- Select options this lecturer can access based on department you selected</small>
                                             </label>
-                                            <div class="option-selection-container">
-                                                <div id="optionsContainer" class="text-center">
-                                                    <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                            <div class="option-selection-container border-0 bg-light">
+                                                <div id="optionsContainer" class="text-center py-4">
+                                                    <div class="spinner-border text-primary mb-3" role="status" style="width: 2rem; height: 2rem;">
                                                         <span class="visually-hidden">Loading options...</span>
                                                     </div>
-                                                    <p class="text-muted mt-2">Loading available options...</p>
+                                                    <h6 class="text-primary mb-2">Loading Available Options</h6>
+                                                    <p class="text-muted mb-0">Fetching options for the selected department...</p>
+                                                    <div class="progress mt-3" style="height: 4px;">
+                                                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%"></div>
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                            <div class="d-flex justify-content-between align-items-center mt-3">
                                                 <small class="form-text text-muted">
                                                     <i class="fas fa-info-circle me-1"></i>
-                                                    Select at least one option for the lecturer to access.
+                                                    Select at least one option for the lecturer to access based on department permissions.
                                                 </small>
-                                                <small class="text-primary fw-bold">
-                                                    <i class="fas fa-check-circle me-1"></i>
+                                                <div class="selection-counter">
+                                                    <i class="fas fa-check-circle"></i>
                                                     <span id="selectedOptionsCount">0</span> options selected
-                                                </small>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -877,25 +1265,23 @@ if (isset($_SESSION['success_message'])) {
                                                 <i class="fas fa-book me-2"></i>Course Assignment (Optional)
                                                 <small class="text-warning fw-bold">- Only unassigned courses are displayed for selection</small>
                                             </label>
-                                            <div class="course-selection-container">
-                                                <div id="coursesContainer" class="text-center">
-                                                    <div class="text-muted py-4">
-                                                        <i class="fas fa-book-open fa-2x mb-3"></i>
-                                                        <h6 class="mb-2">Course Assignment</h6>
-                                                        <p class="mb-0">Select a department above to view available courses</p>
-                                                        <small class="text-muted">Only unassigned courses will be shown for assignment</small>
-                                                    </div>
+                                            <div class="course-selection-container border-0 bg-light">
+                                                <div id="coursesContainer" class="text-center py-4">
+                                                    <i class="fas fa-book-open fa-3x text-muted mb-3"></i>
+                                                    <h6 class="text-muted mb-2">Course Assignment</h6>
+                                                    <p class="text-muted mb-1">Select a department above to view available courses</p>
+                                                    <small class="text-muted">Only unassigned courses will be shown for assignment</small>
                                                 </div>
                                             </div>
-                                            <div class="d-flex justify-content-between align-items-center mt-2">
-                                                <small class="form-text text-warning fw-bold">
+                                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                                <div class="alert alert-warning py-2 px-3 mb-0" style="font-size: 0.85rem;">
                                                     <i class="fas fa-exclamation-triangle me-1"></i>
                                                     <strong>Important:</strong> Only courses that are not currently assigned to any lecturer are shown here.
-                                                </small>
-                                                <small class="text-primary fw-bold">
-                                                    <i class="fas fa-check-circle me-1"></i>
+                                                </div>
+                                                <div class="selection-counter">
+                                                    <i class="fas fa-graduation-cap"></i>
                                                     <span id="selectedCoursesCount">0</span> courses selected
-                                                </small>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -929,6 +1315,32 @@ if (isset($_SESSION['success_message'])) {
     let availableOptions = [];
     let selectedOptionsForRegistration = [];
     let selectedCoursesForRegistration = [];
+
+    // Sidebar toggle functionality
+    function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('show');
+    }
+
+    // Close sidebar when clicking outside on mobile
+    document.addEventListener('click', function(event) {
+        const sidebar = document.getElementById('sidebar');
+        const toggleBtn = document.querySelector('.mobile-menu-toggle');
+
+        if (window.innerWidth <= 768) {
+            if (!sidebar.contains(event.target) && !toggleBtn.contains(event.target)) {
+                sidebar.classList.remove('show');
+            }
+        }
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', function() {
+        const sidebar = document.getElementById('sidebar');
+        if (window.innerWidth > 768) {
+            sidebar.classList.remove('show');
+        }
+    });
 
     // Function to check if key pressed is a number
     function isNumberKey(evt) {
@@ -969,17 +1381,18 @@ if (isset($_SESSION['success_message'])) {
             return;
         }
 
-        // Show loading state
+        // Show enhanced loading state
         optionsContainer.innerHTML = `
             <div class="text-center py-4">
-                <div class="spinner-border text-primary mb-3" role="status" style="width: 2rem; height: 2rem;">
+                <div class="spinner-border text-primary mb-3" role="status" style="width: 2.5rem; height: 2.5rem; border-width: 0.3em;">
                     <span class="visually-hidden">Loading options...</span>
                 </div>
-                <h6 class="text-primary mb-2">Loading Available Options</h6>
-                <p class="text-muted mb-0">Fetching options for the selected department...</p>
-                <div class="progress mt-3" style="height: 4px;">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%"></div>
+                <h6 class="text-primary mb-2 fw-bold">Loading Available Options</h6>
+                <p class="text-muted mb-0 small">Fetching options for the selected department...</p>
+                <div class="progress mt-3" style="height: 6px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%; border-radius: 3px;"></div>
                 </div>
+                <small class="text-muted mt-2 d-block">This may take a few seconds...</small>
             </div>
         `;
 
@@ -1040,17 +1453,18 @@ if (isset($_SESSION['success_message'])) {
             return;
         }
 
-        // Show loading state with better messaging
+        // Show enhanced loading state with better messaging
         coursesContainer.innerHTML = `
             <div class="text-center py-4">
-                <div class="spinner-border text-primary mb-3" role="status" style="width: 2rem; height: 2rem;">
+                <div class="spinner-border text-primary mb-3" role="status" style="width: 2.5rem; height: 2.5rem; border-width: 0.3em;">
                     <span class="visually-hidden">Loading courses...</span>
                 </div>
-                <h6 class="text-primary mb-2">Loading Available Courses</h6>
-                <p class="text-muted mb-0">Fetching courses for the selected department...</p>
-                <div class="progress mt-3" style="height: 4px;">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%"></div>
+                <h6 class="text-primary mb-2 fw-bold">Loading Available Courses</h6>
+                <p class="text-muted mb-0 small">Fetching unassigned courses for the selected department...</p>
+                <div class="progress mt-3" style="height: 6px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%; border-radius: 3px;"></div>
                 </div>
+                <small class="text-muted mt-2 d-block">Only courses not assigned to other lecturers will be shown...</small>
             </div>
         `;
 
@@ -1275,8 +1689,98 @@ if (isset($_SESSION['success_message'])) {
         }
     }
 
-    // Real-time validation feedback
+    // Enhanced real-time validation feedback
     document.addEventListener('DOMContentLoaded', function() {
+        // Real-time validation for first name
+        const firstNameInput = document.getElementById('first_name');
+        if (firstNameInput) {
+            firstNameInput.addEventListener('blur', function() {
+                const value = this.value.trim();
+                const feedback = document.getElementById('first_name-feedback') || createFeedbackElement('first_name');
+
+                if (value === '') {
+                    feedback.textContent = '';
+                    feedback.className = 'validation-message info';
+                    this.classList.remove('is-valid', 'is-invalid');
+                } else if (value.length < 2) {
+                    feedback.textContent = 'First name must be at least 2 characters';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else if (!/^[A-Za-z\s]+$/.test(value)) {
+                    feedback.textContent = 'First name can only contain letters and spaces';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else {
+                    feedback.textContent = '✓ Valid first name';
+                    feedback.className = 'validation-message success';
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                }
+            });
+        }
+
+        // Real-time validation for last name
+        const lastNameInput = document.getElementById('last_name');
+        if (lastNameInput) {
+            lastNameInput.addEventListener('blur', function() {
+                const value = this.value.trim();
+                const feedback = document.getElementById('last_name-feedback') || createFeedbackElement('last_name');
+
+                if (value === '') {
+                    feedback.textContent = '';
+                    feedback.className = 'validation-message info';
+                    this.classList.remove('is-valid', 'is-invalid');
+                } else if (value.length < 2) {
+                    feedback.textContent = 'Last name must be at least 2 characters';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else if (!/^[A-Za-z\s]+$/.test(value)) {
+                    feedback.textContent = 'Last name can only contain letters and spaces';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else {
+                    feedback.textContent = '✓ Valid last name';
+                    feedback.className = 'validation-message success';
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                }
+            });
+        }
+
+        // Real-time validation for email
+        const emailInput = document.getElementById('email');
+        if (emailInput) {
+            emailInput.addEventListener('blur', function() {
+                const value = this.value.trim();
+                const feedback = document.getElementById('email-feedback') || createFeedbackElement('email');
+
+                if (value === '') {
+                    feedback.textContent = '';
+                    feedback.className = 'validation-message info';
+                    this.classList.remove('is-valid', 'is-invalid');
+                } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                    feedback.textContent = 'Please enter a valid email address';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else if (value.length > 100) {
+                    feedback.textContent = 'Email address is too long (max 100 characters)';
+                    feedback.className = 'validation-message error';
+                    this.classList.remove('is-valid');
+                    this.classList.add('is-invalid');
+                } else {
+                    feedback.textContent = '✓ Valid email address';
+                    feedback.className = 'validation-message success';
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                }
+            });
+        }
+
         // Add real-time validation for phone number
         const phoneInput = document.getElementById('phone');
         if (phoneInput) {
@@ -1294,7 +1798,14 @@ if (isset($_SESSION['success_message'])) {
                     this.classList.remove('is-invalid');
                     this.classList.add('is-valid');
                 } else {
-                    feedback.textContent = 'Phone must be exactly 10 digits';
+                    const currentLength = value.length;
+                    if (currentLength < 10) {
+                        feedback.textContent = `Phone must be exactly 10 digits (${currentLength}/10)`;
+                    } else if (currentLength > 10) {
+                        feedback.textContent = `Phone must be exactly 10 digits (too long)`;
+                    } else {
+                        feedback.textContent = 'Phone must contain only numeric digits';
+                    }
                     feedback.className = 'validation-message error';
                     this.classList.remove('is-valid');
                     this.classList.add('is-invalid');
@@ -1515,39 +2026,49 @@ if (isset($_SESSION['success_message'])) {
             }
         }
 
-        // Comprehensive field validation
+        // Enhanced comprehensive field validation with better error messages
         const validationErrors = [];
 
-        // Required field validation
-        if (!firstName) validationErrors.push('First name is required');
-        if (!lastName) validationErrors.push('Last name is required');
-        if (!gender) validationErrors.push('Gender is required');
+        // Required field validation with detailed feedback
+        if (!firstName.trim()) {
+            validationErrors.push('First name is required and cannot be empty');
+        } else if (firstName.trim().length < 2) {
+            validationErrors.push('First name must be at least 2 characters long');
+        } else if (!/^[A-Za-z\s]+$/.test(firstName.trim())) {
+            validationErrors.push('First name can only contain letters and spaces');
+        }
+
+        if (!lastName.trim()) {
+            validationErrors.push('Last name is required and cannot be empty');
+        } else if (lastName.trim().length < 2) {
+            validationErrors.push('Last name must be at least 2 characters long');
+        } else if (!/^[A-Za-z\s]+$/.test(lastName.trim())) {
+            validationErrors.push('Last name can only contain letters and spaces');
+        }
+
+        if (!gender) validationErrors.push('Please select a gender');
         if (!dob) validationErrors.push('Date of birth is required');
-        if (!idNumber) validationErrors.push('ID number is required');
-        if (!email) validationErrors.push('Email is required');
-        if (!department) validationErrors.push('Department is required');
-        if (!education) validationErrors.push('Education level is required');
 
-        // Name validation
-        if (firstName && (firstName.length < 2 || !/^[A-Za-z\s]+$/.test(firstName))) {
-            validationErrors.push('First name must be at least 2 characters and contain only letters');
-        }
-        if (lastName && (lastName.length < 2 || !/^[A-Za-z\s]+$/.test(lastName))) {
-            validationErrors.push('Last name must be at least 2 characters and contain only letters');
+        if (!idNumber.trim()) {
+            validationErrors.push('ID number is required');
+        } else if (idNumber.length !== 16) {
+            validationErrors.push(`ID number must be exactly 16 digits (currently ${idNumber.length} digits)`);
+        } else if (!/^\d{16}$/.test(idNumber)) {
+            validationErrors.push('ID number must contain only numeric digits (0-9)');
         }
 
-        // Email validation
-        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            validationErrors.push('Please enter a valid email address');
+        if (!email.trim()) {
+            validationErrors.push('Email address is required');
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            validationErrors.push('Please enter a valid email address (e.g., user@university.edu)');
+        } else if (email.length > 100) {
+            validationErrors.push('Email address is too long (maximum 100 characters)');
         }
 
+        if (!department) validationErrors.push('Please select a department');
+        if (!education) validationErrors.push('Please select an education level');
 
-        // ID number validation
-        if (idNumber && idNumber.length !== 16) {
-            validationErrors.push('ID Number must be exactly 16 digits');
-        }
-
-        // Date of birth validation
+        // Enhanced date of birth validation
         if (dob) {
             const birthDate = new Date(dob);
             const today = new Date();
@@ -1559,16 +2080,22 @@ if (isset($_SESSION['success_message'])) {
                 adjustedAge--;
             }
 
-            if (adjustedAge < 21) {
-                validationErrors.push('Lecturer must be at least 21 years old');
+            if (birthDate > today) {
+                validationErrors.push('Date of birth cannot be in the future');
+            } else if (adjustedAge < 21) {
+                validationErrors.push(`Lecturer must be at least 21 years old (current age: ${adjustedAge})`);
             } else if (adjustedAge > 100) {
-                validationErrors.push('Please enter a valid date of birth');
+                validationErrors.push('Please enter a valid date of birth (age cannot exceed 100 years)');
             }
         }
 
-        // Show validation errors
+        // Show validation errors with improved formatting
         if (validationErrors.length > 0) {
-            showAlert('Please correct the following errors:\n• ' + validationErrors.join('\n• '), 'danger');
+            const errorMessage = '<strong>Please correct the following errors:</strong><br>' +
+                               '<ul class="mb-0 mt-2" style="text-align: left;">' +
+                               validationErrors.map(error => `<li>${error}</li>`).join('') +
+                               '</ul>';
+            showAlert(errorMessage, 'danger', 8000); // Show longer for detailed errors
             e.preventDefault();
             return false;
         }
@@ -1590,29 +2117,41 @@ if (isset($_SESSION['success_message'])) {
         return true;
     });
 
-    // Helper function to show alerts
-    function showAlert(message, type = 'info') {
+    // Enhanced alert function with better styling
+    function showAlert(message, type = 'info', duration = 5000) {
         // Remove existing alerts
-        const existingAlerts = document.querySelectorAll('.alert');
+        const existingAlerts = document.querySelectorAll('.alert.position-fixed');
         existingAlerts.forEach(alert => alert.remove());
+
+        const icon = type === 'success' ? 'check-circle' :
+                     type === 'error' || type === 'danger' ? 'exclamation-triangle' :
+                     type === 'warning' ? 'exclamation-circle' : 'info-circle';
 
         const alertDiv = document.createElement('div');
         alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 450px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border: none; border-radius: 1rem;';
         alertDiv.innerHTML = `
-            <i class="fas fa-${type === 'danger' ? 'exclamation-triangle' : type === 'warning' ? 'exclamation-circle' : 'info-circle'} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            <i class="fas fa-${icon} me-2"></i>
+            <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         `;
 
         document.body.appendChild(alertDiv);
 
-        // Auto-dismiss after 5 seconds
+        // Add slide-in animation
         setTimeout(() => {
-            if (alertDiv.parentNode) {
-                alertDiv.remove();
-            }
-        }, 5000);
+            alertDiv.style.transform = 'translateX(0)';
+        }, 10);
+
+        // Auto-dismiss
+        if (duration > 0) {
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.style.transform = 'translateX(100%)';
+                    setTimeout(() => alertDiv.remove(), 300);
+                }
+            }, duration);
+        }
     }
     </script>
 </body>

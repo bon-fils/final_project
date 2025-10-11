@@ -28,29 +28,29 @@ class Logger {
     /**
      * Log debug message
      */
-    public function debug($message) {
-        $this->log($message, self::DEBUG);
+    public function debug($category, $message, $context = []) {
+        $this->log("[$category] $message" . (!empty($context) ? " | " . json_encode($context) : ""), self::DEBUG);
     }
 
     /**
      * Log info message
      */
-    public function info($message) {
-        $this->log($message, self::INFO);
+    public function info($category, $message, $context = []) {
+        $this->log("[$category] $message" . (!empty($context) ? " | " . json_encode($context) : ""), self::INFO);
     }
 
     /**
      * Log warning message
      */
-    public function warning($message) {
-        $this->log($message, self::WARNING);
+    public function warning($category, $message, $context = []) {
+        $this->log("[$category] $message" . (!empty($context) ? " | " . json_encode($context) : ""), self::WARNING);
     }
 
     /**
      * Log error message
      */
-    public function error($message) {
-        $this->log($message, self::ERROR);
+    public function error($category, $message, $context = []) {
+        $this->log("[$category] $message" . (!empty($context) ? " | " . json_encode($context) : ""), self::ERROR);
     }
 
     /**

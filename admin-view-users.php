@@ -9,13 +9,31 @@ require_once "config.php";
 require_once "session_check.php";
 require_role(['admin']);
 
+// Initialize CSRF token if not exists
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Additional security headers
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+
 /**
- * Fetch users by role with proper database schema
+ * Fetch users by role with proper database schema and enhanced error handling
  */
 function fetchUsers($role) {
     global $pdo;
 
     try {
+        // Validate role parameter
+        $validRoles = ['student', 'lecturer', 'hod'];
+        if (!in_array($role, $validRoles)) {
+            error_log("Invalid role parameter: " . $role);
+            return [];
+        }
+
         if ($role === 'student') {
             $stmt = $pdo->prepare("
                 SELECT
@@ -28,7 +46,7 @@ function fetchUsers($role) {
                     u.last_name,
                     u.phone,
                     s.reg_no as reference_id,
-                    CONCAT(u.first_name, ' ', u.last_name) as full_name,
+                    CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')) as full_name,
                     d.name as department_name,
                     s.year_level
                 FROM users u
@@ -50,47 +68,88 @@ function fetchUsers($role) {
                     u.last_name,
                     u.phone,
                     l.id_number as reference_id,
-                    CONCAT(u.first_name, ' ', u.last_name) as full_name,
+                    CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')) as full_name,
                     d.name as department_name,
-                    l.role as user_role
+                    u.role as user_role
                 FROM users u
                 LEFT JOIN lecturers l ON u.id = l.user_id
                 LEFT JOIN departments d ON l.department_id = d.id
                 WHERE u.role = ?
                 ORDER BY u.created_at DESC
             ");
-            $stmt->bindParam(1, $role);
+            $stmt->execute([$role]);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
+
         $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Sanitize data
+        foreach ($results as &$row) {
+            $row['full_name'] = trim($row['full_name']);
+            if (empty($row['full_name'])) {
+                $row['full_name'] = $row['username'] ?? 'Unknown User';
+            }
+        }
+
+        return $results;
+
     } catch (PDOException $e) {
-        error_log("Error fetching users: " . $e->getMessage());
+        error_log("Database error fetching users for role '$role': " . $e->getMessage());
+        return [];
+    } catch (Exception $e) {
+        error_log("General error fetching users for role '$role': " . $e->getMessage());
         return [];
     }
 }
 
 /**
- * Get user statistics
+ * Get user statistics with enhanced error handling
  */
 function getUserStats() {
     global $pdo;
 
     try {
         $stmt = $pdo->prepare("
-            SELECT role, COUNT(*) as count
+            SELECT role, COUNT(*) as count, status
             FROM users
             WHERE role IN ('student', 'lecturer', 'hod')
-            GROUP BY role
+            GROUP BY role, status
         ");
         $stmt->execute();
         $stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $result = ['student' => 0, 'lecturer' => 0, 'hod' => 0];
+        $result = [
+            'student' => ['total' => 0, 'active' => 0, 'inactive' => 0, 'suspended' => 0],
+            'lecturer' => ['total' => 0, 'active' => 0, 'inactive' => 0, 'suspended' => 0],
+            'hod' => ['total' => 0, 'active' => 0, 'inactive' => 0, 'suspended' => 0]
+        ];
+
         foreach ($stats as $stat) {
-            $result[$stat['role']] = $stat['count'];
+            $role = $stat['role'];
+            $status = $stat['status'] ?? 'active';
+            $count = (int)$stat['count'];
+
+            if (isset($result[$role])) {
+                $result[$role]['total'] += $count;
+                if (isset($result[$role][$status])) {
+                    $result[$role][$status] = $count;
+                }
+            }
         }
-        return $result;
+
+        // Return simplified format for backward compatibility
+        return [
+            'student' => $result['student']['total'],
+            'lecturer' => $result['lecturer']['total'],
+            'hod' => $result['hod']['total']
+        ];
+
     } catch (PDOException $e) {
+        error_log("Database error getting user stats: " . $e->getMessage());
+        return ['student' => 0, 'lecturer' => 0, 'hod' => 0];
+    } catch (Exception $e) {
+        error_log("General error getting user stats: " . $e->getMessage());
         return ['student' => 0, 'lecturer' => 0, 'hod' => 0];
     }
 }
@@ -428,6 +487,53 @@ $userStats = getUserStats();
                 padding: 8px 4px;
             }
         }
+
+        /* Loading overlay styles */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        /* Enhanced button hover effects */
+        .btn-group .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+
+        /* Better focus states for accessibility */
+        .btn:focus {
+            box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
+            outline: none;
+        }
+
+        /* Improved table responsiveness */
+        @media (max-width: 768px) {
+            .table-responsive {
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
+
+            .btn-group {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .btn-group .btn {
+                width: 100%;
+                margin-bottom: 2px;
+                border-radius: 4px !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -439,6 +545,14 @@ $userStats = getUserStats();
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <?php include 'admin_sidebar.php'; ?>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay d-none" id="loadingOverlay">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <div class="mt-2">Loading user data...</div>
     </div>
 
     <!-- Main Content -->
@@ -494,35 +608,85 @@ $userStats = getUserStats();
             <!-- Search and Filter Bar -->
             <div class="card mb-3">
                 <div class="card-body">
-                    <div class="row g-3 align-items-center">
+                    <div class="row g-3 align-items-end">
                         <div class="col-md-4">
+                            <label for="searchInput" class="form-label fw-semibold">
+                                <i class="fas fa-search me-1 text-primary"></i>Search Users
+                            </label>
                             <div class="input-group">
-                                <span class="input-group-text"><i class="fas fa-search"></i></span>
-                                <input type="text" class="form-control" id="searchInput" placeholder="Search users...">
+                                <span class="input-group-text bg-light" aria-hidden="true">
+                                    <i class="fas fa-search text-muted"></i>
+                                </span>
+                                <input type="text" class="form-control" id="searchInput"
+                                       placeholder="Search by name, email, or ID..."
+                                       aria-describedby="searchHelp"
+                                       autocomplete="off">
+                            </div>
+                            <div id="searchHelp" class="form-text text-muted small">
+                                <i class="fas fa-info-circle me-1"></i>Search across names, emails, and IDs
                             </div>
                         </div>
                         <div class="col-md-3">
-                            <select class="form-select" id="statusFilter">
-                                <option value="">All Status</option>
-                                <option value="active">Active</option>
-                                <option value="inactive">Inactive</option>
-                                <option value="suspended">Suspended</option>
+                            <label for="statusFilter" class="form-label fw-semibold">
+                                <i class="fas fa-filter me-1 text-success"></i>Filter by Status
+                            </label>
+                            <select class="form-select" id="statusFilter" aria-describedby="statusHelp">
+                                <option value="">All Statuses</option>
+                                <option value="active">🟢 Active Users</option>
+                                <option value="inactive">🔴 Inactive Users</option>
+                                <option value="suspended">🟡 Suspended Users</option>
                             </select>
+                            <div id="statusHelp" class="form-text text-muted small">
+                                <i class="fas fa-user-check me-1"></i>Filter users by account status
+                            </div>
                         </div>
                         <div class="col-md-3">
-                            <select class="form-select" id="departmentFilter">
+                            <label for="departmentFilter" class="form-label fw-semibold">
+                                <i class="fas fa-building me-1 text-info"></i>Filter by Department
+                            </label>
+                            <select class="form-select" id="departmentFilter" aria-describedby="departmentHelp">
                                 <option value="">All Departments</option>
                                 <?php
-                                $deptStmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
-                                while ($dept = $deptStmt->fetch(PDO::FETCH_ASSOC)) {
-                                    echo "<option value='{$dept['id']}'>{$dept['name']}</option>";
+                                try {
+                                    $deptStmt = $pdo->query("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
+                                    $deptCount = 0;
+                                    while ($dept = $deptStmt->fetch(PDO::FETCH_ASSOC)) {
+                                        echo "<option value='{$dept['id']}'>🏫 {$dept['name']}</option>";
+                                        $deptCount++;
+                                    }
+                                    if ($deptCount === 0) {
+                                        echo "<option value='' disabled>No departments available</option>";
+                                    }
+                                } catch (Exception $e) {
+                                    echo "<option value='' disabled>Error loading departments</option>";
                                 }
                                 ?>
                             </select>
+                            <div id="departmentHelp" class="form-text text-muted small">
+                                <i class="fas fa-university me-1"></i>Filter users by their department
+                            </div>
                         </div>
                         <div class="col-md-2">
-                            <button class="btn btn-outline-primary w-100" onclick="exportUsers()">
-                                <i class="fas fa-download me-1"></i>Export
+                            <label class="form-label fw-semibold invisible">Actions</label>
+                            <button class="btn btn-outline-primary w-100" onclick="exportUsers()"
+                                    aria-describedby="exportHelp">
+                                <i class="fas fa-download me-1"></i>Export Data
+                            </button>
+                            <div id="exportHelp" class="form-text text-muted small">
+                                <i class="fas fa-file-export me-1"></i>Download user data
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active Filters Display -->
+                    <div id="activeFilters" class="mt-3 d-none">
+                        <div class="d-flex align-items-center">
+                            <small class="text-muted me-2">
+                                <i class="fas fa-filter me-1"></i>Active filters:
+                            </small>
+                            <div id="filterTags" class="d-flex gap-2 flex-wrap"></div>
+                            <button class="btn btn-sm btn-outline-secondary ms-2" onclick="clearAllFilters()">
+                                <i class="fas fa-times me-1"></i>Clear All
                             </button>
                         </div>
                     </div>
@@ -530,23 +694,23 @@ $userStats = getUserStats();
             </div>
 
             <!-- User Type Tabs -->
-            <ul class="nav nav-tabs" id="userTabs" role="tablist">
+            <ul class="nav nav-tabs" id="userTabs" role="tablist" aria-label="User type selection">
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="lecturers-tab" data-bs-toggle="tab" data-bs-target="#lecturers" type="button" role="tab">
-                        <i class="fas fa-chalkboard-teacher me-2"></i>Lecturers
-                        <span class="badge bg-white text-primary ms-2"><?php echo count($lecturers); ?></span>
+                    <button class="nav-link active" id="lecturers-tab" data-bs-toggle="tab" data-bs-target="#lecturers" type="button" role="tab" aria-controls="lecturers" aria-selected="true">
+                        <i class="fas fa-chalkboard-teacher me-2" aria-hidden="true"></i>Lecturers
+                        <span class="badge bg-white text-primary ms-2" aria-label="<?php echo count($lecturers); ?> lecturers"><?php echo count($lecturers); ?></span>
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="hods-tab" data-bs-toggle="tab" data-bs-target="#hods" type="button" role="tab">
-                        <i class="fas fa-user-tie me-2"></i>HODs
-                        <span class="badge bg-white text-success ms-2"><?php echo count($hods); ?></span>
+                    <button class="nav-link" id="hods-tab" data-bs-toggle="tab" data-bs-target="#hods" type="button" role="tab" aria-controls="hods" aria-selected="false">
+                        <i class="fas fa-user-tie me-2" aria-hidden="true"></i>HODs
+                        <span class="badge bg-white text-success ms-2" aria-label="<?php echo count($hods); ?> heads of department"><?php echo count($hods); ?></span>
                     </button>
                 </li>
                 <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="students-tab" data-bs-toggle="tab" data-bs-target="#students" type="button" role="tab">
-                        <i class="fas fa-user-graduate me-2"></i>Students
-                        <span class="badge bg-white text-info ms-2"><?php echo count($students); ?></span>
+                    <button class="nav-link" id="students-tab" data-bs-toggle="tab" data-bs-target="#students" type="button" role="tab" aria-controls="students" aria-selected="false">
+                        <i class="fas fa-user-graduate me-2" aria-hidden="true"></i>Students
+                        <span class="badge bg-white text-info ms-2" aria-label="<?php echo count($students); ?> students"><?php echo count($students); ?></span>
                     </button>
                 </li>
             </ul>
@@ -562,26 +726,26 @@ $userStats = getUserStats();
                         <div class="card-body p-0">
                             <?php if (!empty($lecturers)): ?>
                             <div class="table-responsive">
-                                <table class="table mb-0">
+                                <table class="table mb-0" role="table" aria-label="Lecturers directory">
                                     <thead>
                                         <tr>
-                                            <th>#</th>
-                                            <th>User</th>
-                                            <th>Staff ID</th>
-                                            <th>Contact</th>
-                                            <th>Department</th>
-                                            <th>Status</th>
-                                            <th>Joined</th>
-                                            <th>Actions</th>
+                                            <th scope="col" aria-label="Row number">#</th>
+                                            <th scope="col">User</th>
+                                            <th scope="col">Staff ID</th>
+                                            <th scope="col">Contact</th>
+                                            <th scope="col">Department</th>
+                                            <th scope="col">Status</th>
+                                            <th scope="col">Joined</th>
+                                            <th scope="col">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                     <?php foreach ($lecturers as $i => $row): ?>
-                                        <tr>
-                                            <td><?php echo $i+1; ?></td>
-                                            <td>
+                                        <tr role="row">
+                                            <td role="gridcell" aria-label="Row <?php echo $i+1; ?>"><?php echo $i+1; ?></td>
+                                            <td role="gridcell">
                                                 <div class="d-flex align-items-center">
-                                                    <div class="user-avatar me-3">
+                                                    <div class="user-avatar me-3" aria-hidden="true">
                                                         <?php echo strtoupper(substr($row['full_name'] ?? $row['username'], 0, 1)); ?>
                                                     </div>
                                                     <div>
@@ -590,34 +754,56 @@ $userStats = getUserStats();
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td>
-                                                <code class="text-primary"><?php echo htmlspecialchars($row['reference_id'] ?? 'N/A'); ?></code>
+                                            <td role="gridcell">
+                                                <code class="text-primary" aria-label="Staff ID: <?php echo htmlspecialchars($row['reference_id'] ?? 'N/A'); ?>">
+                                                    <?php echo htmlspecialchars($row['reference_id'] ?? 'N/A'); ?>
+                                                </code>
                                             </td>
-                                            <td>
+                                            <td role="gridcell">
                                                 <div>
-                                                    <i class="fas fa-envelope text-muted me-1"></i><?php echo htmlspecialchars($row['email']); ?>
+                                                    <i class="fas fa-envelope text-muted me-1" aria-hidden="true"></i>
+                                                    <span aria-label="Email: <?php echo htmlspecialchars($row['email']); ?>">
+                                                        <?php echo htmlspecialchars($row['email']); ?>
+                                                    </span>
                                                     <?php if (!empty($row['phone'])): ?>
-                                                    <br><i class="fas fa-phone text-muted me-1"></i><?php echo htmlspecialchars($row['phone']); ?>
+                                                    <br><i class="fas fa-phone text-muted me-1" aria-hidden="true"></i>
+                                                    <span aria-label="Phone: <?php echo htmlspecialchars($row['phone']); ?>">
+                                                        <?php echo htmlspecialchars($row['phone']); ?>
+                                                    </span>
                                                     <?php endif; ?>
                                                 </div>
                                             </td>
-                                            <td><?php echo htmlspecialchars($row['department_name'] ?? 'Not Assigned'); ?></td>
-                                            <td>
-                                                <span class="status-badge status-<?php echo $row['status'] ?? 'active'; ?>">
+                                            <td role="gridcell" aria-label="Department: <?php echo htmlspecialchars($row['department_name'] ?? 'Not Assigned'); ?>">
+                                                <?php echo htmlspecialchars($row['department_name'] ?? 'Not Assigned'); ?>
+                                            </td>
+                                            <td role="gridcell">
+                                                <span class="status-badge status-<?php echo $row['status'] ?? 'active'; ?>"
+                                                      aria-label="Status: <?php echo ucfirst($row['status'] ?? 'active'); ?>">
                                                     <?php echo ucfirst($row['status'] ?? 'active'); ?>
                                                 </span>
                                             </td>
-                                            <td><?php echo date('M d, Y', strtotime($row['created_at'])); ?></td>
-                                            <td>
-                                                <div class="btn-group" role="group">
-                                                    <button class="btn btn-sm btn-outline-primary" onclick="viewUserDetails(<?php echo $row['id']; ?>, 'lecturer')" title="View Details">
-                                                        <i class="fas fa-eye"></i>
+                                            <td role="gridcell" aria-label="Joined: <?php echo date('M d, Y', strtotime($row['created_at'])); ?>">
+                                                <?php echo date('M d, Y', strtotime($row['created_at'])); ?>
+                                            </td>
+                                            <td role="gridcell">
+                                                <div class="btn-group" role="group" aria-label="Actions for <?php echo htmlspecialchars($row['full_name'] ?? $row['username']); ?>">
+                                                    <button class="btn btn-sm btn-outline-primary"
+                                                            onclick="viewUserDetails(<?php echo $row['id']; ?>, 'lecturer')"
+                                                            title="View Details"
+                                                            aria-label="View details for <?php echo htmlspecialchars($row['full_name'] ?? $row['username']); ?>">
+                                                        <i class="fas fa-eye" aria-hidden="true"></i>
                                                     </button>
-                                                    <button class="btn btn-sm btn-outline-warning" onclick="editUser(<?php echo $row['id']; ?>, 'lecturer')" title="Edit User">
-                                                        <i class="fas fa-edit"></i>
+                                                    <button class="btn btn-sm btn-outline-warning"
+                                                            onclick="editUser(<?php echo $row['id']; ?>, 'lecturer')"
+                                                            title="Edit User"
+                                                            aria-label="Edit <?php echo htmlspecialchars($row['full_name'] ?? $row['username']); ?>">
+                                                        <i class="fas fa-edit" aria-hidden="true"></i>
                                                     </button>
-                                                    <button class="btn btn-sm btn-outline-danger" onclick="toggleUserStatus(<?php echo $row['id']; ?>, '<?php echo $row['status']; ?>')" title="Toggle Status">
-                                                        <i class="fas fa-<?php echo $row['status'] === 'active' ? 'ban' : 'check'; ?>"></i>
+                                                    <button class="btn btn-sm btn-outline-danger"
+                                                            onclick="toggleUserStatus(<?php echo $row['id']; ?>, '<?php echo $row['status']; ?>')"
+                                                            title="Toggle Status"
+                                                            aria-label="<?php echo $row['status'] === 'active' ? 'Deactivate' : 'Activate'; ?> <?php echo htmlspecialchars($row['full_name'] ?? $row['username']); ?>">
+                                                        <i class="fas fa-<?php echo $row['status'] === 'active' ? 'ban' : 'check'; ?>" aria-hidden="true"></i>
                                                     </button>
                                                 </div>
                                             </td>
@@ -889,46 +1075,95 @@ $userStats = getUserStats();
             });
         });
 
-        // Filter users based on search and filters
+        // Enhanced filter users based on search and filters
         function filterUsers() {
-            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase().trim();
             const statusFilter = document.getElementById('statusFilter').value;
             const departmentFilter = document.getElementById('departmentFilter').value;
 
             const tables = document.querySelectorAll('tbody');
+            let totalVisible = 0;
+
             tables.forEach(table => {
                 const rows = table.querySelectorAll('tr');
+                let tableVisible = 0;
+
                 rows.forEach(row => {
-                    const text = row.textContent.toLowerCase();
-                    const statusBadge = row.querySelector('.status-badge');
-                    const departmentCell = row.cells[4]; // Department column
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length < 5) return; // Skip if not enough cells
 
                     let showRow = true;
 
-                    // Search filter
-                    if (searchTerm && !text.includes(searchTerm)) {
-                        showRow = false;
-                    }
+                    // Search filter - search in name, email, and reference ID
+                    if (searchTerm) {
+                        const searchableText = [
+                            cells[1]?.textContent || '', // User info cell
+                            cells[2]?.textContent || '', // ID/Reference cell
+                            cells[3]?.textContent || '', // Contact cell
+                        ].join(' ').toLowerCase();
 
-                    // Status filter
-                    if (statusFilter && statusBadge) {
-                        const status = statusBadge.textContent.toLowerCase().trim();
-                        if (status !== statusFilter) {
+                        if (!searchableText.includes(searchTerm)) {
                             showRow = false;
                         }
                     }
 
-                    // Department filter (this would need more complex logic for actual department matching)
-                    // For now, just check if department cell contains the filter term
-                    if (departmentFilter && departmentCell) {
-                        if (!departmentCell.textContent.toLowerCase().includes(departmentFilter.toLowerCase())) {
-                            showRow = false;
+                    // Status filter
+                    if (statusFilter && showRow) {
+                        const statusBadge = row.querySelector('.status-badge');
+                        if (statusBadge) {
+                            const status = statusBadge.textContent.toLowerCase().trim();
+                            if (status !== statusFilter) {
+                                showRow = false;
+                            }
+                        }
+                    }
+
+                    // Department filter
+                    if (departmentFilter && showRow) {
+                        const departmentCell = cells[4]; // Department column
+                        if (departmentCell) {
+                            const departmentText = departmentCell.textContent.trim();
+                            // Check if department matches the selected department ID
+                            const departmentOptions = document.querySelectorAll('#departmentFilter option');
+                            let selectedDeptName = '';
+                            departmentOptions.forEach(option => {
+                                if (option.value === departmentFilter) {
+                                    selectedDeptName = option.textContent.toLowerCase();
+                                }
+                            });
+
+                            if (selectedDeptName && !departmentText.toLowerCase().includes(selectedDeptName)) {
+                                showRow = false;
+                            }
                         }
                     }
 
                     row.style.display = showRow ? '' : 'none';
+                    if (showRow) {
+                        tableVisible++;
+                        totalVisible++;
+                    }
                 });
+
+                // Update tab badge if this is a tab content
+                const tabContent = table.closest('.tab-pane');
+                if (tabContent) {
+                    const tabId = tabContent.id;
+                    const tabButton = document.querySelector(`[data-bs-target="#${tabId}"] .badge`);
+                    if (tabButton) {
+                        tabButton.textContent = tableVisible;
+                    }
+                }
             });
+
+            // Update total stats if needed
+            updateFilteredStats(totalVisible);
+        }
+
+        // Update filtered statistics display
+        function updateFilteredStats(visibleCount) {
+            // Could add additional UI feedback here
+            console.log(`Showing ${visibleCount} filtered results`);
         }
 
         // User action functions
@@ -946,38 +1181,71 @@ $userStats = getUserStats();
             const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
             const action = newStatus === 'active' ? 'activate' : 'deactivate';
 
-            if (!confirm(`Are you sure you want to ${action} this user?`)) {
+            if (!confirm(`Are you sure you want to ${action} this user?\n\nThis will ${newStatus === 'inactive' ? 'prevent them from logging in' : 'allow them to log in again'}.`)) {
                 return;
             }
+
+            // Show loading state
+            const button = event.target.closest('button');
+            const originalHtml = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
             try {
                 const response = await fetch('api/user-management-api.php', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: JSON.stringify({
                         action: 'toggle_status',
-                        user_id: userId,
-                        new_status: newStatus
+                        user_id: parseInt(userId),
+                        new_status: newStatus,
+                        csrf_token: '<?php echo $_SESSION['csrf_token']; ?>'
                     })
                 });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
 
                 const result = await response.json();
 
                 if (result.success) {
-                    // Reload the page to show updated status
-                    location.reload();
+                    // Show success message
+                    showAlert(`User ${action}d successfully!`, 'success');
+
+                    // Update the status badge without full reload
+                    const statusBadge = button.closest('tr').querySelector('.status-badge');
+                    if (statusBadge) {
+                        statusBadge.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+                        statusBadge.className = `status-badge status-${newStatus}`;
+                    }
+
+                    // Update button icon
+                    const icon = button.querySelector('i');
+                    if (icon) {
+                        icon.className = newStatus === 'active' ? 'fas fa-ban' : 'fas fa-check';
+                    }
+
+                    // Update button title
+                    button.title = newStatus === 'active' ? 'Deactivate User' : 'Activate User';
+
                 } else {
-                    alert('Error updating user status: ' + (result.message || 'Unknown error'));
+                    throw new Error(result.message || 'Unknown error occurred');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred while updating user status');
+                showAlert('Error updating user status: ' + error.message, 'error');
+            } finally {
+                // Restore button state
+                button.disabled = false;
+                button.innerHTML = originalHtml;
             }
         }
 
-        // Export users functionality
+        // Enhanced export users functionality
         function exportUsers() {
             const activeTab = document.querySelector('.nav-tabs .nav-link.active');
             let userType = 'all';
@@ -990,22 +1258,95 @@ $userStats = getUserStats();
                 userType = 'student';
             }
 
-            // Create a form to submit export request
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = 'export-users.php';
-            form.style.display = 'none';
+            // Show loading state
+            const exportBtn = document.querySelector('button[onclick="exportUsers()"]');
+            const originalHtml = exportBtn.innerHTML;
+            exportBtn.disabled = true;
+            exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Exporting...';
 
-            const typeInput = document.createElement('input');
-            typeInput.type = 'hidden';
-            typeInput.name = 'user_type';
-            typeInput.value = userType;
-            form.appendChild(typeInput);
+            try {
+                // Create a form to submit export request
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'export-users.php';
+                form.style.display = 'none';
 
-            document.body.appendChild(form);
-            form.submit();
-            document.body.removeChild(form);
+                // Add CSRF token
+                const csrfInput = document.createElement('input');
+                csrfInput.type = 'hidden';
+                csrfInput.name = 'csrf_token';
+                csrfInput.value = '<?php echo $_SESSION['csrf_token']; ?>';
+                form.appendChild(csrfInput);
+
+                const typeInput = document.createElement('input');
+                typeInput.type = 'hidden';
+                typeInput.name = 'user_type';
+                typeInput.value = userType;
+                form.appendChild(typeInput);
+
+                // Add current filters
+                const searchInput = document.createElement('input');
+                searchInput.type = 'hidden';
+                searchInput.name = 'search_term';
+                searchInput.value = document.getElementById('searchInput').value;
+                form.appendChild(searchInput);
+
+                const statusInput = document.createElement('input');
+                statusInput.type = 'hidden';
+                statusInput.name = 'status_filter';
+                statusInput.value = document.getElementById('statusFilter').value;
+                form.appendChild(statusInput);
+
+                const deptInput = document.createElement('input');
+                deptInput.type = 'hidden';
+                deptInput.name = 'department_filter';
+                deptInput.value = document.getElementById('departmentFilter').value;
+                form.appendChild(deptInput);
+
+                document.body.appendChild(form);
+                form.submit();
+
+                showAlert('Export started! Your download should begin shortly.', 'success');
+
+            } catch (error) {
+                console.error('Export error:', error);
+                showAlert('Failed to start export. Please try again.', 'error');
+            } finally {
+                // Restore button state after a short delay
+                setTimeout(() => {
+                    exportBtn.disabled = false;
+                    exportBtn.innerHTML = originalHtml;
+                }, 2000);
+            }
+        }
+
+        // Enhanced alert function
+        function showAlert(message, type = 'info', duration = 5000) {
+            // Remove existing alerts
+            const existingAlerts = document.querySelectorAll('.alert');
+            existingAlerts.forEach(alert => alert.remove());
+
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);';
+            alertDiv.innerHTML = `
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-triangle' : type === 'warning' ? 'exclamation-circle' : 'info-circle'} me-2"></i>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+
+            document.body.appendChild(alertDiv);
+
+            // Auto-dismiss
+            if (duration > 0) {
+                setTimeout(() => {
+                    if (alertDiv.parentNode) {
+                        alertDiv.remove();
+                    }
+                }, duration);
+            }
         }
     </script>
 </body>
 </html>
+

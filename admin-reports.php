@@ -299,17 +299,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     $stmt = $pdo->prepare("
                         SELECT
                             d.name as department_name,
-                            CONCAT(l.first_name, ' ', l.last_name) as hod_name,
+                            CONCAT(u.first_name, ' ', u.last_name) as hod_name,
                             COUNT(DISTINCT c.id) as courses_count,
                             COUNT(DISTINCT s.id) as students_count,
                             COUNT(DISTINCT ar.id) as attendance_records
                         FROM departments d
                         LEFT JOIN lecturers l ON d.hod_id = l.id
+                        LEFT JOIN users u ON l.user_id = u.id
                         LEFT JOIN courses c ON d.id = c.department_id
                         LEFT JOIN students s ON d.id = s.department_id
                         LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
                         LEFT JOIN attendance_records ar ON sess.id = ar.session_id
-                        GROUP BY d.id, d.name, l.first_name, l.last_name
+                        GROUP BY d.id, d.name, u.first_name, u.last_name
                         ORDER BY d.name
                     ");
                     $stmt->execute();
@@ -371,11 +372,47 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
         case 'get_lecturer_reports':
             try {
+                // First get department summary
+                $deptStmt = $pdo->prepare("
+                    SELECT
+                        d.id,
+                        d.name as department_name,
+                        COUNT(DISTINCT l.id) as lecturer_count,
+                        COUNT(DISTINCT c.id) as total_courses,
+                        COUNT(DISTINCT ar.student_id) as total_students,
+                        ROUND(
+                            CASE
+                                WHEN COUNT(DISTINCT ar.student_id) > 0
+                                THEN (COUNT(CASE WHEN ar.status = 'present' THEN 1 END) * 100.0) / COUNT(*)
+                                ELSE 0
+                            END, 1
+                        ) as dept_avg_attendance
+                    FROM departments d
+                    LEFT JOIN lecturers l ON d.id = l.department_id
+                    LEFT JOIN courses c ON l.id = c.lecturer_id
+                    LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
+                    LEFT JOIN attendance_records ar ON sess.id = ar.session_id
+                    GROUP BY d.id, d.name
+                    ORDER BY d.name
+                ");
+                $deptStmt->execute();
+                $departments = $deptStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Then get lecturers grouped by department
                 $stmt = $pdo->prepare("
                     SELECT
-                        CONCAT(l.first_name, ' ', l.last_name) as lecturer_name,
-                        l.email,
+                        l.id,
+                        u.first_name,
+                        u.last_name,
+                        u.email,
+                        u.phone,
+                        l.education_level,
+                        l.gender,
+                        l.dob,
+                        l.created_at,
+                        d.id as department_id,
                         d.name as department_name,
+                        u.username,
                         COUNT(DISTINCT c.id) as courses_count,
                         COUNT(DISTINCT ar.id) as attendance_records,
                         COUNT(DISTINCT ar.student_id) as unique_students,
@@ -385,22 +422,42 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                 THEN (COUNT(CASE WHEN ar.status = 'present' THEN 1 END) * 100.0) / COUNT(*)
                                 ELSE 0
                             END, 1
-                        ) as avg_attendance_rate
+                        ) as avg_attendance_rate,
+                        GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') as course_names,
+                        GROUP_CONCAT(DISTINCT c.course_code ORDER BY c.course_code SEPARATOR ', ') as course_codes
                     FROM lecturers l
                     LEFT JOIN departments d ON l.department_id = d.id
+                    LEFT JOIN users u ON l.user_id = u.id
                     LEFT JOIN courses c ON l.id = c.lecturer_id
                     LEFT JOIN attendance_sessions sess ON c.id = sess.course_id
                     LEFT JOIN attendance_records ar ON sess.id = ar.session_id
-                    WHERE l.role IN ('lecturer', 'hod')
-                    GROUP BY l.id, l.first_name, l.last_name, l.email, d.name
-                    ORDER BY avg_attendance_rate DESC
+                    GROUP BY l.id, u.first_name, u.last_name, u.email, u.phone, l.education_level, l.gender, l.dob, l.created_at, d.id, d.name, u.username
+                    ORDER BY d.name, u.first_name, u.last_name
                 ");
                 $stmt->execute();
-                $lecturer_reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Group lecturers by department
+                $lecturersByDepartment = [];
+                foreach ($departments as $dept) {
+                    $lecturersByDepartment[$dept['id']] = [
+                        'department' => $dept,
+                        'lecturers' => []
+                    ];
+                }
+
+                foreach ($lecturers as $lecturer) {
+                    $deptId = $lecturer['department_id'];
+                    if (isset($lecturersByDepartment[$deptId])) {
+                        $lecturersByDepartment[$deptId]['lecturers'][] = $lecturer;
+                    }
+                }
 
                 echo json_encode([
                     'status' => 'success',
-                    'data' => $lecturer_reports
+                    'data' => $lecturersByDepartment,
+                    'departments' => $departments,
+                    'total_lecturers' => count($lecturers)
                 ]);
             } catch (PDOException $e) {
                 error_log("Get lecturer reports error: " . $e->getMessage());
@@ -1007,6 +1064,123 @@ function exportToPDF($reports) {
         border-radius: 4px;
         transition: width 0.6s ease;
     }
+
+    /* Lecturer card styles */
+    .lecturer-card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        transition: all 0.3s ease;
+    }
+
+    .lecturer-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+
+    .avatar-circle {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 16px;
+    }
+
+    .avatar-circle-lg {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 24px;
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+
+    .stat-item {
+        text-align: center;
+        padding: 8px;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+
+    .stat-number {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0066cc;
+        display: block;
+    }
+
+    .stat-label {
+        font-size: 12px;
+        color: #6c757d;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .performance-indicator {
+        padding: 10px;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    /* Enhanced table styling for lecturer reports */
+    .table-enhanced {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .table-enhanced thead th {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border: none;
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        letter-spacing: 0.5px;
+    }
+
+    /* HOD card styles */
+    .hod-card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        transition: all 0.3s ease;
+    }
+
+    .hod-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+
+    .hod-info {
+        padding: 15px;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 8px;
+        margin-bottom: 15px;
+    }
+
+    .activity-indicators {
+        font-size: 0.85rem;
+    }
+
+    .activity-indicators small {
+        display: block;
+        margin-bottom: 2px;
+    }
   </style>
 </head>
 
@@ -1285,9 +1459,13 @@ function exportToPDF($reports) {
     <!-- Report Table -->
     <div class="table-card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <h6 class="mb-0"><i class="fas fa-table me-2"></i>Attendance Reports</h6>
+        <h6 class="mb-0"><i class="fas fa-table me-2"></i>Attendance Records</h6>
         <div class="d-flex align-items-center gap-2">
-          <small class="text-muted">Showing <span id="recordCount">0</span> records</small>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-info" id="totalRecordsBadge">0 records</span>
+            <span class="badge bg-success" id="presentCountBadge">0 present</span>
+            <span class="badge bg-danger" id="absentCountBadge">0 absent</span>
+          </div>
           <div class="spinner-border spinner-border-sm d-none" id="tableSpinner" role="status">
             <span class="visually-hidden">Loading...</span>
           </div>
@@ -1298,14 +1476,14 @@ function exportToPDF($reports) {
           <table class="table table-hover align-middle mb-0">
             <thead>
               <tr>
-                <th>#</th>
-                <th><i class="fas fa-user me-1"></i>Student Name</th>
-                <th><i class="fas fa-building me-1"></i>Department</th>
-                <th><i class="fas fa-graduation-cap me-1"></i>Option</th>
-                <th><i class="fas fa-book me-1"></i>Course</th>
-                <th><i class="fas fa-calendar me-1"></i>Date</th>
-                <th><i class="fas fa-check-circle me-1"></i>Status</th>
-                <th><i class="fas fa-fingerprint me-1"></i>Method</th>
+                <th width="5%">#</th>
+                <th width="18%"><i class="fas fa-user me-1"></i>Student Details</th>
+                <th width="15%"><i class="fas fa-building me-1"></i>Academic Info</th>
+                <th width="15%"><i class="fas fa-book me-1"></i>Course</th>
+                <th width="12%"><i class="fas fa-calendar me-1"></i>Session</th>
+                <th width="10%"><i class="fas fa-check-circle me-1"></i>Status</th>
+                <th width="10%"><i class="fas fa-clock me-1"></i>Time</th>
+                <th width="10%"><i class="fas fa-fingerprint me-1"></i>Method</th>
               </tr>
             </thead>
             <tbody id="reportTableBody">
@@ -1313,8 +1491,9 @@ function exportToPDF($reports) {
                 <td colspan="8" class="text-center py-5">
                   <div class="d-flex flex-column align-items-center">
                     <i class="fas fa-chart-line fa-3x text-muted mb-3"></i>
-                    <h5 class="text-muted">No Data Available</h5>
-                    <p class="text-muted mb-0">Apply filters to view attendance reports</p>
+                    <h5 class="text-muted">No Attendance Data Available</h5>
+                    <p class="text-muted mb-0">Apply filters above to view attendance records</p>
+                    <small class="text-muted mt-2">Use the date range picker and department filters to narrow down results</small>
                   </div>
                 </td>
               </tr>
@@ -1323,31 +1502,82 @@ function exportToPDF($reports) {
         </div>
       </div>
 
+      <!-- Summary Footer -->
+      <div class="card-footer bg-light" id="attendanceSummary" style="display: none;">
+        <div class="row g-3">
+          <div class="col-md-3">
+            <div class="text-center">
+              <h6 class="mb-1">Total Records</h6>
+              <span class="badge bg-primary fs-6" id="summaryTotal">0</span>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="text-center">
+              <h6 class="mb-1">Present</h6>
+              <span class="badge bg-success fs-6" id="summaryPresent">0</span>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="text-center">
+              <h6 class="mb-1">Absent</h6>
+              <span class="badge bg-danger fs-6" id="summaryAbsent">0</span>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="text-center">
+              <h6 class="mb-1">Attendance Rate</h6>
+              <span class="badge bg-info fs-6" id="summaryRate">0%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- HOD Reports Tab -->
       <div class="tab-pane fade" id="hod-reports" role="tabpanel">
         <div class="card">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <h6 class="mb-0"><i class="fas fa-user-tie me-2"></i>Department HOD Reports</h6>
-            <button class="btn btn-outline-primary btn-sm" onclick="exportHODReport()">
-              <i class="fas fa-download me-1"></i>Export HOD Report
-            </button>
+            <h6 class="mb-0"><i class="fas fa-user-tie me-2"></i>Department HOD Performance Dashboard</h6>
+            <div class="d-flex gap-2">
+              <button class="btn btn-outline-info btn-sm" onclick="toggleHODView()">
+                <i class="fas fa-eye me-1"></i>Toggle View
+              </button>
+              <button class="btn btn-outline-primary btn-sm" onclick="exportHODReport()">
+                <i class="fas fa-download me-1"></i>Export HOD Report
+              </button>
+            </div>
           </div>
           <div class="card-body">
-            <div class="table-responsive">
+            <!-- View Toggle -->
+            <div class="mb-3">
+              <div class="btn-group btn-group-sm" role="group">
+                <input type="radio" class="btn-check" name="hodView" id="hodTableView" checked>
+                <label class="btn btn-outline-primary" for="hodTableView">
+                  <i class="fas fa-table me-1"></i>Table View
+                </label>
+                <input type="radio" class="btn-check" name="hodView" id="hodCardView">
+                <label class="btn btn-outline-primary" for="hodCardView">
+                  <i class="fas fa-id-card me-1"></i>Card View
+                </label>
+              </div>
+            </div>
+
+            <!-- Table View -->
+            <div id="hodTableContainer" class="table-responsive">
               <table class="table table-hover">
                 <thead>
                   <tr>
-                    <th>Department</th>
-                    <th>HOD Name</th>
-                    <th>Courses</th>
-                    <th>Students</th>
-                    <th>Attendance Records</th>
-                    <th>Performance</th>
+                    <th><i class="fas fa-building me-1"></i>Department</th>
+                    <th><i class="fas fa-user-tie me-1"></i>HOD Details</th>
+                    <th><i class="fas fa-book me-1"></i>Courses</th>
+                    <th><i class="fas fa-users me-1"></i>Students</th>
+                    <th><i class="fas fa-chart-line me-1"></i>Attendance</th>
+                    <th><i class="fas fa-trophy me-1"></i>Performance</th>
+                    <th><i class="fas fa-calendar-check me-1"></i>Activity</th>
                   </tr>
                 </thead>
                 <tbody id="hodReportsTableBody">
                   <tr>
-                    <td colspan="6" class="text-center py-4">
+                    <td colspan="7" class="text-center py-4">
                       <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading...</span>
                       </div>
@@ -1356,20 +1586,85 @@ function exportToPDF($reports) {
                 </tbody>
               </table>
             </div>
+
+            <!-- Card View -->
+            <div id="hodCardContainer" class="d-none">
+              <div id="hodCardsContainer" class="row g-3">
+                <!-- Cards will be populated here -->
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Advanced Analytics Tab -->
       <div class="tab-pane fade" id="advanced-analytics" role="tabpanel">
-        <div class="row g-4">
+        <!-- Key Metrics Row -->
+        <div class="row g-3 mb-4">
+          <div class="col-lg-3 col-md-6">
+            <div class="card text-center">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-center mb-2">
+                  <i class="fas fa-users fa-2x text-primary me-2"></i>
+                  <div>
+                    <h4 class="mb-0" id="analyticsTotalStudents">0</h4>
+                    <small class="text-muted">Total Students</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-3 col-md-6">
+            <div class="card text-center">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-center mb-2">
+                  <i class="fas fa-chalkboard-teacher fa-2x text-success me-2"></i>
+                  <div>
+                    <h4 class="mb-0" id="analyticsTotalLecturers">0</h4>
+                    <small class="text-muted">Total Lecturers</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-3 col-md-6">
+            <div class="card text-center">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-center mb-2">
+                  <i class="fas fa-calendar-check fa-2x text-info me-2"></i>
+                  <div>
+                    <h4 class="mb-0" id="analyticsTotalSessions">0</h4>
+                    <small class="text-muted">Total Sessions</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-3 col-md-6">
+            <div class="card text-center">
+              <div class="card-body">
+                <div class="d-flex align-items-center justify-content-center mb-2">
+                  <i class="fas fa-percent fa-2x text-warning me-2"></i>
+                  <div>
+                    <h4 class="mb-0" id="analyticsAvgAttendance">0%</h4>
+                    <small class="text-muted">Avg Attendance</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row g-4 mb-4">
           <div class="col-lg-6">
             <div class="card">
-              <div class="card-header">
+              <div class="card-header d-flex justify-content-between align-items-center">
                 <h6 class="mb-0"><i class="fas fa-trophy me-2"></i>Top Performing Courses</h6>
+                <small class="text-muted">By attendance rate</small>
               </div>
               <div class="card-body">
-                <div class="chart-container" style="position: relative; height: 250px;">
+                <div class="chart-container" style="position: relative; height: 300px;">
                   <canvas id="coursePerformanceChart"></canvas>
                 </div>
               </div>
@@ -1377,8 +1672,39 @@ function exportToPDF($reports) {
           </div>
           <div class="col-lg-6">
             <div class="card">
-              <div class="card-header">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-building me-2"></i>Department Performance</h6>
+                <small class="text-muted">Attendance by department</small>
+              </div>
+              <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 300px;">
+                  <canvas id="departmentPerformanceChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Additional Charts Row -->
+        <div class="row g-4 mb-4">
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Daily Attendance Trend</h6>
+                <small class="text-muted">Last 30 days</small>
+              </div>
+              <div class="card-body">
+                <div class="chart-container" style="position: relative; height: 250px;">
+                  <canvas id="dailyTrendChart"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
                 <h6 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Attendance Distribution</h6>
+                <small class="text-muted">Present vs Absent</small>
               </div>
               <div class="card-body">
                 <div class="chart-container" style="position: relative; height: 250px;">
@@ -1390,27 +1716,35 @@ function exportToPDF($reports) {
         </div>
 
         <!-- Detailed Analytics Table -->
-        <div class="card mt-4">
-          <div class="card-header">
-            <h6 class="mb-0"><i class="fas fa-table me-2"></i>Detailed Analytics</h6>
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-table me-2"></i>Performance Analytics Summary</h6>
+            <div class="d-flex gap-2">
+              <span class="badge bg-success">Excellent: >90%</span>
+              <span class="badge bg-warning">Good: 75-90%</span>
+              <span class="badge bg-danger">Poor: <75%</span>
+            </div>
           </div>
           <div class="card-body">
             <div class="table-responsive">
-              <table class="table table-striped">
+              <table class="table table-striped table-hover">
                 <thead>
                   <tr>
-                    <th>Metric</th>
-                    <th>Value</th>
-                    <th>Change</th>
-                    <th>Status</th>
+                    <th><i class="fas fa-building me-1"></i>Department</th>
+                    <th><i class="fas fa-users me-1"></i>Students</th>
+                    <th><i class="fas fa-calendar-check me-1"></i>Attendance Rate</th>
+                    <th><i class="fas fa-chart-line me-1"></i>Trend</th>
+                    <th><i class="fas fa-trophy me-1"></i>Performance</th>
+                    <th><i class="fas fa-lightbulb me-1"></i>Insights</th>
                   </tr>
                 </thead>
                 <tbody id="analyticsTableBody">
                   <tr>
-                    <td colspan="4" class="text-center py-4">
+                    <td colspan="6" class="text-center py-4">
                       <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
+                        <span class="visually-hidden">Loading analytics...</span>
                       </div>
+                      <div class="mt-2">Loading performance analytics...</div>
                     </td>
                   </tr>
                 </tbody>
@@ -1424,28 +1758,49 @@ function exportToPDF($reports) {
       <div class="tab-pane fade" id="lecturer-reports" role="tabpanel">
         <div class="card">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <h6 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Lecturer Performance Reports</h6>
-            <button class="btn btn-outline-success btn-sm" onclick="exportLecturerReport()">
-              <i class="fas fa-download me-1"></i>Export Lecturer Report
-            </button>
+            <h6 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Lecturer Directory & Performance</h6>
+            <div class="d-flex gap-2">
+              <button class="btn btn-outline-info btn-sm" onclick="toggleLecturerView()">
+                <i class="fas fa-eye me-1"></i>Toggle View
+              </button>
+              <button class="btn btn-outline-success btn-sm" onclick="exportLecturerReport()">
+                <i class="fas fa-download me-1"></i>Export Report
+              </button>
+            </div>
           </div>
           <div class="card-body">
-            <div class="table-responsive">
+            <!-- View Toggle -->
+            <div class="mb-3">
+              <div class="btn-group btn-group-sm" role="group">
+                <input type="radio" class="btn-check" name="lecturerView" id="tableView" checked>
+                <label class="btn btn-outline-primary" for="tableView">
+                  <i class="fas fa-table me-1"></i>Table View
+                </label>
+                <input type="radio" class="btn-check" name="lecturerView" id="cardView">
+                <label class="btn btn-outline-primary" for="cardView">
+                  <i class="fas fa-id-card me-1"></i>Card View
+                </label>
+              </div>
+            </div>
+
+            <!-- Table View -->
+            <div id="lecturerTableView" class="table-responsive">
               <table class="table table-hover">
                 <thead>
                   <tr>
-                    <th>Lecturer Name</th>
-                    <th>Department</th>
-                    <th>Courses</th>
-                    <th>Students Taught</th>
-                    <th>Attendance Records</th>
-                    <th>Avg Attendance Rate</th>
-                    <th>Performance</th>
+                    <th><i class="fas fa-user me-1"></i>Name</th>
+                    <th><i class="fas fa-building me-1"></i>Department</th>
+                    <th><i class="fas fa-envelope me-1"></i>Contact</th>
+                    <th><i class="fas fa-graduation-cap me-1"></i>Education</th>
+                    <th><i class="fas fa-book me-1"></i>Courses</th>
+                    <th><i class="fas fa-users me-1"></i>Students</th>
+                    <th><i class="fas fa-chart-line me-1"></i>Performance</th>
+                    <th><i class="fas fa-calendar me-1"></i>Joined</th>
                   </tr>
                 </thead>
                 <tbody id="lecturerReportsTableBody">
                   <tr>
-                    <td colspan="7" class="text-center py-4">
+                    <td colspan="8" class="text-center py-4">
                       <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading...</span>
                       </div>
@@ -1453,6 +1808,13 @@ function exportToPDF($reports) {
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            <!-- Card View -->
+            <div id="lecturerCardView" class="d-none">
+              <div id="lecturerCardsContainer" class="row g-3">
+                <!-- Cards will be populated here -->
+              </div>
             </div>
           </div>
         </div>
@@ -1485,6 +1847,9 @@ function exportToPDF($reports) {
                   <select id="lecturerFilter" class="form-select">
                     <option value="">All Lecturers</option>
                   </select>
+                  <div class="form-text">
+                    <small class="text-muted">Filter reports by specific lecturer</small>
+                  </div>
                 </div>
                 <div class="col-md-3">
                   <label for="yearLevelFilter" class="form-label">Year Level</label>
@@ -1634,8 +1999,8 @@ function exportToPDF($reports) {
       if (attendanceDistributionChart) attendanceDistributionChart.destroy();
 
       // Daily attendance trend chart
-      const dailyTrends = data.daily_trends || [];
-      if (dailyTrends.length === 0) {
+      const dailyTrendsData = data.daily_trends || [];
+      if (dailyTrendsData.length === 0) {
         // Create empty chart with better messaging
         attendanceTrendChart = new Chart(ctx1, {
           type: 'line',
@@ -1691,9 +2056,9 @@ function exportToPDF($reports) {
           }]
         });
       } else {
-        const trendLabels = dailyTrends.map(item => item.date || '');
-        const presentData = dailyTrends.map(item => item.present_count || 0);
-        const absentData = dailyTrends.map(item => item.absent_count || 0);
+        const trendLabels = dailyTrendsData.map(item => item.date || '');
+        const presentData = dailyTrendsData.map(item => item.present_count || 0);
+        const absentData = dailyTrendsData.map(item => item.absent_count || 0);
 
         attendanceTrendChart = new Chart(ctx1, {
           type: 'line',
@@ -1794,6 +2159,46 @@ function exportToPDF($reports) {
         });
       }
 
+      // Department performance chart (new)
+      const departmentPerformance = data.department_attendance || [];
+      const deptLabels = departmentPerformance.map(item => item.department || 'Unknown');
+      const deptRates = departmentPerformance.map(item => parseFloat(item.attendance_rate) || 0);
+
+      const deptCtx = document.getElementById('departmentPerformanceChart')?.getContext('2d');
+      if (deptCtx) {
+        const departmentPerformanceChart = new Chart(deptCtx, {
+          type: 'bar',
+          data: {
+            labels: deptLabels,
+            datasets: [{
+              label: 'Attendance Rate (%)',
+              data: deptRates,
+              backgroundColor: deptRates.map(rate =>
+                rate >= 90 ? '#28a745' :
+                rate >= 75 ? '#ffc107' : '#dc3545'
+              ),
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'Department Attendance Performance'
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                max: 100
+              }
+            }
+          }
+        });
+      }
+
       // Course performance chart
       const coursePerformance = data.course_performance || [];
       const courseLabels = coursePerformance.slice(0, 5).map(item => item.course_name || 'Unknown');
@@ -1822,10 +2227,52 @@ function exportToPDF($reports) {
         }
       });
 
+      // Daily trend chart (new)
+      const dailyTrends = data.daily_trends || [];
+      const dailyCtx = document.getElementById('dailyTrendChart')?.getContext('2d');
+      if (dailyCtx) {
+        const dailyTrendChart = new Chart(dailyCtx, {
+          type: 'line',
+          data: {
+            labels: dailyTrends.map(item => item.date || ''),
+            datasets: [{
+              label: 'Present',
+              data: dailyTrends.map(item => item.present_count || 0),
+              borderColor: '#28a745',
+              backgroundColor: 'rgba(40, 167, 69, 0.1)',
+              tension: 0.4,
+              fill: true
+            }, {
+              label: 'Absent',
+              data: dailyTrends.map(item => item.absent_count || 0),
+              borderColor: '#dc3545',
+              backgroundColor: 'rgba(220, 53, 69, 0.1)',
+              tension: 0.4,
+              fill: true
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              title: {
+                display: true,
+                text: 'Daily Attendance Trends'
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true
+              }
+            }
+          }
+        });
+      }
+
       // Attendance distribution
-      const dailyTrendsData = data.daily_trends || [];
-      const totalPresent = dailyTrendsData.reduce((sum, item) => sum + (item.present_count || 0), 0);
-      const totalAbsent = dailyTrendsData.reduce((sum, item) => sum + (item.absent_count || 0), 0);
+      const attendanceTrendsData = data.daily_trends || [];
+      const totalPresent = attendanceTrendsData.reduce((sum, item) => sum + (item.present_count || 0), 0);
+      const totalAbsent = attendanceTrendsData.reduce((sum, item) => sum + (item.absent_count || 0), 0);
 
       attendanceDistributionChart = new Chart(ctx4, {
         type: 'pie',
@@ -1854,25 +2301,74 @@ function exportToPDF($reports) {
       const tbody = $('#analyticsTableBody');
       tbody.empty();
 
+      // Update key metrics
+      const totalStudents = departments.reduce((sum, dept) => sum + (dept.total_students || 0), 0);
+      const totalLecturers = departments.reduce((sum, dept) => sum + (dept.total_lecturers || 0), 0);
+      const totalSessions = departments.reduce((sum, dept) => sum + (dept.total_sessions || 0), 0);
+      const avgAttendance = departments.length > 0 ?
+        Math.round(departments.reduce((sum, dept) => sum + (dept.attendance_rate || 0), 0) / departments.length) : 0;
+
+      $('#analyticsTotalStudents').text(totalStudents.toLocaleString());
+      $('#analyticsTotalLecturers').text(totalLecturers.toLocaleString());
+      $('#analyticsTotalSessions').text(totalSessions.toLocaleString());
+      $('#analyticsAvgAttendance').text(`${avgAttendance}%`);
+
       departments.forEach(dept => {
-        const change = Math.random() * 10 - 5; // Mock change data
+        const change = Math.random() * 10 - 5; // Mock change data for demo
         const statusClass = change > 0 ? 'success' : 'danger';
         const statusIcon = change > 0 ? 'up' : 'down';
+        const performance = dept.attendance_rate >= 90 ? 'Excellent' :
+                           dept.attendance_rate >= 75 ? 'Good' : 'Needs Improvement';
+        const performanceClass = dept.attendance_rate >= 90 ? 'success' :
+                                dept.attendance_rate >= 75 ? 'warning' : 'danger';
+
+        // Generate insights based on data
+        let insights = [];
+        if (dept.attendance_rate >= 90) insights.push('Outstanding performance');
+        else if (dept.attendance_rate >= 75) insights.push('Good attendance rate');
+        else insights.push('Needs improvement');
+
+        if (dept.total_students > 50) insights.push('Large student population');
+        if (dept.total_sessions > 100) insights.push('High session activity');
 
         tbody.append(`
           <tr>
-            <td>${dept.department}</td>
-            <td>${dept.attendance_rate}%</td>
             <td>
-              <span class="badge bg-${statusClass}">
+              <div class="d-flex align-items-center">
+                <div class="avatar-circle me-2" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                  <i class="fas fa-building text-white"></i>
+                </div>
+                <div>
+                  <strong>${dept.department}</strong>
+                  <br><small class="text-muted">${dept.total_students || 0} students</small>
+                </div>
+              </div>
+            </td>
+            <td>
+              <strong>${dept.total_students || 0}</strong>
+              <br><small class="text-muted">${dept.total_lecturers || 0} lecturers</small>
+            </td>
+            <td>
+              <div class="d-flex align-items-center">
+                <span class="badge bg-${performanceClass} me-2">${dept.attendance_rate || 0}%</span>
+                <small class="text-muted">of sessions</small>
+              </div>
+            </td>
+            <td>
+              <span class="badge bg-${statusClass} ${change > 0 ? 'performance-excellent' : 'performance-poor'}">
                 <i class="fas fa-arrow-${statusIcon} me-1"></i>
                 ${Math.abs(change).toFixed(1)}%
               </span>
             </td>
             <td>
-              <span class="badge bg-${dept.attendance_rate >= 90 ? 'success' : dept.attendance_rate >= 75 ? 'warning' : 'danger'}">
-                ${dept.attendance_rate >= 90 ? 'Excellent' : dept.attendance_rate >= 75 ? 'Good' : 'Needs Improvement'}
+              <span class="badge bg-${performanceClass} performance-${performance.toLowerCase().split(' ')[0]}">
+                ${performance}
               </span>
+            </td>
+            <td>
+              <small class="text-muted">
+                ${insights.join('<br>')}
+              </small>
             </td>
           </tr>
         `);
@@ -1882,39 +2378,192 @@ function exportToPDF($reports) {
     // Load HOD reports
     function loadHODReports() {
       $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
-        const tbody = $('#hodReportsTableBody');
-        tbody.empty();
-
         if (data.hod_reports && data.hod_reports.length > 0) {
-          data.hod_reports.forEach(hod => {
-            const performance = hod.attendance_records > 0 ?
-              Math.round((hod.attendance_records / hod.students_count) * 100) : 0;
-
-            tbody.append(`
-              <tr>
-                <td>${hod.department_name}</td>
-                <td>${hod.hod_name || 'Not Assigned'}</td>
-                <td>${hod.courses_count}</td>
-                <td>${hod.students_count}</td>
-                <td>${hod.attendance_records}</td>
-                <td>
-                  <div class="progress" style="width: 100px;">
-                    <div class="progress-bar bg-${performance >= 80 ? 'success' : performance >= 60 ? 'warning' : 'danger'}"
-                         role="progressbar" style="width: ${performance}%">
-                      ${performance}%
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            `);
-          });
+          displayHODTable(data.hod_reports);
+          displayHODCards(data.hod_reports);
         } else {
-          tbody.html('<tr><td colspan="6" class="text-center py-4">No HOD reports available</td></tr>');
+          $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4">No HOD reports available</td></tr>');
+          $('#hodCardsContainer').html('<div class="col-12 text-center py-4">No HOD reports available</div>');
         }
       }).fail(function() {
-        $('#hodReportsTableBody').html('<tr><td colspan="6" class="text-center py-4 text-danger">Failed to load HOD reports</td></tr>');
+        $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4 text-danger">Failed to load HOD reports</td></tr>');
+        $('#hodCardsContainer').html('<div class="col-12 text-center py-4 text-danger">Failed to load HOD reports</div>');
       });
     }
+
+    // Display HOD data in table format
+    function displayHODTable(hodReports) {
+      const tbody = $('#hodReportsTableBody');
+      tbody.empty();
+
+      hodReports.forEach(hod => {
+        const performance = hod.attendance_records > 0 ?
+          Math.round((hod.attendance_records / hod.students_count) * 100) : 0;
+        const performanceClass = performance >= 80 ? 'success' : performance >= 60 ? 'warning' : 'danger';
+        const performanceText = performance >= 80 ? 'Excellent' : performance >= 60 ? 'Good' : 'Needs Attention';
+
+        tbody.append(`
+          <tr>
+            <td>
+              <div class="d-flex align-items-center">
+                <div class="avatar-circle me-2" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                  <i class="fas fa-building text-white"></i>
+                </div>
+                <div>
+                  <strong>${hod.department_name}</strong>
+                  <br><small class="text-muted">Department</small>
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="d-flex align-items-center">
+                <div class="avatar-circle me-2" style="background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);">
+                  <i class="fas fa-user-tie text-white"></i>
+                </div>
+                <div>
+                  <strong>${hod.hod_name || 'Not Assigned'}</strong>
+                  ${hod.hod_name ? '<br><small class="text-muted">Head of Department</small>' : '<br><small class="text-warning">Position Vacant</small>'}
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="text-center">
+                <span class="badge bg-primary fs-6">${hod.courses_count}</span>
+                <br><small class="text-muted">Active Courses</small>
+              </div>
+            </td>
+            <td>
+              <div class="text-center">
+                <span class="badge bg-info fs-6">${hod.students_count}</span>
+                <br><small class="text-muted">Enrolled Students</small>
+              </div>
+            </td>
+            <td>
+              <div class="text-center">
+                <span class="badge bg-secondary fs-6">${hod.attendance_records}</span>
+                <br><small class="text-muted">Total Records</small>
+              </div>
+            </td>
+            <td>
+              <div class="d-flex flex-column align-items-center">
+                <div class="progress mb-2" style="width: 80px; height: 8px;">
+                  <div class="progress-bar bg-${performanceClass}" role="progressbar"
+                       style="width: ${performance}%" aria-valuenow="${performance}" aria-valuemin="0" aria-valuemax="100">
+                  </div>
+                </div>
+                <span class="badge bg-${performanceClass}">${performance}%</span>
+                <small class="text-muted">${performanceText}</small>
+              </div>
+            </td>
+            <td>
+              <div class="activity-indicators">
+                <small class="text-muted d-block">
+                  <i class="fas fa-calendar-check text-success me-1"></i>
+                  ${hod.attendance_records} sessions
+                </small>
+                <small class="text-muted d-block">
+                  <i class="fas fa-users text-info me-1"></i>
+                  ${hod.students_count} students
+                </small>
+                <small class="text-muted d-block">
+                  <i class="fas fa-book text-primary me-1"></i>
+                  ${hod.courses_count} courses
+                </small>
+              </div>
+            </td>
+          </tr>
+        `);
+      });
+    }
+
+    // Display HOD data in card format
+    function displayHODCards(hodReports) {
+      const container = $('#hodCardsContainer');
+      container.empty();
+
+      hodReports.forEach(hod => {
+        const performance = hod.attendance_records > 0 ?
+          Math.round((hod.attendance_records / hod.students_count) * 100) : 0;
+        const performanceClass = performance >= 80 ? 'success' : performance >= 60 ? 'warning' : 'danger';
+        const performanceText = performance >= 80 ? 'Excellent' : performance >= 60 ? 'Good' : 'Needs Attention';
+
+        container.append(`
+          <div class="col-lg-4 col-md-6">
+            <div class="card hod-card h-100">
+              <div class="card-header bg-light">
+                <div class="d-flex align-items-center">
+                  <div class="avatar-circle-lg me-3" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                    <i class="fas fa-building text-white"></i>
+                  </div>
+                  <div>
+                    <h6 class="mb-0">${hod.department_name}</h6>
+                    <small class="text-muted">Department</small>
+                  </div>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="hod-info mb-3">
+                  <small class="text-muted d-block mb-2">Head of Department</small>
+                  <div class="d-flex align-items-center">
+                    <div class="avatar-circle me-2" style="background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);">
+                      <i class="fas fa-user-tie text-white"></i>
+                    </div>
+                    <div>
+                      <strong>${hod.hod_name || 'Not Assigned'}</strong>
+                      ${hod.hod_name ? '' : '<br><small class="text-warning">Position Vacant</small>'}
+                    </div>
+                  </div>
+                </div>
+
+                <div class="stats-grid mb-3">
+                  <div class="stat-item">
+                    <div class="stat-number">${hod.courses_count}</div>
+                    <div class="stat-label">Courses</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-number">${hod.students_count}</div>
+                    <div class="stat-label">Students</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-number">${hod.attendance_records}</div>
+                    <div class="stat-label">Records</div>
+                  </div>
+                </div>
+
+                <div class="performance-indicator">
+                  <small class="text-muted d-block mb-1">Department Performance</small>
+                  <div class="progress mb-2" style="height: 8px;">
+                    <div class="progress-bar bg-${performanceClass}" role="progressbar"
+                         style="width: ${performance}%" aria-valuenow="${performance}" aria-valuemin="0" aria-valuemax="100">
+                    </div>
+                  </div>
+                  <span class="badge bg-${performanceClass}">${performance}% - ${performanceText}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        `);
+      });
+    }
+
+    // Toggle between HOD table and card views
+    function toggleHODView() {
+      const tableView = $('#hodTableContainer');
+      const cardView = $('#hodCardContainer');
+
+      if ($('#hodTableView').is(':checked')) {
+        tableView.removeClass('d-none');
+        cardView.addClass('d-none');
+      } else {
+        tableView.addClass('d-none');
+        cardView.removeClass('d-none');
+      }
+    }
+
+    // Add event listener for HOD view toggle
+    $('input[name="hodView"]').change(function() {
+      toggleHODView();
+    });
 
     // Load advanced analytics
     function loadAdvancedAnalytics() {
@@ -1937,42 +2586,287 @@ function exportToPDF($reports) {
     // Load lecturer reports
     function loadLecturerReports() {
       $.getJSON('admin-reports.php?ajax=1&action=get_lecturer_reports', function(response) {
-        const tbody = $('#lecturerReportsTableBody');
-        tbody.empty();
-
         if (response.error) {
-          tbody.html(`<tr><td colspan="7" class="text-center py-4 text-danger">${response.error}</td></tr>`);
+          $('#lecturerReportsTableBody').html(`<tr><td colspan="8" class="text-center py-4 text-danger">${response.error}</td></tr>`);
+          $('#lecturerCardsContainer').html(`<div class="col-12 text-center py-4 text-danger">${response.error}</div>`);
           return;
         }
 
         if (response.data && response.data.length > 0) {
-          response.data.forEach(lecturer => {
-            const performanceClass = lecturer.avg_attendance_rate >= 90 ? 'excellent' :
-                                   lecturer.avg_attendance_rate >= 75 ? 'good' : 'poor';
+          displayLecturerTable(response.data);
+          displayLecturerCards(response.data);
+        } else {
+          $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4">No lecturer reports available</td></tr>');
+          $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4">No lecturer reports available</div>');
+        }
+      }).fail(function() {
+        $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4 text-danger">Failed to load lecturer reports</td></tr>');
+        $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4 text-danger">Failed to load lecturer reports</div>');
+      });
+    }
+
+    // Display lecturer data in table format grouped by department
+    function displayLecturerTable(data) {
+      const tbody = $('#lecturerReportsTableBody');
+      tbody.empty();
+
+      // data is now an object with department keys
+      Object.values(data).forEach(deptData => {
+        const department = deptData.department;
+        const lecturers = deptData.lecturers;
+
+        // Add department header row
+        tbody.append(`
+          <tr class="table-primary department-header">
+            <td colspan="8">
+              <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                  <div class="avatar-circle-lg me-3" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                    <i class="fas fa-building text-white"></i>
+                  </div>
+                  <div>
+                    <h6 class="mb-0 fw-bold">${department.department_name}</h6>
+                    <small class="text-muted">${lecturers.length} lecturer${lecturers.length !== 1 ? 's' : ''}</small>
+                  </div>
+                </div>
+                <div class="department-stats text-end">
+                  <small class="text-muted d-block">
+                    <i class="fas fa-book me-1"></i>${department.total_courses || 0} courses |
+                    <i class="fas fa-users me-1"></i>${department.total_students || 0} students |
+                    <i class="fas fa-chart-line me-1"></i>${department.dept_avg_attendance || 0}% avg attendance
+                  </small>
+                </div>
+              </div>
+            </td>
+          </tr>
+        `);
+
+        // Add lecturer rows for this department
+        if (lecturers.length === 0) {
+          tbody.append(`
+            <tr>
+              <td colspan="8" class="text-center py-3 text-muted">
+                <i class="fas fa-info-circle me-2"></i>No lecturers assigned to this department
+              </td>
+            </tr>
+          `);
+        } else {
+          lecturers.forEach(lecturer => {
+            const fullName = `${lecturer.first_name || ''} ${lecturer.last_name || ''}`.trim() || 'N/A';
+            const performanceClass = lecturer.avg_attendance_rate >= 90 ? 'success' :
+                                    lecturer.avg_attendance_rate >= 75 ? 'warning' : 'danger';
+            const performanceText = lecturer.avg_attendance_rate >= 90 ? 'Excellent' :
+                                   lecturer.avg_attendance_rate >= 75 ? 'Good' : 'Needs Improvement';
+            const joinedDate = lecturer.created_at ? new Date(lecturer.created_at).toLocaleDateString() : 'N/A';
 
             tbody.append(`
-              <tr>
-                <td>${lecturer.lecturer_name}</td>
-                <td>${lecturer.department_name || 'Not Assigned'}</td>
-                <td>${lecturer.courses_count}</td>
-                <td>${lecturer.unique_students}</td>
-                <td>${lecturer.attendance_records}</td>
-                <td>${lecturer.avg_attendance_rate}%</td>
+              <tr class="department-lecturer-row">
                 <td>
-                  <span class="badge bg-${performanceClass === 'excellent' ? 'success' : performanceClass === 'good' ? 'warning' : 'danger'}">
-                    ${performanceClass.charAt(0).toUpperCase() + performanceClass.slice(1)}
-                  </span>
+                  <div class="d-flex align-items-center">
+                    <div class="avatar-circle me-2">
+                      <i class="fas fa-user text-primary"></i>
+                    </div>
+                    <div>
+                      <strong>${fullName}</strong>
+                      <br><small class="text-muted">@${lecturer.username || 'N/A'}</small>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <small class="text-muted">${department.department_name}</small>
+                </td>
+                <td>
+                  <small>
+                    <i class="fas fa-envelope me-1"></i>${lecturer.email || 'N/A'}<br>
+                    <i class="fas fa-phone me-1"></i>${lecturer.phone || 'N/A'}
+                  </small>
+                </td>
+                <td>
+                  <span class="badge bg-info">${lecturer.education_level || 'N/A'}</span>
+                  <br><small class="text-muted">${lecturer.gender || 'N/A'}</small>
+                </td>
+                <td>
+                  <strong>${lecturer.courses_count || 0}</strong>
+                  ${lecturer.course_names ? `<br><small class="text-muted">${lecturer.course_names.substring(0, 30)}${lecturer.course_names.length > 30 ? '...' : ''}</small>` : ''}
+                </td>
+                <td>
+                  <div class="text-center">
+                    <strong>${lecturer.unique_students || 0}</strong>
+                    <br><small class="text-muted">${lecturer.attendance_records || 0} records</small>
+                  </div>
+                </td>
+                <td>
+                  <div class="d-flex align-items-center">
+                    <span class="badge bg-${performanceClass} me-2">${lecturer.avg_attendance_rate || 0}%</span>
+                    <small class="text-muted">${performanceText}</small>
+                  </div>
+                </td>
+                <td>
+                  <small class="text-muted">${joinedDate}</small>
                 </td>
               </tr>
             `);
           });
-        } else {
-          tbody.html('<tr><td colspan="7" class="text-center py-4">No lecturer reports available</td></tr>');
         }
-      }).fail(function() {
-        $('#lecturerReportsTableBody').html('<tr><td colspan="7" class="text-center py-4 text-danger">Failed to load lecturer reports</td></tr>');
+
+        // Add spacing between departments
+        tbody.append('<tr class="department-spacer"><td colspan="8" style="height: 10px; background: #f8f9fa;"></td></tr>');
       });
     }
+
+    // Display lecturer data in card format grouped by department
+    function displayLecturerCards(data) {
+      const container = $('#lecturerCardsContainer');
+      container.empty();
+
+      // data is now an object with department keys
+      Object.values(data).forEach(deptData => {
+        const department = deptData.department;
+        const lecturers = deptData.lecturers;
+
+        // Add department header
+        container.append(`
+          <div class="col-12 mb-3">
+            <div class="card department-header-card" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 2px solid #17a2b8;">
+              <div class="card-body py-3">
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="d-flex align-items-center">
+                    <div class="avatar-circle-lg me-3" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                      <i class="fas fa-building text-white"></i>
+                    </div>
+                    <div>
+                      <h5 class="mb-0 fw-bold text-primary">${department.department_name}</h5>
+                      <small class="text-muted">${lecturers.length} lecturer${lecturers.length !== 1 ? 's' : ''} in department</small>
+                    </div>
+                  </div>
+                  <div class="department-summary text-end">
+                    <div class="d-flex gap-3">
+                      <div class="text-center">
+                        <div class="fw-bold text-primary">${department.total_courses || 0}</div>
+                        <small class="text-muted">Courses</small>
+                      </div>
+                      <div class="text-center">
+                        <div class="fw-bold text-success">${department.total_students || 0}</div>
+                        <small class="text-muted">Students</small>
+                      </div>
+                      <div class="text-center">
+                        <div class="fw-bold text-info">${department.dept_avg_attendance || 0}%</div>
+                        <small class="text-muted">Avg Attendance</small>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `);
+
+        // Add lecturer cards for this department
+        if (lecturers.length === 0) {
+          container.append(`
+            <div class="col-12">
+              <div class="alert alert-info text-center">
+                <i class="fas fa-info-circle me-2"></i>No lecturers assigned to this department
+              </div>
+            </div>
+          `);
+        } else {
+          lecturers.forEach(lecturer => {
+            const fullName = `${lecturer.first_name || ''} ${lecturer.last_name || ''}`.trim() || 'N/A';
+            const performanceClass = lecturer.avg_attendance_rate >= 90 ? 'success' :
+                                    lecturer.avg_attendance_rate >= 75 ? 'warning' : 'danger';
+            const performanceText = lecturer.avg_attendance_rate >= 90 ? 'Excellent' :
+                                   lecturer.avg_attendance_rate >= 75 ? 'Good' : 'Needs Improvement';
+            const joinedDate = lecturer.created_at ? new Date(lecturer.created_at).toLocaleDateString() : 'N/A';
+
+            container.append(`
+              <div class="col-lg-4 col-md-6">
+                <div class="card lecturer-card h-100">
+                  <div class="card-header bg-light">
+                    <div class="d-flex align-items-center">
+                      <div class="avatar-circle-lg me-3">
+                        <i class="fas fa-user-graduate text-primary"></i>
+                      </div>
+                      <div>
+                        <h6 class="mb-0">${fullName}</h6>
+                        <small class="text-muted">@${lecturer.username || 'N/A'}</small>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="row g-2 mb-3">
+                      <div class="col-6">
+                        <small class="text-muted d-block">Department</small>
+                        <strong class="d-block">${department.department_name}</strong>
+                      </div>
+                      <div class="col-6">
+                        <small class="text-muted d-block">Education</small>
+                        <span class="badge bg-info">${lecturer.education_level || 'N/A'}</span>
+                      </div>
+                    </div>
+
+                    <div class="contact-info mb-3">
+                      <small class="text-muted d-block">Contact Information</small>
+                      <div class="d-flex align-items-center mb-1">
+                        <i class="fas fa-envelope text-primary me-2" style="width: 14px;"></i>
+                        <small>${lecturer.email || 'N/A'}</small>
+                      </div>
+                      <div class="d-flex align-items-center">
+                        <i class="fas fa-phone text-success me-2" style="width: 14px;"></i>
+                        <small>${lecturer.phone || 'N/A'}</small>
+                      </div>
+                    </div>
+
+                    <div class="stats-grid mb-3">
+                      <div class="stat-item">
+                        <div class="stat-number">${lecturer.courses_count || 0}</div>
+                        <div class="stat-label">Courses</div>
+                      </div>
+                      <div class="stat-item">
+                        <div class="stat-number">${lecturer.unique_students || 0}</div>
+                        <div class="stat-label">Students</div>
+                      </div>
+                      <div class="stat-item">
+                        <div class="stat-number">${lecturer.avg_attendance_rate || 0}%</div>
+                        <div class="stat-label">Attendance</div>
+                      </div>
+                    </div>
+
+                    <div class="performance-indicator">
+                      <small class="text-muted d-block mb-1">Performance</small>
+                      <span class="badge bg-${performanceClass}">${performanceText}</span>
+                      <small class="text-muted d-block mt-1">Joined: ${joinedDate}</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `);
+          });
+        }
+
+        // Add spacing between departments
+        container.append('<div class="col-12"><hr class="my-4" style="border: 2px solid #e9ecef;"></div>');
+      });
+    }
+
+    // Toggle between table and card views
+    function toggleLecturerView() {
+      const tableView = $('#lecturerTableView');
+      const cardView = $('#lecturerCardView');
+
+      if ($('#tableView').is(':checked')) {
+        tableView.removeClass('d-none');
+        cardView.addClass('d-none');
+      } else {
+        tableView.addClass('d-none');
+        cardView.removeClass('d-none');
+      }
+    }
+
+    // Add event listener for view toggle
+    $('input[name="lecturerView"]').change(function() {
+      toggleLecturerView();
+    });
 
     // Load lecturers for filter dropdown
     function loadLecturersForFilter() {
@@ -1985,9 +2879,22 @@ function exportToPDF($reports) {
             const displayName = lecturer.display_name || `${lecturer.first_name} ${lecturer.last_name}`;
             select.append(`<option value="${lecturer.id}">${displayName}</option>`);
           });
+        } else {
+          console.warn('Invalid response format for lecturers:', response);
+          select.append('<option value="" disabled style="color: #dc3545;">Unable to load lecturers</option>');
         }
-      }).fail(function() {
-        console.error('Failed to load lecturers for filter');
+      }).fail(function(xhr, status, error) {
+        console.error('Failed to load lecturers for filter:', {
+          xhr: xhr,
+          status: status,
+          error: error,
+          responseText: xhr.responseText
+        });
+        const select = $('#lecturerFilter');
+        select.empty().append('<option value="">All Lecturers</option>');
+        select.append('<option value="" disabled style="color: #dc3545;">Failed to load lecturers</option>');
+        // Show user-friendly message
+        showAlert('Lecturer filter is temporarily unavailable. You can still use other filters.', 'warning');
       });
     }
 
@@ -2005,8 +2912,25 @@ function exportToPDF($reports) {
     // Export lecturer report
     function exportLecturerReport() {
       $.getJSON('admin-reports.php?ajax=1&action=get_lecturer_reports', function(response) {
-        if (response.data && response.data.length > 0) {
-          exportToExcel(response.data, 'lecturer_report');
+        if (response.data && Object.keys(response.data).length > 0) {
+          // Flatten the department-grouped data for export
+          const flattenedData = [];
+          Object.values(response.data).forEach(deptData => {
+            const department = deptData.department;
+            const lecturers = deptData.lecturers;
+
+            lecturers.forEach(lecturer => {
+              flattenedData.push({
+                ...lecturer,
+                department_name: department.department_name,
+                dept_total_courses: department.total_courses,
+                dept_total_students: department.total_students,
+                dept_avg_attendance: department.dept_avg_attendance
+              });
+            });
+          });
+
+          exportToExcel(flattenedData, 'lecturer_report');
         } else {
           showAlert('No lecturer data available to export', 'warning');
         }
@@ -2021,6 +2945,13 @@ function exportToPDF($reports) {
         csvContent = "Department,HOD Name,Courses,Students,Attendance Records\n";
         data.forEach(row => {
           csvContent += `"${row.department_name}","${row.hod_name || 'Not Assigned'}","${row.courses_count}","${row.students_count}","${row.attendance_records}"\n`;
+        });
+      } else if (type === 'lecturer_report') {
+        csvContent = "Name,Username,Department,Education Level,Gender,Email,Phone,Courses Count,Course Names,Students Count,Attendance Records,Attendance Rate,Joined Date\n";
+        data.forEach(row => {
+          const fullName = `${row.first_name || ''} ${row.last_name || ''}`.trim() || 'N/A';
+          const joinedDate = row.created_at ? new Date(row.created_at).toLocaleDateString() : 'N/A';
+          csvContent += `"${fullName}","${row.username || 'N/A'}","${row.department_name || 'N/A'}","${row.education_level || 'N/A'}","${row.gender || 'N/A'}","${row.email || 'N/A'}","${row.phone || 'N/A'}","${row.courses_count || 0}","${(row.course_names || '').replace(/"/g, '""')}","${row.unique_students || 0}","${row.attendance_records || 0}","${row.avg_attendance_rate || 0}%","${joinedDate}"\n`;
         });
       } else {
         csvContent = "Student Name,Department,Option,Course,Date,Status\n";
@@ -2298,7 +3229,28 @@ function exportToPDF($reports) {
 
     // Display reports in table
     function displayReports(reports) {
-      $('#recordCount').text(reports.length);
+      // Update summary badges
+      const totalRecords = reports.length;
+      const presentCount = reports.filter(r => r.status === 'present').length;
+      const absentCount = reports.filter(r => r.status === 'absent').length;
+      const attendanceRate = totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 0;
+
+      $('#totalRecordsBadge').text(`${totalRecords} records`);
+      $('#presentCountBadge').text(`${presentCount} present`);
+      $('#absentCountBadge').text(`${absentCount} absent`);
+
+      // Update summary footer
+      $('#summaryTotal').text(totalRecords);
+      $('#summaryPresent').text(presentCount);
+      $('#summaryAbsent').text(absentCount);
+      $('#summaryRate').text(`${attendanceRate}%`);
+
+      // Show/hide summary footer
+      if (totalRecords > 0) {
+        $('#attendanceSummary').show();
+      } else {
+        $('#attendanceSummary').hide();
+      }
 
       if (reports.length === 0) {
         $('#reportTableBody').html(`
@@ -2306,8 +3258,9 @@ function exportToPDF($reports) {
             <td colspan="8" class="text-center py-5">
               <div class="d-flex flex-column align-items-center">
                 <i class="fas fa-search fa-3x text-muted mb-3"></i>
-                <h5 class="text-muted">No Records Found</h5>
-                <p class="text-muted mb-0">Try adjusting your filters</p>
+                <h5 class="text-muted">No Attendance Records Found</h5>
+                <p class="text-muted mb-0">Try adjusting your filters or check if attendance data exists for the selected criteria</p>
+                <small class="text-muted mt-2">Tip: Use broader date ranges or remove some filters to see more results</small>
               </div>
             </td>
           </tr>
@@ -2318,23 +3271,46 @@ function exportToPDF($reports) {
       let html = '';
       reports.forEach(function(report, index) {
         const statusBadge = report.status === 'present'
-          ? '<span class="badge bg-success"><i class="fas fa-check me-1"></i>Present</span>'
-          : '<span class="badge bg-danger"><i class="fas fa-times me-1"></i>Absent</span>';
+          ? '<span class="badge bg-success status-badge"><i class="fas fa-check-circle me-1"></i>Present</span>'
+          : '<span class="badge bg-danger status-badge"><i class="fas fa-times-circle me-1"></i>Absent</span>';
 
         const methodIcon = report.method === 'face'
-          ? '<i class="fas fa-camera text-info"></i>'
-          : '<i class="fas fa-fingerprint text-warning"></i>';
+          ? '<i class="fas fa-camera text-info fa-lg" title="Face Recognition"></i>'
+          : '<i class="fas fa-fingerprint text-warning fa-lg" title="Fingerprint"></i>';
+
+        const recordedTime = report.recorded_at ? new Date(report.recorded_at).toLocaleTimeString() : 'N/A';
 
         html += `
           <tr>
-            <td>${index + 1}</td>
-            <td>${report.first_name} ${report.last_name}</td>
-            <td>${report.department_name}</td>
-            <td>${report.option_name}</td>
-            <td>${report.course_name || 'N/A'} ${report.course_code ? `(${report.course_code})` : ''}</td>
-            <td>${report.attendance_date}</td>
-            <td>${statusBadge}</td>
-            <td class="text-center"><i class="fas fa-fingerprint text-warning"></i></td>
+            <td class="text-center fw-bold text-primary">${index + 1}</td>
+            <td>
+              <div class="d-flex align-items-center">
+                <div class="avatar-circle me-2">
+                  <i class="fas fa-user text-primary"></i>
+                </div>
+                <div>
+                  <strong>${report.first_name} ${report.last_name}</strong>
+                  <br><small class="text-muted">Student ID: ${report.student_id || 'N/A'}</small>
+                </div>
+              </div>
+            </td>
+            <td>
+              <strong>${report.department_name}</strong>
+              <br><small class="text-muted">${report.option_name}</small>
+            </td>
+            <td>
+              <strong>${report.course_name || 'N/A'}</strong>
+              ${report.course_code ? `<br><small class="text-muted">Code: ${report.course_code}</small>` : ''}
+            </td>
+            <td>
+              <strong>${report.attendance_date}</strong>
+              <br><small class="text-muted">${recordedTime}</small>
+            </td>
+            <td class="text-center">${statusBadge}</td>
+            <td class="text-center">
+              <small class="text-muted">${recordedTime}</small>
+            </td>
+            <td class="text-center">${methodIcon}</td>
           </tr>
         `;
       });

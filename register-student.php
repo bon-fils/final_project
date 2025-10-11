@@ -15,9 +15,9 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 $csrf_token = $_SESSION['csrf_token'];
 
+
 // Initialize data arrays with error handling
 $departments = [];
-$provinces = [];
 
 // Get departments for dropdown
 try {
@@ -26,26 +26,6 @@ try {
 } catch (PDOException $e) {
     error_log("Error fetching departments: " . $e->getMessage());
     $departments = [];
-}
-
-// Get provinces for location dropdown
-try {
-    $stmt = $pdo->query("SELECT id, name FROM provinces ORDER BY name");
-    $provinces = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("Error fetching provinces: " . $e->getMessage());
-    $provinces = [];
-}
-
-// Fallback to hardcoded provinces if DB query failed or returned empty
-if (empty($provinces)) {
-    $provinces = [
-        ['id' => 1, 'name' => 'Kigali City'],
-        ['id' => 2, 'name' => 'Southern Province'],
-        ['id' => 3, 'name' => 'Western Province'],
-        ['id' => 4, 'name' => 'Eastern Province'],
-        ['id' => 5, 'name' => 'Northern Province']
-    ];
 }
 
 // Validate required data
@@ -284,101 +264,62 @@ if (empty($departments)) {
                 </div>
             </div>
 
-            <!-- Location Information -->
-            <div class="row mt-4">
-                <div class="col-12">
-                    <h6 class="section-title">
-                        <i class="fas fa-map-marker-alt me-2"></i>Location Information
-                    </h6>
-                    <p class="text-muted small mb-3">Please select your complete location in Rwanda (Province → District → Sector → Cell)</p>
-                </div>
-                <div class="col-md-3">
-                    <div class="mb-3">
-                        <label for="province" class="form-label d-flex align-items-center">
-                            <i class="fas fa-city me-2 text-success"></i>
-                            <strong>Province</strong>
-                        </label>
-                        <select class="form-control" id="province" name="province" aria-label="Province">
-                            <option value="">Select Province</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="mb-3">
-                        <label for="district" class="form-label d-flex align-items-center">
-                            <i class="fas fa-building me-2 text-primary"></i>
-                            <strong>District</strong>
-                        </label>
-                        <select class="form-control" id="district" name="district" disabled aria-label="District">
-                            <option value="">Select Province First</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="mb-3">
-                        <label for="sector" class="form-label d-flex align-items-center">
-                            <i class="fas fa-home me-2 text-info"></i>
-                            <strong>Sector</strong>
-                        </label>
-                        <select class="form-control" id="sector" name="sector" disabled aria-label="Sector">
-                            <option value="">Select District First</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="mb-3">
-                        <label for="cell" class="form-label d-flex align-items-center justify-content-between">
-                            <span class="d-flex align-items-center">
-                                <i class="fas fa-map-pin me-2 text-warning fs-5"></i>
-                                <strong>Cell</strong>
-                            </span>
-                            <span class="badge bg-warning text-dark rounded-pill">
-                                <i class="fas fa-home me-1"></i>Final
-                            </span>
-                        </label>
-                        <select class="form-control" id="cell" name="cell" disabled aria-label="Cell">
-                            <option value="">Select Sector First</option>
-                        </select>
-                        <div class="mt-2" id="cellSearchContainer" style="display: none;">
-                            <input type="text" class="form-control form-control-sm" id="cellSearch" placeholder="🔍 Search cells..." aria-label="Search cells">
-                        </div>
-                        <div class="mt-2 alert alert-info py-2 px-3 border-0 d-none" id="cellInfo" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-map-marker-alt text-info me-2 fs-5"></i>
-                                <div>
-                                    <strong class="text-info">Location Selected</strong><br>
-                                    <small id="cellInfoText" class="text-info-emphasis fw-medium"></small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <!-- Media Section -->
             <div class="row mt-4">
                 <div class="col-md-6">
                     <div class="mb-3">
-                        <label for="photoInput" class="form-label">Photo</label>
-                        <input type="file" class="form-control d-none" id="photoInput" name="photo" accept="image/*">
-                        <button type="button" class="btn btn-outline-primary" id="selectPhotoBtn">
-                            <i class="fas fa-camera me-2"></i>Choose Photo
-                        </button>
-                        <button type="button" class="btn btn-outline-danger d-none" id="removePhoto">
-                            <i class="fas fa-times me-2"></i>Remove
-                        </button>
-                        <img id="photoPreview" class="img-thumbnail mt-2 d-none" style="max-width: 200px;">
+                        <label class="form-label">
+                            <i class="fas fa-camera me-2 text-primary"></i>
+                            Face Recognition Setup
+                            <small class="text-muted">(2-5 images required for accurate face recognition)</small>
+                        </label>
+
+
+                        <!-- File Upload Fallback -->
+                        <div class="file-upload-section">
+                            <div class="text-center mb-2">
+                                <small class="text-muted">Or upload existing images:</small>
+                            </div>
+                            <input type="file" class="form-control d-none" id="faceImagesInput" name="face_images[]" accept="image/jpeg,image/png,image/webp" multiple>
+                            <div class="face-images-upload-area" id="faceImagesUploadArea">
+                                <div class="face-images-placeholder">
+                                    <i class="fas fa-images fa-2x text-muted mb-2"></i>
+                                    <p class="mb-2">Click to select face images</p>
+                                    <small class="text-muted">JPEG, PNG, WebP (Max 5MB each, 2-5 images)</small>
+                                </div>
+                                <div id="faceImagesPreview" class="face-images-preview d-none">
+                                    <!-- Image previews will be inserted here -->
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <button type="button" class="btn btn-sm btn-outline-primary me-2" id="selectFaceImagesBtn">
+                                    <i class="fas fa-folder-open me-1"></i>Choose Files
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="clearFaceImages">
+                                    <i class="fas fa-trash me-1"></i>Clear All
+                                </button>
+                            </div>
+                            <div class="mt-2">
+                                <small id="faceImagesCount" class="text-muted">0 images selected</small>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="mb-3">
-                        <label class="form-label">Fingerprint Capture</label>
+                        <label class="form-label">
+                            <i class="fas fa-fingerprint me-2 text-info"></i>
+                            Fingerprint Registration
+                            <small class="text-muted">(Optional - enhances security)</small>
+                        </label>
                         <div class="fingerprint-container">
                             <div class="fingerprint-display">
                                 <canvas id="fingerprintCanvas" width="200" height="200" class="d-none"></canvas>
                                 <div id="fingerprintPlaceholder" class="fingerprint-placeholder">
                                     <i class="fas fa-fingerprint fa-3x text-muted mb-2"></i>
                                     <p class="text-muted">No fingerprint captured</p>
+                                    <small class="text-muted">Click "Capture Fingerprint" to enroll</small>
                                 </div>
                             </div>
                             <div class="fingerprint-controls mt-3">
@@ -388,12 +329,20 @@ if (empty($departments)) {
                                 <button type="button" class="btn btn-outline-danger d-none" id="clearFingerprintBtn">
                                     <i class="fas fa-times me-2"></i>Clear
                                 </button>
-                                <button type="button" class="btn btn-outline-warning d-none" id="enrollFingerprintBtn">
+                                <button type="button" class="btn btn-outline-success d-none" id="enrollFingerprintBtn">
                                     <i class="fas fa-save me-2"></i>Enroll Fingerprint
                                 </button>
                             </div>
                             <div class="fingerprint-status mt-2">
                                 <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint</small>
+                            </div>
+                            <div class="mt-2">
+                                <div class="alert alert-info py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-info-circle text-info me-2 fs-6"></i>
+                                        <small class="text-info-emphasis fw-medium">Fingerprint enhances attendance security but is optional</small>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -542,6 +491,88 @@ if (empty($departments)) {
             border: 2px dashed #dee2e6;
         }
 
+        /* Face Images Upload Styles */
+        .face-images-upload-area {
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 40px 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            min-height: 200px;
+        }
+
+        .face-images-upload-area:hover {
+            border-color: #667eea;
+            background-color: rgba(102, 126, 234, 0.05);
+        }
+
+        .face-images-upload-area.dragover {
+            border-color: #28a745;
+            background-color: rgba(40, 167, 69, 0.1);
+        }
+
+        .face-images-preview {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .face-image-item {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+
+        .face-image-item:hover {
+            border-color: #667eea;
+            transform: scale(1.05);
+        }
+
+        .face-image-item img {
+            width: 100%;
+            height: 100px;
+            object-fit: cover;
+        }
+
+        .face-image-item .remove-image {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(220, 53, 69, 0.8);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .face-image-item .remove-image:hover {
+            background: rgba(220, 53, 69, 1);
+            transform: scale(1.1);
+        }
+
+        .face-image-item .image-number {
+            position: absolute;
+            bottom: 5px;
+            left: 5px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
         .spinner-border-sm {
             width: 1rem;
             height: 1rem;
@@ -686,105 +717,6 @@ if (empty($departments)) {
             flex-wrap: wrap;
         }
 
-        /* Location loading states */
-        .location-loading {
-            position: relative;
-            opacity: 0.7;
-        }
-
-        .location-loading::after {
-            content: '';
-            position: absolute;
-            right: 30px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 16px;
-            height: 16px;
-            border: 2px solid #0d6efd;
-            border-top: 2px solid transparent;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: translateY(-50%) rotate(0deg); }
-            50% { transform: translateY(-50%) rotate(45deg); }
-            100% { transform: translateY(-50%) rotate(360deg); }
-        }
-
-        /* Enhanced location section styling */
-        .section-title i.fa-map-marker-alt {
-            color: #198754;
-        }
-
-        /* Location cascade animation */
-        .location-field {
-            transition: all 0.3s ease;
-        }
-
-        .location-field.enabled {
-            animation: fadeInUp 0.3s ease-out;
-        }
-
-        /* Better visual hierarchy for location fields */
-        #province, #district, #sector {
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        #province:focus {
-            border-color: #198754;
-            box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
-        }
-
-        #district:focus {
-            border-color: #0d6efd;
-            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
-        }
-
-        #sector:focus {
-            border-color: #6f42c1;
-            box-shadow: 0 0 0 0.2rem rgba(111, 66, 193, 0.25);
-        }
-
-        #cell:focus {
-            border-color: #fd7e14;
-            box-shadow: 0 0 0 0.2rem rgba(253, 126, 20, 0.25);
-        }
-
-        /* Cell information display */
-        #cellInfo {
-            animation: fadeInDown 0.3s ease-out;
-        }
-
-        @keyframes fadeInDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        /* Enhanced cell selection feedback */
-        #cell.border-success {
-            animation: successPulse 2s ease-in-out;
-        }
-
-        @keyframes successPulse {
-            0% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7); }
-            50% { box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.3); }
-            100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0); }
-        }
-
-        /* Cell badge styling */
-        .badge.bg-warning.text-dark {
-            background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
-            border: none;
-            font-size: 0.7rem;
-            padding: 0.25rem 0.5rem;
-        }
 
         /* Enhanced mobile fingerprint UI */
         @media (max-width: 768px) {
@@ -899,12 +831,6 @@ class StudentRegistration {
         this.fingerprintData = null;
         this.fingerprintQuality = 0;
         this.isCapturing = false;
-        // Location caching for performance
-        this.locationCache = {
-            districts: new Map(),
-            sectors: new Map(),
-            cells: new Map()
-        };
         this.originalCellOptions = [];
         this.init();
     }
@@ -927,9 +853,6 @@ class StudentRegistration {
         // Set initial form state
         this.updateProgress();
 
-        // Initialize location fields
-        this.initializeLocationFields();
-
         // Pre-validate form on load
         setTimeout(() => {
             this.validateForm();
@@ -939,398 +862,7 @@ class StudentRegistration {
         this.updateFingerprintUI('ready');
     }
 
-    initializeLocationFields() {
-        // Load provinces on page load
-        this.loadProvinces();
 
-        // Add enabled class to province field (always available)
-        $('#province').addClass('enabled');
-
-        // Reset location fields to initial state
-        this.resetLocationFields('province');
-    }
-
-    async loadProvinces() {
-        try {
-            const response = await this.retryableAjax({
-                url: 'api/location-api.php',
-                method: 'POST',
-                data: {
-                    action: 'get_provinces',
-                    csrf_token: this.csrfToken
-                }
-            });
-
-            if (response.success && response.provinces) {
-                const options = response.provinces.map(province =>
-                    `<option value="${province.id}">${this.escapeHtml(province.name)}</option>`
-                ).join('');
-
-                $('#province').append(options);
-                this.showAlert(`📍 ${response.provinces.length} provinces loaded successfully!`, 'success');
-            } else {
-                throw new Error(response.message || 'Failed to load provinces');
-            }
-        } catch (error) {
-            console.error('Province loading error:', error);
-            $('#province').html('<option value="">❌ Failed to load provinces</option>');
-            this.showAlert('❌ Failed to load provinces. Please refresh the page.', 'error');
-        }
-    }
-
-    async handleProvinceChange() {
-        const provinceId = $('#province').val();
-        const $district = $('#district');
-
-        // Reset dependent fields
-        this.resetLocationFields('district');
-
-        if (!provinceId) {
-            return;
-        }
-
-        // Check cache first
-        if (this.locationCache.districts.has(provinceId)) {
-            this.populateDistricts(this.locationCache.districts.get(provinceId));
-            return;
-        }
-
-        // Show loading state
-        $district.prop('disabled', true).html('<option value="">Loading districts...</option>');
-        this.showLocationLoading($district, true);
-
-        try {
-            const response = await this.retryableAjax({
-                url: 'api/location-api.php',
-                method: 'POST',
-                data: {
-                    action: 'get_districts',
-                    province_id: parseInt(provinceId, 10),
-                    csrf_token: this.csrfToken
-                }
-            });
-
-            if (response.success && response.districts) {
-                // Cache the results
-                this.locationCache.districts.set(provinceId, response.districts);
-                this.populateDistricts(response.districts);
-
-                this.showAlert(`🏛️ ${response.districts.length} district${response.districts.length !== 1 ? 's' : ''} loaded for ${$('#province option:selected').text()}`, 'success');
-            } else {
-                throw new Error(response.message || 'No districts found');
-            }
-        } catch (error) {
-            console.error('Province change error:', error);
-            $district.html('<option value="">❌ Failed to load districts</option>');
-            this.showAlert('❌ Failed to load districts. Please try selecting the province again.', 'error');
-        } finally {
-            this.showLocationLoading($district, false);
-            $district.prop('disabled', false);
-        }
-    }
-
-    populateDistricts(districts) {
-        const $district = $('#district');
-        const options = districts.map(district =>
-            `<option value="${district.id}">${this.escapeHtml(district.name)}</option>`
-        ).join('');
-
-        $district.html('<option value="">🏛️ Select District</option>' + options)
-                .addClass('enabled');
-    }
-
-    resetLocationFields(fromLevel) {
-        const levels = ['district', 'sector', 'cell'];
-
-        levels.forEach(level => {
-            if (levels.indexOf(fromLevel) <= levels.indexOf(level)) {
-                const $field = $(`#${level}`);
-                $field.prop('disabled', true).val('').removeClass('enabled');
-
-                if (level === 'district') {
-                    $field.html('<option value="">🏛️ Select Province First</option>');
-                } else if (level === 'sector') {
-                    $field.html('<option value="">🏘️ Select District First</option>');
-                } else if (level === 'cell') {
-                    $field.html('<option value="">📍 Select Sector First</option>');
-                    // Hide cell information and search when resetting
-                    $('#cellInfo').hide();
-                    $('#cellSearchContainer').hide();
-                    $('#cellSearch').val('');
-                    this.originalCellOptions = [];
-                }
-
-                // Clear cache for dependent levels
-                if (level === 'district') {
-                    this.locationCache.sectors.clear();
-                    this.locationCache.cells.clear();
-                } else if (level === 'sector') {
-                    this.locationCache.cells.clear();
-                }
-            }
-        });
-    }
-
-    showLocationLoading($element, show) {
-        const loadingClass = 'location-loading';
-        if (show) {
-            $element.addClass(loadingClass);
-        } else {
-            $element.removeClass(loadingClass);
-        }
-    }
-
-    async handleDistrictChange() {
-        const districtId = $('#district').val();
-        const $sector = $('#sector');
-
-        // Reset dependent fields
-        this.resetLocationFields('sector');
-
-        if (!districtId) {
-            return;
-        }
-
-        // Check cache first
-        if (this.locationCache.sectors.has(districtId)) {
-            this.populateSectors(this.locationCache.sectors.get(districtId));
-            return;
-        }
-
-        // Show loading state
-        $sector.prop('disabled', true).html('<option value="">Loading sectors...</option>');
-        this.showLocationLoading($sector, true);
-
-        try {
-            const response = await this.retryableAjax({
-                url: 'api/location-api.php',
-                method: 'POST',
-                data: {
-                    action: 'get_sectors',
-                    district_id: districtId,
-                    csrf_token: this.csrfToken
-                }
-            });
-
-            if (response.success && response.sectors) {
-                // Cache the results
-                this.locationCache.sectors.set(districtId, response.sectors);
-                this.populateSectors(response.sectors);
-
-                this.showAlert(`🏘️ ${response.sectors.length} sector${response.sectors.length !== 1 ? 's' : ''} loaded for ${$('#district option:selected').text()}`, 'success');
-            } else {
-                throw new Error(response.message || 'No sectors found');
-            }
-        } catch (error) {
-            console.error('District change error:', error);
-            $sector.html('<option value="">❌ Failed to load sectors</option>');
-            this.showAlert('❌ Failed to load sectors. Please try selecting the district again.', 'error');
-        } finally {
-            this.showLocationLoading($sector, false);
-            $sector.prop('disabled', false);
-        }
-    }
-
-    populateSectors(sectors) {
-        const $sector = $('#sector');
-        const options = sectors.map(sector =>
-            `<option value="${sector.id}">${this.escapeHtml(sector.name)}</option>`
-        ).join('');
-
-        $sector.html('<option value="">🏘️ Select Sector</option>' + options)
-               .addClass('enabled');
-    }
-
-    async handleSectorChange() {
-        const sectorId = $('#sector').val();
-        const $cell = $('#cell');
-
-        // Reset dependent fields
-        this.resetLocationFields('cell');
-
-        if (!sectorId) {
-            return;
-        }
-
-        // Check cache first
-        if (this.locationCache.cells.has(sectorId)) {
-            this.populateCells(this.locationCache.cells.get(sectorId));
-            return;
-        }
-
-        // Show loading state
-        $cell.prop('disabled', true).html('<option value="">Loading cells...</option>');
-        this.showLocationLoading($cell, true);
-
-        try {
-            const response = await this.retryableAjax({
-                url: 'api/location-api.php',
-                method: 'POST',
-                data: {
-                    action: 'get_cells',
-                    sector_id: sectorId,
-                    csrf_token: this.csrfToken
-                }
-            });
-
-            if (response.success && response.cells) {
-                // Cache the results
-                this.locationCache.cells.set(sectorId, response.cells);
-                this.populateCells(response.cells);
-
-                this.showAlert(`🏘️ ${response.cells.length} cell${response.cells.length !== 1 ? 's' : ''} loaded for ${$('#sector option:selected').text()}`, 'success');
-            } else {
-                throw new Error(response.message || 'No cells found');
-            }
-        } catch (error) {
-            console.error('Sector change error:', error);
-            $cell.html('<option value="">❌ Failed to load cells</option>');
-            this.showAlert('❌ Failed to load cells. Please try selecting the sector again.', 'error');
-        } finally {
-            this.showLocationLoading($cell, false);
-            $cell.prop('disabled', false);
-        }
-    }
-
-    async handleCellChange() {
-        const cellId = $('#cell').val();
-
-        if (cellId) {
-            // Update progress when location is complete
-            this.updateProgress();
-
-            // Get complete location information
-            const locationInfo = this.getLocationInfo();
-            if (locationInfo) {
-                // Show detailed success message
-                const fullAddress = `${locationInfo.cell_name}, ${locationInfo.sector_name}, ${locationInfo.district_name}, ${locationInfo.province_name}`;
-                this.showAlert(`✅ Complete location set: ${fullAddress}`, 'success');
-
-                // Update cell statistics if available
-                this.updateCellStatistics(cellId);
-            }
-        }
-    }
-
-    updateCellStatistics(cellId) {
-        const cellSelect = $('#cell');
-        const selectedOption = cellSelect.find('option:selected');
-        const cellInfo = $('#cellInfo');
-        const cellInfoText = $('#cellInfoText');
-
-        if (selectedOption.length) {
-            const cellName = selectedOption.text();
-            const sectorName = $('#sector option:selected').text();
-            const districtName = $('#district option:selected').text();
-            const provinceName = $('#province option:selected').text();
-
-            // Show cell information
-            const fullLocation = `${cellName} Cell, ${sectorName} Sector, ${districtName} District, ${provinceName}`;
-            cellInfoText.text(`📍 Selected: ${fullLocation}`);
-            cellInfo.show();
-
-            // Add visual feedback
-            cellSelect.addClass('border-success');
-            setTimeout(() => {
-                cellSelect.removeClass('border-success');
-            }, 2000);
-
-            console.log(`Cell "${cellName}" selected with ID: ${cellId}`);
-            console.log(`Complete location: ${fullLocation}`);
-        } else {
-            cellInfo.hide();
-        }
-    }
-
-    populateCells(cells) {
-        const $cell = $('#cell');
-
-        if (cells.length === 0) {
-            $cell.html('<option value="">No cells available for this sector</option>')
-                  .addClass('enabled');
-            $('#cellSearchContainer').hide();
-            this.originalCellOptions = [];
-            return;
-        }
-
-        const options = cells.map(cell =>
-            `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
-        ).join('');
-
-        $cell.html('<option value="">📍 Select Cell</option>' + options)
-              .addClass('enabled');
-
-        // Store original options for search functionality
-        this.originalCellOptions = cells;
-
-        // Show search container if there are many cells
-        if (cells.length > 5) {
-            $('#cellSearchContainer').show();
-            $('#cellSearch').val(''); // Clear search
-        } else {
-            $('#cellSearchContainer').hide();
-        }
-    }
-
-    handleCellSearch() {
-        const searchTerm = $('#cellSearch').val().toLowerCase();
-        const $cell = $('#cell');
-        const currentValue = $cell.val(); // Preserve current selection
-
-        if (!searchTerm) {
-            // Show all options
-            const options = this.originalCellOptions.map(cell =>
-                `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
-            ).join('');
-            $cell.html('<option value="">📍 Select Cell</option>' + options);
-            // Restore previous selection if it exists
-            if (currentValue) {
-                $cell.val(currentValue);
-            }
-            return;
-        }
-
-        // Filter options based on search term
-        const filteredCells = this.originalCellOptions.filter(cell =>
-            cell.name.toLowerCase().includes(searchTerm)
-        );
-
-        if (filteredCells.length === 0) {
-            $cell.html('<option value="">🔍 No cells found</option>');
-        } else {
-            const options = filteredCells.map(cell =>
-                `<option value="${cell.id}">${this.escapeHtml(cell.name)}</option>`
-            ).join('');
-            $cell.html('<option value="">📍 Select Cell</option>' + options);
-            // Restore previous selection if it's in the filtered results
-            if (currentValue && filteredCells.some(cell => cell.id == currentValue)) {
-                $cell.val(currentValue);
-            }
-        }
-    }
-
-    // Get complete location info
-    getLocationInfo() {
-        const provinceId = $('#province').val();
-        const districtId = $('#district').val();
-        const sectorId = $('#sector').val();
-        const cellId = $('#cell').val();
-
-        if (!provinceId || !districtId || !sectorId || !cellId) {
-            return null;
-        }
-
-        return {
-            province_id: provinceId,
-            province_name: $('#province option:selected').text(),
-            district_id: districtId,
-            district_name: $('#district option:selected').text(),
-            sector_id: sectorId,
-            sector_name: $('#sector option:selected').text(),
-            cell_id: cellId,
-            cell_name: $('#cell option:selected').text()
-        };
-    }
 
     setupGlobalErrorHandler() {
         // Handle unhandled promise rejections
@@ -1353,13 +885,13 @@ class StudentRegistration {
     async checkServerConnectivity() {
         try {
             // Quick connectivity check to a lightweight endpoint
-            const response = await fetch('api/location-api.php', {
+            const response = await fetch('api/department-option-api.php', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'X-Requested-With': 'XMLHttpRequest'
                 },
-                body: `action=get_provinces&csrf_token=${this.csrfToken}`,
+                body: `action=get_options&department_id=1&csrf_token=${this.csrfToken}`,
                 signal: AbortSignal.timeout(5000) // 5 second timeout
             });
 
@@ -1379,17 +911,33 @@ class StudentRegistration {
         // Department change with error handling
         $('#department').on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
 
-        // Location cascading
-        $('#province').on('change', this.debounce(this.handleProvinceChange.bind(this), 300));
-        $('#district').on('change', this.debounce(this.handleDistrictChange.bind(this), 300));
-        $('#sector').on('change', this.debounce(this.handleSectorChange.bind(this), 300));
-        $('#cell').on('change', this.debounce(this.handleCellChange.bind(this), 300));
-        $('#cellSearch').on('input', this.debounce(this.handleCellSearch.bind(this), 300));
 
-        // Photo handling
-        $('#selectPhotoBtn').on('click', () => $('#photoInput').click());
-        $('#photoInput').on('change', this.handlePhotoSelect.bind(this));
-        $('#removePhoto').on('click', this.removePhoto.bind(this));
+        // Face images handling
+        $('#selectFaceImagesBtn').on('click', () => $('#faceImagesInput').click());
+        $('#faceImagesInput').on('change', this.handleFaceImagesSelect.bind(this));
+        $('#clearFaceImages').on('click', this.clearFaceImages.bind(this));
+        $(document).on('click', '.remove-image', this.removeFaceImage.bind(this));
+
+        // Drag and drop for face images
+        $('#faceImagesUploadArea').on('dragover dragenter', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            $(e.currentTarget).addClass('dragover');
+        }).on('dragleave dragend drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            $(e.currentTarget).removeClass('dragover');
+        }).on('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const files = e.originalEvent.dataTransfer.files;
+            if (files.length > 0) {
+                // Create a synthetic event for the file input
+                const syntheticEvent = { target: { files: files } };
+                this.handleFaceImagesSelect(syntheticEvent);
+            }
+        }).on('click', () => $('#faceImagesInput').click());
+
 
         // Form submission
         $('#registrationForm').on('submit', this.handleSubmit.bind(this));
@@ -1958,33 +1506,121 @@ class StudentRegistration {
         qualityElement.style.color = 'white';
     }
 
-    handlePhotoSelect(e) {
-        const file = e.target.files[0];
-        if (file && this.validateImage(file)) {
+    /**
+     * Handle face images selection
+     */
+    handleFaceImagesSelect(e) {
+        const files = Array.from(e.target.files);
+        const validFiles = [];
+        const maxFiles = 5;
+        const minFiles = 2;
+
+        // Validate files
+        for (const file of files) {
+            if (this.validateImage(file)) {
+                validFiles.push(file);
+            }
+        }
+
+        // Check file count limits
+        if (validFiles.length < minFiles) {
+            this.showAlert(`Please select at least ${minFiles} images for face recognition.`, 'error');
+            e.target.value = '';
+            return;
+        }
+
+        if (validFiles.length > maxFiles) {
+            this.showAlert(`Maximum ${maxFiles} images allowed. Please select fewer images.`, 'error');
+            e.target.value = '';
+            return;
+        }
+
+        // Clear existing previews
+        $('#faceImagesPreview').empty().removeClass('d-none');
+        $('#faceImagesUploadArea .face-images-placeholder').addClass('d-none');
+        $('#clearFaceImages').removeClass('d-none');
+
+        // Create previews for each valid file
+        validFiles.forEach((file, index) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                $('#photoPreview').attr('src', e.target.result).removeClass('d-none');
-                $('#removePhoto').removeClass('d-none');
+                const imageItem = document.createElement('div');
+                imageItem.className = 'face-image-item';
+                imageItem.innerHTML = `
+                    <img src="${e.target.result}" alt="Face image ${index + 1}">
+                    <button type="button" class="remove-image" data-index="${index}" title="Remove image">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <div class="image-number">${index + 1}</div>
+                `;
+                $('#faceImagesPreview').append(imageItem);
             };
             reader.readAsDataURL(file);
+        });
+
+        // Update count display
+        this.updateFaceImagesCount(validFiles.length);
+        this.showAlert(`✅ ${validFiles.length} face images selected successfully!`, 'success');
+    }
+
+    /**
+     * Remove a face image
+     */
+    removeFaceImage(e) {
+        e.preventDefault();
+        const index = $(e.currentTarget).data('index');
+        const $imageItem = $(e.currentTarget).closest('.face-image-item');
+
+        // Remove the image item
+        $imageItem.remove();
+
+        // Update remaining image numbers
+        $('#faceImagesPreview .face-image-item').each(function(i) {
+            $(this).find('.image-number').text(i + 1);
+            $(this).find('.remove-image').attr('data-index', i);
+        });
+
+        // Check if any images remain
+        const remainingImages = $('#faceImagesPreview .face-image-item').length;
+        this.updateFaceImagesCount(remainingImages);
+
+        if (remainingImages === 0) {
+            this.clearFaceImages();
         } else {
-            // Clear the input if file is invalid
-            e.target.value = '';
+            this.showAlert(`Image removed. ${remainingImages} image${remainingImages !== 1 ? 's' : ''} remaining.`, 'info');
         }
     }
 
-    removePhoto() {
-        $('#photoInput').val('');
-        $('#photoPreview').addClass('d-none').attr('src', '');
-        $('#removePhoto').addClass('d-none');
+    /**
+     * Clear all face images
+     */
+    clearFaceImages() {
+        $('#faceImagesInput').val('');
+        $('#faceImagesPreview').empty().addClass('d-none');
+        $('#faceImagesUploadArea .face-images-placeholder').removeClass('d-none');
+        $('#clearFaceImages').addClass('d-none');
+        this.updateFaceImagesCount(0);
+    }
+
+    /**
+     * Update face images count display
+     */
+    updateFaceImagesCount(count) {
+        const $countElement = $('#faceImagesCount');
+        if (count === 0) {
+            $countElement.text('0 images selected');
+            $countElement.removeClass('text-success text-warning').addClass('text-muted');
+        } else if (count >= 2 && count <= 5) {
+            $countElement.text(`${count} images selected`);
+            $countElement.removeClass('text-muted text-warning').addClass('text-success');
+        } else {
+            $countElement.text(`${count} images selected`);
+            $countElement.removeClass('text-muted text-success').addClass('text-warning');
+        }
     }
 
 
-    // Validate location selection (optional fields)
-    validateLocation() {
-        // Location fields are optional, so always return true
-        return true;
-    }
+
 
 
     async handleSubmit(e) {
@@ -2141,6 +1777,16 @@ class StudentRegistration {
        $('.is-invalid').removeClass('is-invalid');
        $('.invalid-feedback').remove();
 
+       // Check face images requirement
+       const faceImagesCount = $('#faceImagesPreview .face-image-item').length;
+       if (faceImagesCount < 2) {
+           this.showAlert('Please select at least 2 face images for face recognition.', 'error');
+           $('#faceImagesUploadArea').addClass('border-danger');
+           isValid = false;
+       } else {
+           $('#faceImagesUploadArea').removeClass('border-danger');
+       }
+
        // Required field validation with specific messages
        const requiredFields = [
            { id: 'firstName', name: 'First Name' },
@@ -2231,11 +1877,6 @@ class StudentRegistration {
            }
        }
 
-       // Location validation
-       if (!this.validateLocation()) {
-           isValid = false;
-           errors.push('Location information is incomplete');
-       }
 
        // Registration number format validation
        const regNo = $('#reg_no').val();

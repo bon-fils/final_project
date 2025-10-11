@@ -1148,6 +1148,7 @@ if (isset($_GET['export']) && !empty($report_data)) {
     <title>Attendance Reports | <?php echo $user_role === 'admin' ? 'Admin' : 'Lecturer'; ?> | RP Attendance System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
+    <link href="css/attendance-reports.css" rel="stylesheet" />
     <style>
         :root {
             /* Primary Brand Colors - RP Blue with Modern Palette */

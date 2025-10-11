@@ -1,0 +1,138 @@
+{
+  "biometric_templates": {
+    "face_recognition": {
+      "student_16": {
+        "student_id": 16,
+        "reg_no": "22RP08976",
+        "templates": [
+          {
+            "template_id": "face_68e450744db00",
+            "image_path": "uploads/students/face_68e450744db00.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "template_id": "face_68e450744de4f",
+            "image_path": "uploads/students/face_68e450744de4f.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "slight_left",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "template_id": "face_68e4507452358",
+            "image_path": "uploads/students/face_68e4507452358.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "slight_right",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "template_id": "face_68e45074528df",
+            "image_path": "uploads/students/face_68e45074528df.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "smile",
+            "created_at": "2025-10-06T23:27:48Z"
+          }
+        ],
+        "primary_template": "face_68e450744db00",
+        "template_count": 4,
+        "average_quality": 0.85
+      },
+      "student_17": {
+        "student_id": 17,
+        "reg_no": "22RPP098474",
+        "templates": [
+          {
+            "template_id": "face_68e545e682e95",
+            "image_path": "uploads/students/face_68e545e682e95.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "template_id": "face_68e545e683295",
+            "image_path": "uploads/students/face_68e545e683295.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "slight_left",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "template_id": "face_68e545e6835f4",
+            "image_path": "uploads/students/face_68e545e6835f4.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "slight_right",
+            "lighting_condition": "good",
+            "facial_expression": "neutral",
+            "created_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "template_id": "face_68e545e6837da",
+            "image_path": "uploads/students/face_68e545e6837da.jpg",
+            "quality_score": 0.85,
+            "capture_angle": "front",
+            "lighting_condition": "good",
+            "facial_expression": "smile",
+            "created_at": "2025-10-07T16:55:02Z"
+          }
+        ],
+        "primary_template": "face_68e545e682e95",
+        "template_count": 4,
+        "average_quality": 0.85
+      }
+    },
+    "fingerprint": {
+      "student_15": {
+        "student_id": 15,
+        "reg_no": "22RP06557",
+        "templates": [
+          {
+            "template_id": "fp_68e3abb866943",
+            "image_path": "uploads/fingerprints/fingerprint_22RP06557_68e3abb866943.png",
+            "finger_type": "right_index",
+            "quality_score": 84,
+            "capture_device": "optical_scanner",
+            "minutiae_points": 45,
+            "created_at": "2025-10-07T00:00:00Z"
+          }
+        ],
+        "primary_template": "fp_68e3abb866943",
+        "template_count": 1,
+        "average_quality": 84
+      }
+    }
+  },
+  "system_stats": {
+    "total_face_templates": 8,
+    "total_fingerprint_templates": 1,
+    "students_with_face_data": 2,
+    "students_with_fingerprint_data": 1,
+    "average_face_quality": 0.85,
+    "average_fingerprint_quality": 84,
+    "last_updated": "2025-10-07T21:44:03Z"
+  },
+  "configuration": {
+    "face_recognition": {
+      "min_quality_threshold": 0.7,
+      "max_templates_per_student": 5,
+      "required_angles": ["front", "left", "right"],
+      "tolerance": 0.4
+    },
+    "fingerprint": {
+      "min_quality_threshold": 70,
+      "min_minutiae_points": 35,
+      "supported_devices": ["optical_scanner", "capacitive_scanner"]
+    }
+  }
+}

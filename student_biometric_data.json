@@ -1,0 +1,131 @@
+{
+  "students": [
+    {
+      "id": 14,
+      "reg_no": "25RP07656",
+      "name": "Student 14",
+      "biometric_data": {
+        "face_images": [],
+        "fingerprint": null,
+        "fingerprint_quality": 0
+      }
+    },
+    {
+      "id": 15,
+      "reg_no": "22RP06557",
+      "name": "Student 15",
+      "biometric_data": {
+        "face_images": [],
+        "fingerprint": {
+          "path": "uploads/fingerprints/fingerprint_22RP06557_68e3abb866943.png",
+          "quality_score": 84,
+          "capture_date": "2025-10-07T00:00:00Z"
+        },
+        "fingerprint_quality": 84
+      }
+    },
+    {
+      "id": 16,
+      "reg_no": "22RP08976",
+      "name": "Student 16",
+      "biometric_data": {
+        "face_images": [
+          {
+            "id": 1,
+            "path": "uploads/students/face_68e450744db00.jpg",
+            "type": "face_recognition",
+            "order": 1,
+            "quality_score": 0.85,
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 2,
+            "path": "uploads/students/face_68e450744de4f.jpg",
+            "type": "face_recognition",
+            "order": 2,
+            "quality_score": 0.85,
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 3,
+            "path": "uploads/students/face_68e4507452358.jpg",
+            "type": "face_recognition",
+            "order": 3,
+            "quality_score": 0.85,
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          },
+          {
+            "id": 4,
+            "path": "uploads/students/face_68e45074528df.jpg",
+            "type": "face_recognition",
+            "order": 4,
+            "quality_score": 0.85,
+            "created_at": "2025-10-06T23:27:48Z",
+            "updated_at": "2025-10-06T23:27:48Z"
+          }
+        ],
+        "fingerprint": null,
+        "fingerprint_quality": 0
+      }
+    },
+    {
+      "id": 17,
+      "reg_no": "22RPP098474",
+      "name": "Student 17",
+      "biometric_data": {
+        "face_images": [
+          {
+            "id": 5,
+            "path": "uploads/students/face_68e545e682e95.jpg",
+            "type": "face_recognition",
+            "order": 1,
+            "quality_score": 0.85,
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 6,
+            "path": "uploads/students/face_68e545e683295.jpg",
+            "type": "face_recognition",
+            "order": 2,
+            "quality_score": 0.85,
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 7,
+            "path": "uploads/students/face_68e545e6835f4.jpg",
+            "type": "face_recognition",
+            "order": 3,
+            "quality_score": 0.85,
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          },
+          {
+            "id": 8,
+            "path": "uploads/students/face_68e545e6837da.jpg",
+            "type": "face_recognition",
+            "order": 4,
+            "quality_score": 0.85,
+            "created_at": "2025-10-07T16:55:02Z",
+            "updated_at": "2025-10-07T16:55:02Z"
+          }
+        ],
+        "fingerprint": null,
+        "fingerprint_quality": 0
+      }
+    }
+  ],
+  "metadata": {
+    "total_students": 4,
+    "students_with_face_images": 2,
+    "students_with_fingerprints": 1,
+    "total_face_images": 8,
+    "total_fingerprints": 1,
+    "export_date": "2025-10-07T21:43:40Z",
+    "version": "1.0"
+  }
+}
