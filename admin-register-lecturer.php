@@ -75,8 +75,6 @@ function validateLecturerData($data) {
         }
     }
 
-
-
     // Enhanced phone validation (optional but must be valid if provided)
     if (!empty($data['phone'])) {
         $phone = preg_replace('/\D/', '', $data['phone']); // Remove non-digits
@@ -166,6 +164,46 @@ function validateLecturerData($data) {
 }
 
 /**
+ * Handle photo upload with validation
+ */
+function handlePhotoUpload($file) {
+    $upload_dir = 'uploads/lecturer_photos/';
+    $max_file_size = 2 * 1024 * 1024; // 2MB
+    $allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+
+    // Create upload directory if it doesn't exist
+    if (!is_dir($upload_dir)) {
+        mkdir($upload_dir, 0755, true);
+    }
+
+    // Validate file type using finfo for more reliable MIME detection
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mime_type = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+
+    if (!in_array($mime_type, $allowed_types)) {
+        throw new Exception('Invalid file type. Only JPG, PNG, and GIF files are allowed.');
+    }
+
+    // Validate file size
+    if ($file['size'] > $max_file_size) {
+        throw new Exception('File size too large. Maximum size is 2MB.');
+    }
+
+    // Generate unique filename
+    $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $unique_filename = 'lecturer_' . time() . '_' . uniqid() . '.' . $file_extension;
+    $target_path = $upload_dir . $unique_filename;
+
+    // Move uploaded file
+    if (!move_uploaded_file($file['tmp_name'], $target_path)) {
+        throw new Exception('Failed to upload photo. Please try again.');
+    }
+
+    return $target_path;
+}
+
+/**
  * Check for duplicate records
  */
 function checkDuplicates($email, $id_number) {
@@ -212,9 +250,6 @@ function generateUniqueUsername($first_name, $last_name) {
     return $username;
 }
 
-
-
-
 /**
  * Process lecturer registration
  */
@@ -235,8 +270,15 @@ function processLecturerRegistration($post_data) {
         'selected_options' => is_array($post_data['selected_options'] ?? []) ?
             array_map('intval', $post_data['selected_options']) : [],
         'selected_courses' => is_array($post_data['selected_courses'] ?? []) ?
-            array_map('intval', $post_data['selected_courses']) : []
+            array_map('intval', $post_data['selected_courses']) : [],
+        'lecturer_photo' => $_FILES['lecturer_photo'] ?? null
     ];
+
+    // Handle photo upload if provided
+    $photo_path = null;
+    if ($data['lecturer_photo'] && $data['lecturer_photo']['error'] === UPLOAD_ERR_OK) {
+        $photo_path = handlePhotoUpload($data['lecturer_photo']);
+    }
 
     // Validate data
     $validation_errors = validateLecturerData($data);
@@ -257,10 +299,8 @@ function processLecturerRegistration($post_data) {
         $username = generateUniqueUsername($data['first_name'], $data['last_name']);
         $password_plain = '12345';
 
-
-
-        // Insert into users table
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        // Insert into users table - include photo path
+        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, status, created_at, updated_at, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $username,
             $data['email'],
@@ -273,12 +313,13 @@ function processLecturerRegistration($post_data) {
             $data['dob'],
             'active',
             date('Y-m-d H:i:s'),
-            date('Y-m-d H:i:s')
+            date('Y-m-d H:i:s'),
+            $photo_path // Store photo path in users table
         ]);
 
         $user_id = (int)$pdo->lastInsertId();
 
-        // Insert into lecturers table
+        // Insert into lecturers table - remove photo_path
         $stmt = $pdo->prepare("INSERT INTO lecturers
             (user_id, gender, dob, id_number, department_id, education_level, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -301,8 +342,10 @@ function processLecturerRegistration($post_data) {
         $pdo->commit();
 
         // Clear cache
-        require_once "cache_utils.php";
-        cache_delete("lecturer_stats_dept_{$data['department_id']}");
+        if (file_exists("cache_utils.php")) {
+            require_once "cache_utils.php";
+            cache_delete("lecturer_stats_dept_{$data['department_id']}");
+        }
 
         return [
             'success' => true,
@@ -731,6 +774,57 @@ if (isset($_SESSION['success_message'])) {
             font-size: 1.1rem;
         }
 
+        /* Photo Upload Styles */
+        .photo-upload-container {
+            text-align: center;
+            padding: 2rem;
+            border: 2px dashed #e9ecef;
+            border-radius: var(--border-radius);
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+        }
+
+        .photo-upload-container:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .photo-preview {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 1.5rem;
+        }
+
+        .photo-preview img {
+            width: 150px;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 50%;
+            border: 4px solid #667eea;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .photo-placeholder {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            background: #f8f9fa;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed #dee2e6;
+            margin: 0 auto 1.5rem;
+        }
+
+        .photo-controls {
+            margin-bottom: 1rem;
+        }
+
+        .photo-controls .btn {
+            margin: 0.25rem;
+        }
+
         .section-header i {
             color: #667eea;
             margin-right: 0.5rem;
@@ -1025,7 +1119,7 @@ if (isset($_SESSION['success_message'])) {
     </button>
 
     <!-- Loading Overlay -->
-    <!-- <div class="loading-overlay" id="loadingOverlay"> -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
         <div class="loading-content">
             <div class="spinner-border loading-spinner mb-3" role="status">
                 <span class="visually-hidden">Loading...</span>
@@ -1062,159 +1156,196 @@ if (isset($_SESSION['success_message'])) {
                     </div>
                 <?php endif; ?>
 
-                <form id="lecturerRegistrationForm" method="POST">
+                <form id="lecturerRegistrationForm" method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? bin2hex(random_bytes(32)); ?>">
                     <input type="hidden" name="role" value="lecturer">
 
+                    <!-- Photo Upload Section -->
+                    <div class="row g-3 mb-4 fade-in">
+                         <div class="col-12 section-header">
+                             <h6>
+                                 <i class="fas fa-camera me-2"></i>Profile Photo
+                             </h6>
+                         </div>
+                         <div class="col-12">
+                             <div class="photo-upload-container">
+                                 <div class="photo-preview">
+                                     <img id="photoPreview" src="" alt="Profile Photo Preview" style="display: none;">
+                                     <div id="photoPlaceholder" class="photo-placeholder">
+                                         <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
+                                         <p class="text-muted mb-2">No photo selected</p>
+                                         <small class="text-muted">Click "Choose Photo" to upload</small>
+                                     </div>
+                                 </div>
+                                 <div class="photo-controls">
+                                     <input type="file" id="lecturer_photo" name="lecturer_photo" class="form-control d-none"
+                                            accept="image/*" onchange="previewPhoto(this)">
+                                     <button type="button" class="btn btn-outline-primary me-2" onclick="document.getElementById('lecturer_photo').click()">
+                                         <i class="fas fa-camera me-2"></i>Choose Photo
+                                     </button>
+                                     <button type="button" class="btn btn-outline-secondary" onclick="clearPhoto()">
+                                         <i class="fas fa-trash me-2"></i>Clear
+                                     </button>
+                                 </div>
+                                 <small class="form-text text-muted mt-2">
+                                     <i class="fas fa-info-circle me-1"></i>Upload a clear passport-style photo. Maximum file size: 2MB. Supported formats: JPG, PNG, GIF.
+                                 </small>
+                             </div>
+                         </div>
+                     </div>
+
                     <!-- Personal Information Section -->
                     <div class="row g-3 mb-4 fade-in">
-                        <div class="col-12 section-header">
-                            <h6>
-                                <i class="fas fa-user me-2"></i>Personal Information
-                            </h6>
-                        </div>
-                        <div class="col-md-6">
-                             <label class="form-label" for="first_name">
-                                 <i class="fas fa-user me-1"></i>First Name <span class="text-danger">*</span>
-                             </label>
-                             <input type="text" id="first_name" name="first_name" class="form-control"
-                                    required aria-required="true" maxlength="50" minlength="2"
-                                    pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
-                                    placeholder="Enter first name">
-                             <div class="invalid-feedback">
-                                 Please enter a valid first name (2-50 characters, letters only).
-                             </div>
+                         <div class="col-12 section-header">
+                             <h6>
+                                 <i class="fas fa-user me-2"></i>Personal Information
+                             </h6>
                          </div>
                          <div class="col-md-6">
-                             <label class="form-label" for="last_name">
-                                 <i class="fas fa-user me-1"></i>Last Name <span class="text-danger">*</span>
-                             </label>
-                             <input type="text" id="last_name" name="last_name" class="form-control"
-                                    required aria-required="true" maxlength="50" minlength="2"
-                                    pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
-                                    placeholder="Enter last name">
-                             <div class="invalid-feedback">
-                                 Please enter a valid last name (2-50 characters, letters only).
-                             </div>
+                              <label class="form-label" for="first_name">
+                                   <i class="fas fa-user me-1"></i>First Name <span class="text-danger">*</span>
+                               </label>
+                               <input type="text" id="first_name" name="first_name" class="form-control"
+                                      required aria-required="true" maxlength="50" minlength="2"
+                                      pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
+                                      placeholder="Enter first name">
+                               <div class="invalid-feedback">
+                                   Please enter a valid first name (2-50 characters, letters only).
+                               </div>
+                           </div>
+                           <div class="col-md-6">
+                               <label class="form-label" for="last_name">
+                                   <i class="fas fa-user me-1"></i>Last Name <span class="text-danger">*</span>
+                               </label>
+                               <input type="text" id="last_name" name="last_name" class="form-control"
+                                      required aria-required="true" maxlength="50" minlength="2"
+                                      pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
+                                      placeholder="Enter last name">
+                               <div class="invalid-feedback">
+                                   Please enter a valid last name (2-50 characters, letters only).
+                               </div>
+                           </div>
+                           <div class="col-md-6">
+                               <label class="form-label" for="gender">
+                                   <i class="fas fa-venus-mars me-1"></i>Gender <span class="text-danger">*</span>
+                               </label>
+                               <select id="gender" name="gender" class="form-select" required aria-required="true">
+                                   <option value="">Select Gender</option>
+                                   <option value="Male">Male</option>
+                                   <option value="Female">Female</option>
+                                   <option value="Other">Other</option>
+                               </select>
+                               <div class="invalid-feedback">
+                                   Please select a gender.
+                               </div>
+                           </div>
+                          <div class="col-md-6">
+                              <label class="form-label" for="dob">
+                                  <i class="fas fa-calendar me-1"></i>Date of Birth <span class="text-danger">*</span>
+                              </label>
+                              <input type="date" id="dob" name="dob" class="form-control"
+                                     required aria-required="true"
+                                     max="<?php echo date('Y-m-d', strtotime('-21 years')); ?>"
+                                     min="<?php echo date('Y-m-d', strtotime('-100 years')); ?>">
+                              <small class="form-text text-muted">
+                                  <i class="fas fa-info-circle me-1"></i>Must be at least 21 years old and not more than 100 years ago.
+                              </small>
+                              <div class="invalid-feedback">
+                                  Please enter a valid date of birth.
+                              </div>
+                          </div>
+                          <div class="col-md-6">
+                              <label class="form-label" for="id_number">
+                                  <i class="fas fa-id-card me-1"></i>ID Number <span class="text-danger">*</span>
+                              </label>
+                              <input type="text" id="id_number" name="id_number" class="form-control"
+                                    required aria-required="true" maxlength="16" minlength="16"
+                                    pattern="\d{16}" inputmode="numeric"
+                                    placeholder="1234567890123456"
+                                    onkeypress="return isNumberKey(event)"
+                                    oninput="validateIdNumber(this)"
+                                    title="Must be exactly 16 digits">
+                              <div class="d-flex justify-content-between">
+                                  <small class="form-text text-muted">
+                                      <i class="fas fa-info-circle me-1"></i>Must be exactly 16 digits (numbers only).
+                                  </small>
+                                  <small id="id-counter" class="form-text text-info fw-bold" style="display: none;">0/16</small>
+                              </div>
+                              <div class="invalid-feedback">
+                                  ID Number must be exactly 16 digits.
+                              </div>
+                          </div>
+                          <div class="col-md-6">
+                              <label for="education_level" class="form-label">
+                                  <i class="fas fa-graduation-cap me-1"></i>Education Level <span class="text-danger">*</span>
+                              </label>
+                              <select id="education_level" name="education_level" class="form-select" required aria-required="true">
+                                  <option value="">Select Level</option>
+                                  <option value="Bachelor's">Bachelor's Degree</option>
+                                  <option value="Master's">Master's Degree</option>
+                                  <option value="PhD">PhD</option>
+                                  <option value="Other">Other</option>
+                              </select>
+                          </div>
+                          <div class="col-md-6">
+                              <label class="form-label" for="phone">Phone</label>
+                              <input type="text" id="phone" name="phone" class="form-control" placeholder="0781234567" onkeypress="return isNumberKey(event)" oninput="validatePhoneNumber(this)">
+                              <small class="form-text text-muted">Optional. Must be exactly 10 digits only.</small>
+                          </div>
+                     </div>
+
+                    <!-- Contact & Academic Information Section -->
+                    <div class="row g-3 mb-4 fade-in">
+                         <div class="col-12 section-header">
+                             <h6>
+                                 <i class="fas fa-address-card me-2"></i>Contact & Academic Information
+                             </h6>
                          </div>
                          <div class="col-md-6">
-                             <label class="form-label" for="gender">
-                                 <i class="fas fa-venus-mars me-1"></i>Gender <span class="text-danger">*</span>
+                             <label class="form-label" for="email">
+                                 <i class="fas fa-envelope me-1"></i>Email <span class="text-danger">*</span>
                              </label>
-                             <select id="gender" name="gender" class="form-select" required aria-required="true">
-                                 <option value="">Select Gender</option>
-                                 <option value="Male">Male</option>
-                                 <option value="Female">Female</option>
-                                 <option value="Other">Other</option>
-                             </select>
-                             <div class="invalid-feedback">
-                                 Please select a gender.
-                             </div>
-                         </div>
-                         <div class="col-md-6">
-                             <label class="form-label" for="dob">
-                                 <i class="fas fa-calendar me-1"></i>Date of Birth <span class="text-danger">*</span>
-                             </label>
-                             <input type="date" id="dob" name="dob" class="form-control"
-                                    required aria-required="true"
-                                    max="<?php echo date('Y-m-d', strtotime('-21 years')); ?>"
-                                    min="<?php echo date('Y-m-d', strtotime('-100 years')); ?>">
+                             <input type="email" id="email" name="email" class="form-control"
+                                    required aria-required="true" maxlength="100"
+                                    placeholder="lecturer@university.edu"
+                                    pattern="[^\s@]+@[^\s@]+\.[^\s@]+">
                              <small class="form-text text-muted">
-                                 <i class="fas fa-info-circle me-1"></i>Must be at least 21 years old and not more than 100 years ago.
+                                 <i class="fas fa-info-circle me-1"></i>Valid email address required for account creation.
                              </small>
                              <div class="invalid-feedback">
-                                 Please enter a valid date of birth.
+                                 Please enter a valid email address.
                              </div>
                          </div>
-                    </div>
-
-                    <!-- Department & Education Section -->
-                    <div class="row g-3 mb-4 fade-in">
-                        <div class="col-12 section-header">
-                            <h6>
-                                <i class="fas fa-building me-2"></i>Department & Education
-                            </h6>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="department_id" class="form-label">
-                                Department <span class="text-danger">*</span>
-                            </label>
-                            <select id="department_id" name="department_id" class="form-select" required aria-required="true">
-                                <option value="">Select Department</option>
-                                <?php foreach ($departments as $dept): ?>
-                                    <option value="<?= htmlspecialchars($dept['id']) ?>">
-                                        <?= htmlspecialchars($dept['name']) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <small class="form-text text-muted">
-                                <i class="fas fa-info-circle me-1"></i>
-                                Selecting a department will load available courses below
-                            </small>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="education_level" class="form-label">
-                                Education Level <span class="text-danger">*</span>
-                            </label>
-                            <select id="education_level" name="education_level" class="form-select" required aria-required="true">
-                                <option value="">Select Level</option>
-                                <option value="Bachelor's">Bachelor's Degree</option>
-                                <option value="Master's">Master's Degree</option>
-                                <option value="PhD">PhD</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Contact & Identification Section -->
-                    <div class="row g-3 mb-4 fade-in">
-                        <div class="col-12 section-header">
-                            <h6>
-                                <i class="fas fa-id-card me-2"></i>Contact & Identification
-                            </h6>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="id_number">
-                                <i class="fas fa-id-card me-1"></i>ID Number <span class="text-danger">*</span>
-                            </label>
-                            <input type="text" id="id_number" name="id_number" class="form-control"
-                                   required aria-required="true" maxlength="16" minlength="16"
-                                   pattern="\d{16}" inputmode="numeric"
-                                   placeholder="1234567890123456"
-                                   onkeypress="return isNumberKey(event)"
-                                   oninput="validateIdNumber(this)"
-                                   title="Must be exactly 16 digits">
-                            <div class="d-flex justify-content-between">
-                                <small class="form-text text-muted">
-                                    <i class="fas fa-info-circle me-1"></i>Must be exactly 16 digits (numbers only).
-                                </small>
-                                <small id="id-counter" class="form-text text-info fw-bold" style="display: none;">0/16</small>
-                            </div>
-                            <div class="invalid-feedback">
-                                ID Number must be exactly 16 digits.
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="email">
-                                <i class="fas fa-envelope me-1"></i>Email <span class="text-danger">*</span>
-                            </label>
-                            <input type="email" id="email" name="email" class="form-control"
-                                   required aria-required="true" maxlength="100"
-                                   placeholder="lecturer@university.edu"
-                                   pattern="[^\s@]+@[^\s@]+\.[^\s@]+">
-                            <small class="form-text text-muted">
-                                <i class="fas fa-info-circle me-1"></i>Valid email address required for account creation.
-                            </small>
-                            <div class="invalid-feedback">
-                                Please enter a valid email address.
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="phone">Phone</label>
-                            <input type="text" id="phone" name="phone" class="form-control" placeholder="1234567890" onkeypress="return isNumberKey(event)" oninput="validatePhoneNumber(this)">
-                            <small class="form-text text-muted">Optional. Must be exactly 10 digits only.</small>
-                        </div>
-                    </div>
+                         <div class="col-md-6">
+                             <label for="education_level" class="form-label">
+                                 <i class="fas fa-graduation-cap me-1"></i>Education Level <span class="text-danger">*</span>
+                             </label>
+                             <select id="education_level" name="education_level" class="form-select" required aria-required="true">
+                                 <option value="">Select Level</option>
+                                 <option value="Bachelor's">Bachelor's Degree</option>
+                                 <option value="Master's">Master's Degree</option>
+                                 <option value="PhD">PhD</option>
+                                 <option value="Other">Other</option>
+                             </select>
+                         </div>
+                         <div class="col-md-12">
+                             <label for="department_id" class="form-label">
+                                 <i class="fas fa-building me-1"></i>Department <span class="text-danger">*</span>
+                             </label>
+                             <select id="department_id" name="department_id" class="form-select" required aria-required="true">
+                                 <option value="">Select Department</option>
+                                 <?php foreach ($departments as $dept): ?>
+                                     <option value="<?= htmlspecialchars($dept['id']) ?>">
+                                         <?= htmlspecialchars($dept['name']) ?>
+                                     </option>
+                                 <?php endforeach; ?>
+                             </select>
+                             <small class="form-text text-muted">
+                                 <i class="fas fa-info-circle me-1"></i>
+                                 Selecting a department will load available courses and options below
+                             </small>
+                         </div>
+                     </div>
 
                     <!-- Course and Option Assignment Section -->
                     <div class="row g-3 mt-3">
@@ -1351,7 +1482,6 @@ if (isset($_SESSION['success_message'])) {
         return true;
     }
 
-
     // Validate ID number field
     function validateIdNumber(input) {
         // Remove any non-numeric characters
@@ -1362,7 +1492,6 @@ if (isset($_SESSION['success_message'])) {
             input.value = input.value.substring(0, 16);
         }
     }
-
 
     // Load options for registration form
     function loadOptionsForRegistration(departmentId = null) {
@@ -1621,7 +1750,6 @@ if (isset($_SESSION['success_message'])) {
         coursesContainer.innerHTML = html;
         updateSelectedCourses();
     }
-
 
     function updateSelectedOptions() {
         const checkboxes = document.querySelectorAll('.option-checkbox:checked');
@@ -1910,7 +2038,6 @@ if (isset($_SESSION['success_message'])) {
             });
         }
 
-
         // Load options on page load
         loadOptionsForRegistration();
 
@@ -1944,9 +2071,6 @@ if (isset($_SESSION['success_message'])) {
             loadOptionsForRegistration();
         }
     });
-
-
-
 
     // Helper function to create feedback elements
     function createFeedbackElement(fieldName) {
@@ -2028,6 +2152,20 @@ if (isset($_SESSION['success_message'])) {
 
         // Enhanced comprehensive field validation with better error messages
         const validationErrors = [];
+
+        // Photo validation (optional but must be valid if provided)
+        const photoInput = document.getElementById('lecturer_photo');
+        if (photoInput && photoInput.files.length > 0) {
+            const file = photoInput.files[0];
+            const maxSize = 2 * 1024 * 1024; // 2MB
+            const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+
+            if (file.size > maxSize) {
+                validationErrors.push('Photo file size must be less than 2MB');
+            } else if (!allowedTypes.includes(file.type)) {
+                validationErrors.push('Photo must be a valid image file (JPG, PNG, or GIF)');
+            }
+        }
 
         // Required field validation with detailed feedback
         if (!firstName.trim()) {
@@ -2111,11 +2249,57 @@ if (isset($_SESSION['success_message'])) {
             addBtn.disabled = true;
         }
         if (loadingOverlay) {
-            loadingOverlay.classList.add('show');
+            loadingOverlay.style.display = 'flex';
         }
 
         return true;
     });
+
+    // Photo preview functionality
+    function previewPhoto(input) {
+        const preview = document.getElementById('photoPreview');
+        const placeholder = document.getElementById('photoPlaceholder');
+
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+
+            // Validate file size (2MB max)
+            if (file.size > 2 * 1024 * 1024) {
+                showAlert('File size must be less than 2MB', 'error');
+                clearPhoto();
+                return;
+            }
+
+            // Validate file type
+            const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+            if (!validTypes.includes(file.type)) {
+                showAlert('Please select a valid image file (JPG, PNG, or GIF)', 'error');
+                clearPhoto();
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                preview.src = e.target.result;
+                preview.style.display = 'block';
+                placeholder.style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+        } else {
+            clearPhoto();
+        }
+    }
+
+    function clearPhoto() {
+        const input = document.getElementById('lecturer_photo');
+        const preview = document.getElementById('photoPreview');
+        const placeholder = document.getElementById('photoPlaceholder');
+
+        input.value = '';
+        preview.src = '';
+        preview.style.display = 'none';
+        placeholder.style.display = 'flex';
+    }
 
     // Enhanced alert function with better styling
     function showAlert(message, type = 'info', duration = 5000) {

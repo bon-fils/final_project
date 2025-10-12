@@ -76,11 +76,11 @@ try {
         LEFT JOIN attendance_sessions s ON c.id = s.course_id
         LEFT JOIN attendance_records ar ON s.id = ar.session_id
         LEFT JOIN students st ON st.option_id = c.option_id
-        WHERE c.lecturer_id = :lecturer_id AND c.status = 'active'
+        WHERE c.department_id = :department_id AND c.status = 'active'
         GROUP BY c.id, c.name, c.course_code, c.credits, c.duration_hours, c.description, d.name
         ORDER BY c.name ASC
     ");
-    $stmt->execute(['lecturer_id' => $lecturer_id]);
+    $stmt->execute(['department_id' => $lecturer_dept['department_id']]);
     $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     error_log("Error fetching courses: " . $e->getMessage());

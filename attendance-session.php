@@ -1,3 +1,4 @@
+
 <?php
 session_start();
 require_once "config.php";
@@ -835,17 +836,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </div>
 
             <div class="col-md-6">
-              <h6 class="mb-3"><i class="fas fa-chart-bar me-2"></i>Session Statistics</h6>
-              <div id="sessionStats">
-                <div class="alert alert-info">
-                  <i class="fas fa-spinner fa-spin me-2"></i>Loading session statistics...
-                </div>
-              </div>
+              <h6 class="mb-3"><i class="fas fa-fingerprint me-2"></i>Fingerprint Attendance</h6>
 
-              <!-- Attendance Result -->
-              <div id="attendanceResult" class="attendance-result">
-                <h6 id="resultTitle"></h6>
-                <p id="resultMessage"></p>
+              <!-- Fingerprint Section -->
+              <div class="text-center">
+                <div class="mb-3">
+                  <i class="fas fa-fingerprint fa-4x text-info mb-3"></i>
+                  <p class="text-muted">ESP32 Fingerprint Scanner</p>
+                </div>
+                <button type="button" id="scanFingerprintBtn" class="btn btn-info btn-lg">
+                  <i class="fas fa-hand-paper me-2"></i>Scan Fingerprint
+                </button>
+                <div id="fingerprint-status" class="mt-3" style="display: none;">
+                  <div class="alert alert-info">
+                    <i class="fas fa-spinner fa-spin me-2"></i>
+                    <span id="fingerprint-message">Connecting to ESP32...</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -867,15 +874,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <label for="option" class="form-label fw-semibold">Option</label>
         <select id="option" name="option_id" class="form-select" required disabled>
           <option value="" disabled selected>Select Option</option>
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label for="classLevel" class="form-label fw-semibold">Class (Year)</label>
-        <select id="classLevel" name="classLevel" class="form-select" required disabled>
-          <option value="" disabled selected>Select Class</option>
-          <option value="Year 1">Year 1</option>
-          <option value="Year 2">Year 2</option>
-          <option value="Year 3">Year 3</option>
         </select>
       </div>
       <div class="col-md-3">
@@ -906,6 +904,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </small>
       </div>
 
+      <div class="col-md-3">
+        <label for="biometric_method" class="form-label fw-semibold">Biometric Method</label>
+        <select id="biometric_method" name="biometric_method" class="form-select" required>
+          <option value="" disabled selected>Select Method</option>
+          <option value="face">Face Recognition</option>
+          <option value="finger">Fingerprint</option>
+        </select>
+      </div>
+
       <div class="col-12 d-flex flex-wrap gap-2">
         <button type="submit" id="start-session" class="btn btn-primary" disabled>
           <i class="fas fa-play me-2"></i> Start Session
@@ -913,33 +920,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <button type="button" id="end-session" class="btn btn-danger" disabled>
           <i class="fas fa-stop me-2"></i> End Session
         </button>
-        <a href="#" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#manualMarkModal">
-          <i class="fas fa-pen me-2"></i> Manual Mark
-        </a>
-        <button type="button" class="btn btn-info">
-          <i class="fas fa-fingerprint me-2"></i> Use Fingerprint
-        </button>
       </div>
     </form>
 
-    <!-- Webcam Preview -->
-    <div id="webcam-container" class="position-relative">
-      <video id="webcam-preview" autoplay muted playsinline></video>
-      <div id="webcam-overlay">
-        <div class="text-center">
-          <div class="spinner-border text-light mb-2" role="status">
-            <span class="visually-hidden">Processing...</span>
+    <!-- Webcam Preview for Face Recognition -->
+    <div id="webcam-section" class="d-none">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="fas fa-camera me-2"></i>Face Recognition Setup</h6>
+        </div>
+        <div class="card-body text-center">
+          <div id="webcam-container">
+            <video id="webcam-preview" autoplay muted playsinline></video>
+            <div id="webcam-overlay">
+              <div class="text-center">
+                <div class="spinner-border text-light mb-2" role="status">
+                  <span class="visually-hidden">Processing...</span>
+                </div>
+                <div id="face-recognition-status">Detecting faces...</div>
+              </div>
+            </div>
           </div>
-          <div id="face-recognition-status">Detecting faces...</div>
+          <div class="mt-3">
+            <button type="button" id="startWebcamBtn" class="btn btn-primary">
+              <i class="fas fa-video me-2"></i>Start Webcam
+            </button>
+          </div>
         </div>
       </div>
+    </div>
 
-      <!-- Face Recognition Status Indicator -->
-      <div id="face-recognition-indicator" class="face-recognition-indicator d-none">
-        <div class="indicator-light">
-          <i class="fas fa-camera"></i>
+    <!-- Fingerprint Setup Section -->
+    <div id="fingerprint-section" class="d-none">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="fas fa-fingerprint me-2"></i>Fingerprint Scanner Setup</h6>
         </div>
-        <div class="indicator-text">Face Recognition Active</div>
+        <div class="card-body text-center">
+          <div class="mb-3">
+            <i class="fas fa-microchip fa-4x text-info mb-3"></i>
+            <h5>ESP32 Fingerprint Scanner</h5>
+            <p class="text-muted">Make sure your ESP32 device is connected and running</p>
+          </div>
+          <div class="alert alert-info">
+            <strong>ESP32 IP Address:</strong> <span id="esp32-ip">Not detected</span><br>
+            <strong>Status:</strong> <span id="esp32-status">Checking...</span>
+          </div>
+          <button type="button" id="testESP32Btn" class="btn btn-info">
+            <i class="fas fa-wifi me-2"></i>Test ESP32 Connection
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1039,49 +1069,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
   </main>
 
-  <!-- Manual Mark Modal -->
-  <div class="modal fade" id="manualMarkModal" tabindex="-1" aria-labelledby="manualMarkLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-      <form class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title" id="manualMarkLabel">Manual Attendance Marking</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <div class="mb-3">
-            <label for="studentName" class="form-label">Student Name</label>
-            <select id="studentName" class="form-select" required>
-              <option selected disabled>Select Student</option>
-              <!-- Students will be loaded dynamically -->
-            </select>
-          </div>
-          <div class="mb-3">
-            <label for="attendanceDate" class="form-label">Date</label>
-            <input type="date" id="attendanceDate" class="form-control" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label d-block">Status</label>
-            <div class="form-check form-check-inline">
-              <input class="form-check-input" type="radio" name="attendanceStatus" id="statusPresent" value="Present" required>
-              <label class="form-check-label" for="statusPresent">Present</label>
-            </div>
-            <div class="form-check form-check-inline">
-              <input class="form-check-input" type="radio" name="attendanceStatus" id="statusAbsent" value="Absent" required>
-              <label class="form-check-label" for="statusAbsent">Absent</label>
-            </div>
-          </div>
-          <div class="mb-3">
-            <label for="attendanceMethod" class="form-label">Method</label>
-            <input type="text" id="attendanceMethod" class="form-control" value="Manual" readonly>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="submit" class="btn btn-primary">Save Attendance</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
   <!-- Footer -->
   <footer class="footer">
     &copy; 2025 Rwanda Polytechnic | Lecturer Panel
@@ -1095,17 +1082,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     let currentSessionId = null;
     let webcamStream = null;
     let csrfToken = '<?php echo bin2hex(random_bytes(32)); ?>';
+    let esp32IP = '192.168.1.100'; // Default ESP32 IP - should be configurable
 
     // DOM elements
     const departmentSelect = document.getElementById('department');
     const optionSelect = document.getElementById('option');
-    const classSelect = document.getElementById('classLevel');
     const courseSelect = document.getElementById('course');
+    const biometricMethodSelect = document.getElementById('biometric_method');
     const courseSearch = document.getElementById('course-search');
     const courseLoading = document.getElementById('course-loading');
     const startBtn = document.getElementById('start-session');
     const endBtn = document.getElementById('end-session');
-    const markAttendanceBtn = document.getElementById('markAttendanceBtn');
     const sessionForm = document.getElementById('sessionForm');
 
     // Course data storage
@@ -1124,8 +1111,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     function setupEventListeners() {
       departmentSelect.addEventListener('change', handleDepartmentChange);
       optionSelect.addEventListener('change', handleOptionChange);
-      classSelect.addEventListener('change', handleClassChange);
       courseSelect.addEventListener('change', validateForm);
+      biometricMethodSelect.addEventListener('change', handleBiometricMethodChange);
       courseSearch.addEventListener('input', handleCourseSearch);
       courseSearch.addEventListener('focus', () => courseSearch.style.display = 'block');
       courseSearch.addEventListener('blur', () => {
@@ -1137,7 +1124,170 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       });
       startBtn.addEventListener('click', handleStartSession);
       endBtn.addEventListener('click', handleEndSession);
-      markAttendanceBtn.addEventListener('click', handleMarkAttendance);
+      document.getElementById('markAttendanceBtn').addEventListener('click', handleMarkAttendance);
+      document.getElementById('scanFingerprintBtn').addEventListener('click', handleScanFingerprint);
+      document.getElementById('startWebcamBtn').addEventListener('click', startWebcam);
+      document.getElementById('testESP32Btn').addEventListener('click', testESP32Connection);
+      document.getElementById('refresh-attendance').addEventListener('click', loadAttendanceRecords);
+      document.getElementById('export-attendance').addEventListener('click', handleExportAttendance);
+    }
+
+    // Handle biometric method change
+    function handleBiometricMethodChange() {
+      const method = biometricMethodSelect.value;
+      const webcamSection = document.getElementById('webcam-section');
+      const fingerprintSection = document.getElementById('fingerprint-section');
+
+      if (method === 'face') {
+        webcamSection.classList.remove('d-none');
+        fingerprintSection.classList.add('d-none');
+      } else if (method === 'finger') {
+        fingerprintSection.classList.remove('d-none');
+        webcamSection.classList.add('d-none');
+      } else {
+        webcamSection.classList.add('d-none');
+        fingerprintSection.classList.add('d-none');
+      }
+
+      validateForm();
+    }
+
+    // Load departments from API
+    async function loadDepartments() {
+      try {
+        // Show loading state
+        departmentSelect.innerHTML = '<option value="" disabled selected>Loading departments...</option>';
+        departmentSelect.disabled = true;
+
+        console.log('Loading departments...');
+        const response = await fetch('api/attendance-session-api.php?action=get_departments', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          }
+        });
+
+        const result = await response.json();
+        console.log('Departments API response:', result);
+
+        if (result.status === 'success') {
+          departmentSelect.innerHTML = '<option value="" disabled selected>Select Department</option>';
+
+          if (result.data.length === 0) {
+            departmentSelect.innerHTML += '<option value="" disabled>No departments available</option>';
+            updateCourseInfo('⚠️ No departments are assigned to your account. Please contact your administrator to get access to attendance sessions.');
+            showNotification('No departments are assigned to your account. Please contact your administrator.', 'warning');
+
+            // Hide the "Department Access
+    // Handle scan fingerprint
+    async function handleScanFingerprint() {
+      const fingerprintBtn = document.getElementById('scanFingerprintBtn');
+      const fingerprintStatus = document.getElementById('fingerprint-status');
+      const fingerprintMessage = document.getElementById('fingerprint-message');
+
+      try {
+        // Show loading state
+        fingerprintBtn.disabled = true;
+        fingerprintBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Scanning...';
+        fingerprintStatus.style.display = 'block';
+        fingerprintMessage.textContent = 'Connecting to ESP32...';
+
+        // Call ESP32 identify endpoint
+        const response = await fetch(`http://${esp32IP}/identify`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const esp32Result = await response.json();
+        console.log('ESP32 response:', esp32Result);
+
+        if (esp32Result.success && esp32Result.fingerprint_id) {
+          fingerprintMessage.textContent = 'Fingerprint detected! Processing...';
+
+          // Call our API to mark attendance
+          const apiResponse = await fetch(`api/mark_attendance.php?method=finger&fingerprint_id=${esp32Result.fingerprint_id}&session_id=${currentSessionId}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+
+          const apiResult = await apiResponse.json();
+          console.log('Mark attendance API response:', apiResult);
+
+          if (apiResult.status === 'success') {
+            showNotification(`✅ Attendance marked for ${apiResult.student.name}!`, 'success');
+            loadAttendanceRecords();
+            loadSessionStats();
+          } else {
+            showNotification(`❌ ${apiResult.message}`, 'error');
+          }
+        } else {
+          fingerprintMessage.textContent = 'No fingerprint match found';
+          showNotification('No fingerprint match found', 'warning');
+        }
+
+      } catch (error) {
+        console.error('Fingerprint scan error:', error);
+        fingerprintMessage.textContent = 'Connection failed';
+        showNotification('Failed to connect to ESP32 device', 'error');
+      } finally {
+        // Reset button state
+        fingerprintBtn.disabled = false;
+        fingerprintBtn.innerHTML = '<i class="fas fa-hand-paper me-2"></i>Scan Fingerprint';
+
+        // Hide status after 3 seconds
+        setTimeout(() => {
+          fingerprintStatus.style.display = 'none';
+        }, 3000);
+      }
+    }
+
+    // Test ESP32 connection
+    async function testESP32Connection() {
+      const testBtn = document.getElementById('testESP32Btn');
+      const esp32Status = document.getElementById('esp32-status');
+      const esp32IPDisplay = document.getElementById('esp32-ip');
+
+      try {
+        testBtn.disabled = true;
+        testBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Testing...';
+        esp32Status.textContent = 'Testing connection...';
+
+        const response = await fetch(`http://${esp32IP}/status`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const result = await response.json();
+
+        if (result.status === 'ok') {
+          esp32Status.textContent = 'Connected';
+          esp32Status.className = 'text-success';
+          showNotification('ESP32 connection successful!', 'success');
+        } else {
+          esp32Status.textContent = 'Connected (limited functionality)';
+          esp32Status.className = 'text-warning';
+          showNotification('ESP32 connected but may have limited functionality', 'warning');
+        }
+
+        esp32IPDisplay.textContent = esp32IP;
+
+      } catch (error) {
+        console.error('ESP32 test error:', error);
+        esp32Status.textContent = 'Connection failed';
+        esp32Status.className = 'text-danger';
+        esp32IPDisplay.textContent = 'Not detected';
+        showNotification('Failed to connect to ESP32 device', 'error');
+      } finally {
+        testBtn.disabled = false;
+        testBtn.innerHTML = '<i class="fas fa-wifi me-2"></i>Test ESP32 Connection';
+      }
     }
 
     // Load departments from API
@@ -1215,7 +1365,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       courseSearch.value = '';
       allCourses = [];
       filteredCourses = [];
-      classSelect.disabled = false;
       startBtn.disabled = true;
 
       if (departmentId) {
@@ -1279,7 +1428,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     async function handleOptionChange() {
        const departmentId = departmentSelect.value;
        const optionId = optionSelect.value;
-       const classLevel = classSelect.value;
 
        courseSelect.innerHTML = '<option value="" disabled selected>Select Course</option>';
        courseSelect.disabled = true;
@@ -1288,33 +1436,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
        startBtn.disabled = true;
 
        if (departmentId && optionId) {
-         await loadCourses(departmentId, optionId, classLevel);
-         // Show course search after courses are loaded
-         if (allCourses.length > 5) { // Only show search if more than 5 courses
-           courseSearch.style.display = 'block';
-         }
+         await loadCourses(departmentId, optionId);
+         // Show course search after courses are loaded (check inside loadCourses function)
        } else if (departmentId) {
          updateCourseInfo('Select option to load courses');
+       } else {
+         updateCourseInfo('Select department and option to load courses');
        }
+
+       validateForm();
     }
 
-    // Load courses for selected department, option, and class level
-    async function loadCourses(departmentId, optionId, classLevel = null) {
+    // Load courses for selected department and option
+    async function loadCourses(departmentId, optionId) {
         try {
           // Show loading state
           courseLoading.style.display = 'block';
           courseSelect.innerHTML = '<option value="" disabled selected>Loading courses...</option>';
           courseSelect.disabled = true;
 
-          // Build URL with parameters
-          let url = `api/attendance-session-api.php?action=get_courses&department_id=${departmentId}&option_id=${optionId}`;
-          if (classLevel) {
-            url += `&year_level=${encodeURIComponent(classLevel)}`;
-          }
-
-          console.log('Loading courses with URL:', url);
-
-          const response = await fetch(url, {
+          const response = await fetch(`api/attendance-session-api.php?action=get_courses&department_id=${departmentId}&option_id=${optionId}`, {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
@@ -1398,35 +1539,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
        }
      }
 
-    // Handle class change
-    async function handleClassChange() {
-       const departmentId = departmentSelect.value;
-       const optionId = optionSelect.value;
-       const classLevel = classSelect.value;
-
-       courseSelect.innerHTML = '<option value="" disabled selected>Select Course</option>';
-       courseSelect.disabled = true;
-       courseSearch.style.display = 'none';
-       courseSearch.value = '';
-       startBtn.disabled = true;
-
-       if (departmentId && optionId) {
-         await loadCourses(departmentId, optionId, classLevel);
-         // Show course search after courses are loaded
-         if (allCourses.length > 5) { // Only show search if more than 5 courses
-           courseSearch.style.display = 'block';
-         }
-       } else if (departmentId && optionId) {
-         updateCourseInfo('Select option to load courses');
-       } else if (departmentId) {
-         updateCourseInfo('Select option to load courses');
-       } else {
-         updateCourseInfo('Select department and option to load courses');
-       }
-
-       validateForm();
-    }
-
     // Handle course search
     function handleCourseSearch() {
       const searchTerm = courseSearch.value.toLowerCase().trim();
@@ -1492,15 +1604,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // Validate form
     function validateForm() {
-        const isValid = departmentSelect.value && optionSelect.value && classSelect.value && courseSelect.value;
+        const isValid = departmentSelect.value && optionSelect.value && courseSelect.value && biometricMethodSelect.value;
         startBtn.disabled = !isValid;
 
         // Debug logging
         console.log('Form validation:', {
             department: departmentSelect.value,
             option: optionSelect.value,
-            classLevel: classSelect.value,
             course: courseSelect.value,
+            biometric_method: biometricMethodSelect.value,
             isValid: isValid
         });
 
@@ -1538,6 +1650,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           if (result.data.department_id) departmentSelect.value = result.data.department_id;
           if (result.data.option_id) optionSelect.value = result.data.option_id;
           if (result.data.course_id) courseSelect.value = result.data.course_id;
+          if (result.data.biometric_method) biometricMethodSelect.value = result.data.biometric_method;
 
           // Trigger dependent dropdowns
           if (result.data.department_id) {
@@ -1593,8 +1706,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         console.log('Starting session with data:', {
             department_id: formData.get('department_id'),
             option_id: formData.get('option_id'),
-            classLevel: formData.get('classLevel'),
             course_id: formData.get('course_id'),
+            biometric_method: formData.get('biometric_method'),
             csrf_token: formData.get('csrf_token')
         });
 
@@ -1602,10 +1715,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         const departmentId = formData.get('department_id');
         const optionId = formData.get('option_id');
         const courseId = formData.get('course_id');
+        const biometricMethod = formData.get('biometric_method');
 
-        if (!departmentId || !optionId || !courseId) {
+        if (!departmentId || !optionId || !courseId || !biometricMethod) {
             console.error('❌ Missing required fields');
-            showNotification('Please fill in all required fields (Department, Option, Course)', 'error');
+            showNotification('Please fill in all required fields (Department, Option, Course, Biometric Method)', 'error');
             return;
         }
 
@@ -1614,7 +1728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
          console.log('📡 Sending request to API...');
 
-         const response = await fetch('api/attendance-session-api.php?action=start_session', {
+         const response = await fetch('api/start_session.php', {
            method: 'POST',
            body: formData
          });
@@ -1689,6 +1803,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           showNotification(`✅ Attendance marked for ${result.student_name}!`, 'success');
 
           // Reload session stats
+          loadAttendanceRecords();
           loadSessionStats();
         } else {
           // Show error result
@@ -1775,12 +1890,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         placeholder.style.display = 'none';
 
         // Enable mark attendance button
-        markAttendanceBtn.disabled = false;
+        document.getElementById('markAttendanceBtn').disabled = false;
 
       } catch (error) {
         console.error('Webcam error:', error);
         showNotification('Could not access webcam. Please check permissions.', 'error');
-        markAttendanceBtn.disabled = true;
+        document.getElementById('markAttendanceBtn').disabled = true;
       }
     }
 
@@ -1808,11 +1923,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
       try {
         const formData = new FormData();
-        formData.append('action', 'end_session');
         formData.append('session_id', currentSessionId);
         formData.append('csrf_token', csrfToken);
 
-        const response = await fetch('api/attendance-session-api.php', {
+        const response = await fetch('api/end_session.php', {
           method: 'POST',
           body: formData
         });
@@ -1841,16 +1955,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <strong>Course:</strong> ${sessionData.course_name || 'Unknown'}<br>
         <strong>Department:</strong> ${sessionData.department_name || 'Unknown'}<br>
         <strong>Option:</strong> ${sessionData.option_name || 'Unknown'}<br>
+        <strong>Method:</strong> ${sessionData.biometric_method === 'face' ? 'Face Recognition' : 'Fingerprint'}<br>
         <strong>Started:</strong> ${new Date(sessionData.start_time).toLocaleString()}
       `;
 
       // Enable mark attendance button
-      markAttendanceBtn.disabled = false;
+      document.getElementById('markAttendanceBtn').disabled = false;
 
-      // Start webcam
-      startWebcam();
+      // Start webcam if face recognition
+      if (sessionData.biometric_method === 'face') {
+        startWebcam();
+      }
 
       // Load session stats
+      loadAttendanceRecords();
       loadSessionStats();
     }
 
@@ -1860,7 +1978,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       document.getElementById('sessionSetupSection').style.display = 'block';
 
       currentSessionId = null;
-      markAttendanceBtn.disabled = true;
+      document.getElementById('markAttendanceBtn').disabled = true;
 
       // Stop webcam
       stopWebcam();
@@ -1891,10 +2009,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       }
     }
 
+    // Load attendance records
+    async function loadAttendanceRecords() {
+      if (!currentSessionId) return;
 
+      try {
+        // Show loading state
+        document.getElementById('attendance-loading').style.display = 'block';
+        document.getElementById('attendance-table-container').style.display = 'none';
+        document.getElementById('no-attendance').style.display = 'none';
 
+        const response = await fetch(`api/attendance-session-api.php?action=get_attendance_records&session_id=${currentSessionId}`);
+        const result = await response.json();
 
+        // Hide loading state
+        document.getElementById('attendance-loading').style.display = 'none';
 
+        if (result.status === 'success' && result.data.length > 0) {
+          const tbody = document.getElementById('attendance-list');
+          tbody.innerHTML = '';
+
+          result.data.forEach(record => {
+            const row = document.createElement('tr');
+
+            const methodIcon = record.method === 'face_recognition' ? 'fas fa-camera text-primary' :
+                              record.method === 'fingerprint' ? 'fas fa-fingerprint text-info' :
+                              'fas fa-pen text-secondary';
+            const methodText = record.method === 'face_recognition' ? 'Face Recognition' :
+                              record.method === 'fingerprint' ? 'Fingerprint' : 'Manual';
+
+            row.innerHTML = `
+              <td><strong>${record.student_id}</strong></td>
+              <td>${record.student_name}</td>
+              <td><small class="text-muted">${new Date(record.recorded_at).toLocaleString()}</small></td>
+              <td>
+                <span class="badge ${record.status === 'present' ? 'bg-success' : 'bg-danger'}">
+                  <i class="fas ${record.status === 'present' ? 'fa-check' : 'fa-times'} me-1"></i>
+                  ${record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                </span>
+              </td>
+              <td>
+                <i class="${methodIcon} me-1"></i>
+                <small>${methodText}</small>
+              </td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeAttendance(${record.id})" title="Remove this record">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </td>
+            `;
+
+            tbody.appendChild(row);
+          });
+
+          document.getElementById('attendance-table-container').style.display = 'block';
+        } else {
+          document.getElementById('no-attendance').style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error loading attendance records:', error);
+        document.getElementById('attendance-loading').style.display = 'none';
+        document.getElementById('no-attendance').style.display = 'block';
+      }
+    }
+
+    // Handle export attendance
+    async function handleExportAttendance() {
+      if (!currentSessionId) {
+        showNotification('No active session to export', 'warning');
+        return;
+      }
+
+      try {
+        showLoading('Exporting attendance data...');
+
+        const response = await fetch(`api/attendance-session-api.php?action=export_attendance&session_id=${currentSessionId}&format=csv`);
+        const result = await response.json();
+
+        hideLoading();
+
+        if (result.status === 'success') {
+          // Create download link
+          const link = document.createElement('a');
+          link.href = 'data:text/csv;base64,' + result.data.content;
+          link.download = result.data.filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          showNotification('Attendance data exported successfully!', 'success');
+        } else {
+          showNotification('Failed to export attendance data: ' + result.message, 'error');
+        }
+      } catch (error) {
+        hideLoading();
+        console.error('Error exporting attendance:', error);
+        showNotification('Failed to export attendance data', 'error');
+      }
+    }
+
+    // Remove attendance record
+    async function removeAttendance(recordId) {
+      if (!confirm('Are you sure you want to remove this attendance record?')) {
+        return;
+      }
+
+      try {
+        showLoading('Removing attendance record...');
+
+        const formData = new FormData();
+        formData.append('action', 'remove_attendance');
+        formData.append('record_id', recordId);
+        formData.append('csrf_token', csrfToken);
+
+        const response = await fetch('api/attendance-session-api.php', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+        hideLoading();
+
+        if (result.status === 'success') {
+          showNotification('Attendance record removed successfully', 'success');
+          loadAttendanceRecords();
+          loadSessionStats();
+        } else {
+          showNotification('Failed to remove attendance record: ' + result.message, 'error');
+        }
+      } catch (error) {
+        hideLoading();
+        console.error('Error removing attendance:', error);
+        showNotification('Failed to remove attendance record', 'error');
+      }
+    }
+
+    // Show notification
     function showNotification(message, type = 'info') {
       // Create and show notification
       const alertClass = type === 'success' ? 'alert-success' :
@@ -1933,491 +2183,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       }, 6000);
     }
 
-    // Generate CSRF token
-    function generateCSRFToken() {
-      return Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
+    // Show loading overlay
+    function showLoading(message = 'Loading...') {
+      const loading = document.createElement('div');
+      loading.id = 'loading-overlay';
+      loading.className = 'position-fixed w-100 h-100 d-flex align-items-center justify-content-center';
+      loading.style.cssText = 'top: 0; left: 0; background: rgba(0,0,0,0.5); z-index: 9999;';
+      loading.innerHTML = `
+        <div class="bg-white p-4 rounded shadow">
+          <div class="d-flex align-items-center">
+            <div class="spinner-border text-primary me-3" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+            <div>${message}</div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(loading);
     }
 
-    // Enhanced face recognition using API with better error handling
-    async function processFaceRecognition(imageData) {
-      console.log('🔍 Processing face recognition with API...');
-
-      try {
-        const formData = new FormData();
-        formData.append('image_data', imageData);
-        formData.append('session_id', currentSessionId);
-        formData.append('csrf_token', csrfToken);
-
-        // Add timeout for the request
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-        const response = await fetch('api/attendance-session-api.php?action=process_face_recognition', {
-          method: 'POST',
-          body: formData,
-          signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        console.log('📊 Face recognition API result:', result);
-
-        if (result.status === 'success') {
-          // Enhanced result processing
-          const enhancedResult = {
-            recognized: result.recognized || false,
-            student_id: result.student_id || null,
-            confidence: result.confidence || 0,
-            confidence_level: result.confidence_level || 'low',
-            student_name: result.student_name || null,
-            student_reg: result.student_reg || null,
-            auto_mark: result.auto_mark || false,
-            faces_detected: result.faces_detected || 0,
-            top_matches: result.top_matches || [],
-            timestamp: result.timestamp || new Date().toISOString(),
-            message: result.message || null
-          };
-
-          // Log detailed recognition info
-          if (enhancedResult.recognized) {
-            console.log(`✅ Face recognized: ${enhancedResult.student_name || `ID ${enhancedResult.student_id}`} (${enhancedResult.confidence}% confidence, ${enhancedResult.confidence_level} level)`);
-          } else {
-            console.log(`❌ No face match found. Faces detected: ${enhancedResult.faces_detected}`);
-          }
-
-          return enhancedResult;
-        } else {
-          console.error('🚫 Face recognition API error:', result.message);
-          return {
-            recognized: false,
-            error: result.message || 'Face recognition failed',
-            faces_detected: 0
-          };
-        }
-      } catch (error) {
-        if (error.name === 'AbortError') {
-          console.error('⏰ Face recognition request timed out');
-          return {
-            recognized: false,
-            error: 'Face recognition request timed out',
-            timeout: true
-          };
-        }
-
-        console.error('💥 Face recognition request failed:', error);
-        return {
-          recognized: false,
-          error: error.message || 'Network error during face recognition',
-          network_error: true
-        };
+    // Hide loading overlay
+    function hideLoading() {
+      const loading = document.getElementById('loading-overlay');
+      if (loading) {
+        loading.remove();
       }
     }
 
-    // Fingerprint authentication (placeholder)
-    async function processFingerprint() {
-      // This would integrate with fingerprint scanner
-      console.log('Processing fingerprint...');
-    
-      // Simulate fingerprint processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    
-      // For demo purposes, use a real student ID
-      // In a real implementation, this would scan and match fingerprints
-      return { authenticated: true, student_id: 1 }; // Use a real student ID
-    }
-
-    // Keyboard shortcuts
-    document.addEventListener('keydown', function(e) {
-      // Ctrl + S to start session
-      if (e.ctrlKey && e.key === 's' && !startBtn.disabled) {
-        e.preventDefault();
-        handleStartSession(e);
-      }
-
-      // Ctrl + E to end session
-      if (e.ctrlKey && e.key === 'e' && !endBtn.disabled) {
-        e.preventDefault();
-        handleEndSession();
-      }
-
-      // Ctrl + R to refresh attendance
-      if (e.ctrlKey && e.key === 'r') {
-        e.preventDefault();
-        loadAttendanceRecords();
-      }
-
-      // F1 for manual marking
-      if (e.key === 'F1') {
-        e.preventDefault();
-        const modal = new bootstrap.Modal(document.getElementById('manualMarkModal'));
-        modal.show();
-      }
-
-      // F2 to focus course search
-      if (e.key === 'F2' && courseSelect.disabled === false) {
-        e.preventDefault();
-        courseSearch.style.display = 'block';
-        courseSearch.focus();
-      }
-
-      // Escape to hide course search
-      if (e.key === 'Escape' && courseSearch.style.display === 'block') {
-        courseSearch.style.display = 'none';
-        courseSearch.value = '';
-        handleCourseSearch(); // Reset to show all courses
-      }
-    });
-
-    // Webcam error handling
-    webcamPreview.addEventListener('error', function() {
-      console.error('Webcam error occurred');
-      showNotification('Webcam error occurred. Face recognition disabled.', 'warning');
-      faceRecognitionActive = false;
-    });
-
-    // Page visibility change handling
-    document.addEventListener('visibilitychange', function() {
-      if (document.hidden && currentSessionId) {
-        // Pause monitoring when tab is not visible
-        console.log('Tab hidden, pausing attendance monitoring');
-        if (sessionTimerInterval) {
-          clearInterval(sessionTimerInterval);
-          sessionTimerInterval = null;
-        }
-      } else if (!document.hidden && currentSessionId) {
-        // Resume monitoring when tab becomes visible
-        console.log('Tab visible, resuming attendance monitoring');
-        loadAttendanceRecords();
-        // Resume timer
-        if (sessionStartTime && !sessionTimerInterval) {
-          sessionTimerInterval = setInterval(updateSessionTimer, 1000);
-        }
-      }
-    });
-
-    // Warn user before leaving with active session
-    window.addEventListener('beforeunload', function(e) {
-      if (currentSessionId) {
-        // Show confirmation dialog
-        const message = 'You have an active attendance session. Are you sure you want to leave? The session will remain active.';
-        e.returnValue = message; // Standard for most browsers
-        return message; // For some older browsers
-      }
-    });
-
-    // Cleanup on page unload
-    window.addEventListener('beforeunload', function() {
-      if (currentSessionId) {
-        stopAttendanceMonitoring();
-        stopWebcam();
-        stopSessionTimer();
-      }
-    });
-
-    // Enhanced Face Recognition Implementation
-    let faceRecognitionInterval = null;
-    let lastRecognitionTime = 0;
-    let recognitionCooldown = 5000; // 5 seconds cooldown after successful recognition
-    let consecutiveFailures = 0;
-    let maxConsecutiveFailures = 3;
-
-    function startFaceRecognition() {
-      if (!faceRecognitionActive || !webcamPreview.srcObject) return;
-
-      console.log('🚀 Starting enhanced face recognition...');
-
-      faceRecognitionInterval = setInterval(async () => {
-        try {
-          // Check if we're in cooldown period
-          const now = Date.now();
-          if (now - lastRecognitionTime < recognitionCooldown) {
-            return; // Skip this cycle
-          }
-
-          const video = webcamPreview;
-
-          // Ensure video is ready
-          if (video.videoWidth === 0 || video.videoHeight === 0) {
-            console.log('Video not ready yet, skipping...');
-            return;
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0);
-
-          const imageData = canvas.toDataURL('image/jpeg', 0.8);
-
-          // Show processing overlay with enhanced feedback
-          updateFaceRecognitionStatus('🔍 Scanning for faces...', 'processing');
-
-          const result = await processFaceRecognition(imageData);
-
-          if (result.recognized && currentSessionId) {
-            // Successful recognition
-            consecutiveFailures = 0; // Reset failure counter
-            lastRecognitionTime = now;
-
-            // Enhanced success feedback with validation info
-            const studentInfo = result.student_name || `ID ${result.student_id}`;
-            const confidenceText = result.confidence ? ` (${result.confidence}% confidence)` : '';
-            const confidenceLevel = result.confidence_level || 'unknown';
-
-            // Check validation results for additional feedback
-            const validation = result.validation || {};
-            let validationMessage = '';
-
-            if (!validation.face_size_ok) {
-              validationMessage += ' (Face size improved)';
-            }
-            if (!validation.face_centered) {
-              validationMessage += ' (Positioning improved)';
-            }
-            if (!validation.confidence_margin_ok) {
-              validationMessage += ' (Lighting improved)';
-            }
-
-            // Show detailed success status
-            const statusMessage = `✅ Face Matched — ${studentInfo}${confidenceText}${validationMessage}`;
-            updateFaceRecognitionStatus(statusMessage, 'success');
-
-            // Record attendance with enhanced logging
-            const attendanceRecorded = await recordAttendance(result.student_id, 'face_recognition', 'present');
-
-            if (attendanceRecorded) {
-              // Enhanced notification with more details
-              const notificationText = result.student_name ?
-                `${result.student_name}${confidenceText}` :
-                `Student ID ${result.student_id}${confidenceText}`;
-
-              showNotification(`🎯 Face Recognition Success: Attendance marked for ${notificationText}`, 'success');
-
-              // Show success overlay longer for better visibility
-              setTimeout(() => hideFaceRecognitionOverlay(), 4000);
-
-              // Add visual feedback to webcam container
-              flashWebcamContainer('success');
-            } else {
-              updateFaceRecognitionStatus('⚠️ Face recognized but attendance recording failed', 'warning');
-              setTimeout(() => hideFaceRecognitionOverlay(), 3000);
-            }
-
-          } else {
-            // No match found
-            consecutiveFailures++;
-
-            if (consecutiveFailures >= maxConsecutiveFailures) {
-              // Show different message after multiple failures
-              updateFaceRecognitionStatus('🔄 Scanning... No matches yet', 'info');
-            } else {
-              updateFaceRecognitionStatus('❌ No face match found', 'error');
-            }
-
-            // Hide overlay after shorter time for non-matches
-            setTimeout(() => hideFaceRecognitionOverlay(), 1500);
-          }
-
-        } catch (error) {
-          console.error('Face recognition error:', error);
-          consecutiveFailures++;
-
-          if (consecutiveFailures >= maxConsecutiveFailures) {
-            updateFaceRecognitionStatus('⚠️ Face recognition temporarily unavailable', 'warning');
-            setTimeout(() => hideFaceRecognitionOverlay(), 2000);
-          } else {
-            hideFaceRecognitionOverlay();
-          }
-        }
-      }, 2500); // Check every 2.5 seconds for better responsiveness
-    }
-
-    function stopFaceRecognition() {
-      if (faceRecognitionInterval) {
-        clearInterval(faceRecognitionInterval);
-        faceRecognitionInterval = null;
-      }
-      hideFaceRecognitionOverlay();
-    }
-
-    function showFaceRecognitionOverlay(message) {
-      const overlay = document.getElementById('webcam-overlay');
-      const status = document.getElementById('face-recognition-status');
-      status.textContent = message;
-      overlay.style.display = 'flex';
-    }
-
-    function updateFaceRecognitionStatus(message, type = 'info') {
-      const overlay = document.getElementById('webcam-overlay');
-      const status = document.getElementById('face-recognition-status');
-
-      // Update status text
-      status.textContent = message;
-
-      // Update styling based on type
-      status.className = '';
-      overlay.className = 'webcam-overlay'; // Reset classes
-
-      if (type === 'success') {
-        status.classList.add('text-success', 'fw-bold');
-        overlay.classList.add('success');
-      } else if (type === 'error') {
-        status.classList.add('text-danger', 'fw-bold');
-        overlay.classList.add('error');
-      } else if (type === 'warning') {
-        status.classList.add('text-warning', 'fw-bold');
-        overlay.classList.add('warning');
-      } else if (type === 'processing') {
-        status.classList.add('text-info', 'fw-bold');
-        overlay.classList.add('processing');
-      } else {
-        status.classList.add('text-light');
-        overlay.classList.add('info');
-      }
-
-      overlay.style.display = 'flex';
-    }
-
-    function hideFaceRecognitionOverlay() {
-      const overlay = document.getElementById('webcam-overlay');
-      overlay.style.display = 'none';
-      overlay.className = 'webcam-overlay'; // Reset classes
-    }
-
-    // Enhanced visual feedback function
-    function flashWebcamContainer(type = 'success') {
-      const container = document.getElementById('webcam-container');
-      if (!container) return;
-
-      // Remove existing flash classes
-      container.classList.remove('flash-success', 'flash-error', 'flash-info');
-
-      // Add appropriate flash class
-      container.classList.add(`flash-${type}`);
-
-      // Remove flash class after animation
-      setTimeout(() => {
-        container.classList.remove(`flash-${type}`);
-      }, 1000);
-    }
-
-    // Enhanced webcam start with face recognition
-    const originalStartWebcam = startWebcam;
-    startWebcam = async function() {
-      await originalStartWebcam();
-      if (faceRecognitionActive) {
-        startFaceRecognition();
-        updateFaceRecognitionIndicator('active');
-      }
-    };
-
-    const originalStopWebcam = stopWebcam;
-    stopWebcam = function() {
-      originalStopWebcam();
-      stopFaceRecognition();
-      updateFaceRecognitionIndicator('inactive');
-    };
-
-    // Face recognition indicator control
-    function updateFaceRecognitionIndicator(status) {
-      const indicator = document.getElementById('face-recognition-indicator');
-      const light = indicator.querySelector('.indicator-light');
-      const text = indicator.querySelector('.indicator-text');
-
-      if (!indicator) return;
-
-      light.className = 'indicator-light';
-
-      switch (status) {
-        case 'active':
-          indicator.classList.remove('d-none');
-          light.classList.add('active');
-          text.textContent = 'Face Recognition Active';
-          break;
-        case 'inactive':
-          indicator.classList.add('d-none');
-          break;
-        case 'error':
-          indicator.classList.remove('d-none');
-          light.classList.add('error');
-          text.textContent = 'Face Recognition Error';
-          break;
-        default:
-          indicator.classList.add('d-none');
-      }
-    }
-
-    // Fingerprint Authentication
-    async function handleFingerprintAuth() {
-      try {
-        showLoading('Authenticating fingerprint...');
-
-        const result = await processFingerprint();
-
-        hideLoading();
-
-        if (result.authenticated && currentSessionId) {
-          await recordAttendance(result.student_id, 'fingerprint', 'present');
-          showNotification(`Student ${result.student_id} authenticated via fingerprint`, 'success');
-        } else {
-          showNotification('Fingerprint authentication failed', 'error');
-        }
-      } catch (error) {
-        hideLoading();
-        console.error('Fingerprint authentication error:', error);
-        showNotification('Fingerprint authentication error', 'error');
-      }
-    }
-
-    // Record attendance helper function
-    async function recordAttendance(studentId, method, status) {
-      if (!currentSessionId) {
-        console.error('No active session ID for recording attendance');
-        return false;
-      }
-
-      console.log(`Recording attendance: student=${studentId}, method=${method}, status=${status}, session=${currentSessionId}`);
-
-      try {
-        const formData = new FormData();
-        formData.append('session_id', currentSessionId);
-        formData.append('student_id', studentId);
-        formData.append('method', method);
-        formData.append('status', status);
-        formData.append('csrf_token', csrfToken);
-
-        const response = await fetch('api/attendance-session-api.php?action=record_attendance', {
-          method: 'POST',
-          body: formData
-        });
-
-        const result = await response.json();
-        console.log('Attendance recording API response:', result);
-
-        if (result.status === 'success') {
-          console.log('Attendance recorded successfully');
+    // Start attendance monitoring
+    function startAttendanceMonitoring() {
+      // Load attendance records every 30 seconds
+      setInterval(() => {
+        if (currentSessionId) {
           loadAttendanceRecords();
           loadSessionStats();
-          return true;
-        } else {
-          console.error('Failed to record attendance:', result.message);
-          showNotification('Failed to record attendance: ' + result.message, 'error');
-          return false;
         }
-      } catch (error) {
-        console.error('Error recording attendance:', error);
-        showNotification('Error recording attendance: ' + error.message, 'error');
-        return false;
-      }
+      }, 30000);
     }
 
     // Handle existing session dialog
@@ -2484,10 +2285,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         showLoading('Resuming session...');
 
         // Get session details
-        const response = await fetch(`api/attendance-session-api.php?action=get_user_active_session`);
+        const response = await fetch('api/attendance-session-api.php?action=get_user_active_session');
         const result = await response.json();
 
-        // console.log('Resume session API response:', result);
+        console.log('Resume session API response:', result);
 
         hideLoading();
 
@@ -2550,37 +2351,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         showNotification('Failed to start new session', 'error');
       }
     }
-
-    // Add fingerprint button functionality
-    document.addEventListener('DOMContentLoaded', function() {
-      const fingerprintBtn = document.querySelector('.btn-info');
-      if (fingerprintBtn) {
-        fingerprintBtn.addEventListener('click', handleFingerprintAuth);
-      }
-    });
-
-    // Enhanced session start with webcam
-    const originalShowActiveSession = showActiveSession;
-    showActiveSession = function(sessionData) {
-      originalShowActiveSession(sessionData);
-
-      // Add session active indicator
-      const webcamContainer = document.getElementById('webcam-container');
-      if (webcamContainer) {
-        webcamContainer.classList.add('session-active');
-      }
-    };
-
-    const originalHideActiveSession = hideActiveSession;
-    hideActiveSession = function() {
-      originalHideActiveSession();
-
-      // Remove session active indicator
-      const webcamContainer = document.getElementById('webcam-container');
-      if (webcamContainer) {
-        webcamContainer.classList.remove('session-active');
-      }
-    };
   </script>
 
 </body>

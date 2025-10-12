@@ -194,6 +194,9 @@ try {
     $studentId = $pdo->lastInsertId();
     echo "✅ Created sample student: John Doe (ID: $studentId)\n";
 
+    $studentId = $pdo->lastInsertId();
+    echo "✅ Created sample student: John Doe (ID: $studentId)\n";
+
     // Create sample student photos
     $samplePhotos = [
         'uploads/29.jpg',

@@ -68,7 +68,7 @@ $update_stmt->execute([
     'department_id' => $lecturer_dept['department_id']
 ]);
 
-// Fetch courses for this lecturer with basic data
+// Fetch courses for this lecturer with basic data (all courses in department)
 $sql = "
   SELECT
     c.id AS course_id,
@@ -78,14 +78,15 @@ $sql = "
     d.name AS department_name,
     c.credits,
     c.duration_hours,
-    c.created_at
+    c.created_at,
+    CASE WHEN c.lecturer_id = ? THEN 'assigned' ELSE 'department' END as assignment_status
   FROM courses c
   INNER JOIN departments d ON c.department_id = d.id
-  WHERE c.lecturer_id = ? AND c.status = 'active'
+  WHERE c.department_id = ? AND c.status = 'active'
   ORDER BY c.name ASC
 ";
 $stmt = $pdo->prepare($sql);
-$stmt->execute([$lecturer_dept['lecturer_id']]);
+$stmt->execute([$lecturer_dept['lecturer_id'], $lecturer_dept['department_id']]);
 $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Add basic statistics to each course
@@ -521,6 +522,12 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
             <button class="filter-btn active" data-filter="all">
                 <i class="fas fa-th-large me-1"></i>All Courses (<?= count($courses) ?>)
             </button>
+            <button class="filter-btn" data-filter="assigned">
+                <i class="fas fa-user-check me-1"></i>Assigned to Me
+            </button>
+            <button class="filter-btn" data-filter="department">
+                <i class="fas fa-building me-1"></i>Department Courses
+            </button>
             <button class="filter-btn" data-filter="high-attendance">
                 <i class="fas fa-trophy me-1"></i>High Attendance (>80%)
             </button>
@@ -544,7 +551,9 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
                      style="animation-delay: <?= $index * 0.1 ?>s">
                     <div class="course-card">
                         <div class="course-header">
-                            <div class="course-status bg-success">Active</div>
+                            <div class="course-status bg-success">
+                                <?= $course['assignment_status'] === 'assigned' ? 'Assigned' : 'Department' ?>
+                            </div>
                             <h5 class="course-title mb-1">
                                 <?= htmlspecialchars($course['course_name']) ?>
                             </h5>
@@ -737,6 +746,10 @@ function checkFilterMatch(card, filterType) {
     switch (filterType) {
         case 'all':
             return true;
+        case 'assigned':
+            return card.querySelector('.course-status').textContent.trim() === 'Assigned';
+        case 'department':
+            return card.querySelector('.course-status').textContent.trim() === 'Department';
         case 'high-attendance':
             const attendanceRate = parseFloat(card.dataset.attendanceRate) || 0;
             return attendanceRate > 80;
@@ -778,6 +791,8 @@ function updateCourseDisplay() {
 function updateFilterCounts() {
     const filters = {
         'all': allCourses.length,
+        'assigned': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Assigned').length,
+        'department': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Department').length,
         'high-attendance': allCourses.filter(card => (parseFloat(card.dataset.attendanceRate) || 0) > 80).length,
         'today-sessions': allCourses.filter(card => (parseInt(card.dataset.todaySessions) || 0) > 0).length,
         'recent': allCourses.filter(card => {

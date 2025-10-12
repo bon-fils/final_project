@@ -464,7 +464,7 @@ function handleGetCourses(PDO $pdo): array {
 
     $params = [$department_id];
 
-    // Get courses for the lecturer (courses assigned to them)
+    // Get courses for the lecturer (courses assigned to them OR unassigned courses)
     $query = "
         SELECT DISTINCT
             c.id,
@@ -473,14 +473,15 @@ function handleGetCourses(PDO $pdo): array {
             c.description,
             c.credits,
             c.status as is_available,
-            'Unknown Lecturer' as lecturer_name
+            COALESCE(CONCAT(l.first_name, ' ', l.last_name), 'Unassigned') as lecturer_name
         FROM courses c
+        LEFT JOIN lecturers l ON c.lecturer_id = l.id
         WHERE c.department_id = ?
     ";
 
-    // For lecturers, filter by lecturer_id to show only assigned courses
+    // For lecturers, show courses assigned to them OR courses with no lecturer assigned
     if ($lecturer_id) {
-        $query .= " AND c.lecturer_id = ?";
+        $query .= " AND (c.lecturer_id = ? OR c.lecturer_id IS NULL)";
         $params[] = $lecturer_id;
     }
 
