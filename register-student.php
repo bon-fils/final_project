@@ -1,25 +1,24 @@
 <?php
 /**
- * Enhanced Student Registration Form
- * Clean, modern, and accessible student registration system
- * Features: Location management, real-time validation, progress tracking
- * Version: 2.0
+ * Rwanda Polytechnic Student Registration System
+ * Enhanced student registration with biometric integration
+ * Features: Face recognition, fingerprint enrollment, comprehensive validation
+ * Version: 3.0
  */
 
 session_start();
 require_once "config.php";
 
-// Initialize CSRF token for unauthenticated access
+// Initialize CSRF token for security
 if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 $csrf_token = $_SESSION['csrf_token'];
 
-
 // Initialize data arrays with error handling
 $departments = [];
 
-// Get departments for dropdown
+// Get active departments for dropdown
 try {
     $stmt = $pdo->query("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
     $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -30,7 +29,185 @@ try {
 
 // Validate required data
 if (empty($departments)) {
-    error_log("Warning: No departments found in database");
+    error_log("Warning: No active departments found in database");
+}
+
+// Handle POST request for student registration
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Verify CSRF token
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        die('CSRF token validation failed');
+    }
+
+    // Sanitize and validate input data
+    $firstName = trim($_POST['first_name'] ?? '');
+    $lastName = trim($_POST['last_name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $phone = trim($_POST['telephone'] ?? '');
+    $regNo = trim($_POST['reg_no'] ?? '');
+    $studentIdNumber = trim($_POST['student_id_number'] ?? '');
+    $departmentId = trim($_POST['department_id'] ?? '');
+    $optionId = trim($_POST['option_id'] ?? '');
+    $yearLevel = trim($_POST['year_level'] ?? '');
+    $sex = trim($_POST['sex'] ?? '');
+    $dob = trim($_POST['dob'] ?? '');
+    $parentFirstName = trim($_POST['parent_first_name'] ?? '');
+    $parentLastName = trim($_POST['parent_last_name'] ?? '');
+    $parentContact = trim($_POST['parent_contact'] ?? '');
+
+    $errors = [];
+    $success = false;
+    $message = '';
+
+    // Validation
+    if (empty($firstName)) $errors[] = 'First name is required';
+    if (empty($lastName)) $errors[] = 'Last name is required';
+    if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Valid email is required';
+    if (empty($phone) || !preg_match('/^0\d{9}$/', $phone)) $errors[] = 'Valid 10-digit phone number starting with 0 is required';
+    if (empty($regNo) || !preg_match('/^[A-Za-z0-9_-]{5,20}$/', $regNo)) $errors[] = 'Valid registration number (5-20 alphanumeric characters) is required';
+    if (empty($departmentId)) $errors[] = 'Department selection is required';
+    if (empty($optionId)) $errors[] = 'Program selection is required';
+    if (empty($yearLevel)) $errors[] = 'Year level is required';
+    if (empty($sex)) $errors[] = 'Gender selection is required';
+
+    // Check for duplicate registration number
+    if (empty($errors)) {
+        try {
+            $stmt = $pdo->prepare("SELECT id FROM students WHERE reg_no = ?");
+            $stmt->execute([$regNo]);
+            if ($stmt->fetch()) {
+                $errors[] = 'Registration number already exists';
+            }
+        } catch (PDOException $e) {
+            $errors[] = 'Database error occurred';
+            error_log("Registration check error: " . $e->getMessage());
+        }
+    }
+
+    // Process registration if no errors
+    if (empty($errors)) {
+        try {
+            $pdo->beginTransaction();
+
+            // Create unique username
+            $username = strtolower(substr($firstName, 0, 1) . $lastName);
+            $originalUsername = $username;
+            $count = 0;
+
+            do {
+                $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+                $stmt->execute([$username]);
+                if ($stmt->fetch()) {
+                    $count++;
+                    $username = $originalUsername . $count;
+                } else {
+                    break;
+                }
+            } while (true);
+
+            // Handle photo upload
+            $photoPath = null;
+            if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
+                $uploadDir = 'uploads/students/photos/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+
+                $fileExtension = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
+                $allowedExtensions = ['jpg', 'jpeg', 'png'];
+
+                if (in_array($fileExtension, $allowedExtensions) && $_FILES['photo']['size'] <= 2 * 1024 * 1024) {
+                    $fileName = 'student_' . time() . '_' . uniqid() . '.' . $fileExtension;
+                    $photoPath = $uploadDir . $fileName;
+
+                    if (!move_uploaded_file($_FILES['photo']['tmp_name'], $photoPath)) {
+                        $photoPath = null; // Continue without photo if upload fails
+                    }
+                }
+            }
+
+            // Insert user record
+            $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, photo, created_at) VALUES (?, ?, ?, 'student', ?, ?, ?, ?, ?, ?, NOW())");
+            $password = password_hash('123456', PASSWORD_DEFAULT);
+            $stmt->execute([$username, $email, $password, $firstName, $lastName, $phone, $sex, $dob, $photoPath]);
+            $userId = $pdo->lastInsertId();
+
+            // Handle face images
+            $faceImages = [];
+            if (isset($_FILES['face_images'])) {
+                $uploadDir = 'uploads/students/faces/' . $userId . '/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+
+                foreach ($_FILES['face_images']['tmp_name'] as $key => $tmpName) {
+                    if ($_FILES['face_images']['error'][$key] === UPLOAD_ERR_OK) {
+                        $fileExtension = strtolower(pathinfo($_FILES['face_images']['name'][$key], PATHINFO_EXTENSION));
+                        $allowedExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+
+                        if (in_array($fileExtension, $allowedExtensions) && $_FILES['face_images']['size'][$key] <= 5 * 1024 * 1024) {
+                            $fileName = 'face_' . ($key + 1) . '_' . time() . '.' . $fileExtension;
+                            $filePath = $uploadDir . $fileName;
+
+                            if (move_uploaded_file($tmpName, $filePath)) {
+                                $faceImages[] = $filePath;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle fingerprint data
+            $fingerprintData = null;
+            $fingerprintQuality = null;
+            if (isset($_POST['fingerprint_data']) && isset($_POST['fingerprint_quality'])) {
+                $fingerprintData = $_POST['fingerprint_data'];
+                $fingerprintQuality = (int)$_POST['fingerprint_quality'];
+            }
+
+            // Insert student record
+            $stmt = $pdo->prepare("INSERT INTO students (user_id, option_id, year_level, reg_no, parent_first_name, parent_last_name, parent_contact, department_id, student_id_number, face_images, fingerprint, fingerprint_quality, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            $faceImagesJson = json_encode($faceImages);
+            $stmt->execute([$userId, $optionId, $yearLevel, $regNo, $parentFirstName, $parentLastName, $parentContact, $departmentId, $studentIdNumber ?: $regNo, $faceImagesJson, $fingerprintData, $fingerprintQuality]);
+
+            $pdo->commit();
+
+            $success = true;
+            $message = "Student registered successfully! Username: {$username}, Default password: 123456";
+
+            // Log successful registration
+            log_message('info', 'Student registered successfully', [
+                'username' => $username,
+                'registration_number' => $regNo,
+                'department_id' => $departmentId
+            ]);
+
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $errors[] = 'Registration failed: ' . $e->getMessage();
+            error_log("Student registration error: " . $e->getMessage());
+        }
+    }
+
+    // Return JSON response for AJAX requests
+    if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+        header('Content-Type: application/json');
+        if ($success) {
+            echo json_encode([
+                'success' => true,
+                'message' => $message,
+                'student_id' => 'STU' . $userId,
+                'fingerprint_enrolled' => !empty($fingerprintData),
+                'redirect' => 'admin-dashboard.php'
+            ]);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'errors' => $errors
+            ]);
+        }
+        exit;
+    }
 }
 ?>
 
@@ -39,7 +216,7 @@ if (empty($departments)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Registration - Rwanda Polytechnic</title>
+    <title>Rwanda Polytechnic - Student Registration System</title>
 
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -53,7 +230,7 @@ if (empty($departments)) {
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </head>
-<body>
+<body class="bg-light">
     <div class="container-fluid">
         <div class="row">
             <!-- Sidebar -->
@@ -63,310 +240,340 @@ if (empty($departments)) {
             <main class="col-md-9 col-lg-10 main-content">
                 <!-- Header -->
                 <div class="d-flex justify-content-between align-items-center mb-4">
-                    <h2><i class="fas fa-user-plus me-2"></i>Student Registration</h2>
+                    <div>
+                        <h2 class="text-primary mb-1"><i class="fas fa-user-plus me-2"></i>Student Registration</h2>
+                        <p class="text-muted mb-0">Register new students with biometric authentication</p>
+                    </div>
                     <button class="btn btn-outline-secondary d-md-none" id="mobileMenuToggle">
                         <i class="fas fa-bars"></i>
                     </button>
                 </div>
 
-                <!-- Alert Container -->
+                <!-- Success/Error Messages -->
+                <?php if (isset($success) && $success): ?>
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="fas fa-check-circle me-2"></i>
+                        <strong>Success!</strong> <?php echo htmlspecialchars($message); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                <?php elseif (!empty($errors)): ?>
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Registration Failed!</strong>
+                        <ul class="mb-0 mt-2">
+                            <?php foreach ($errors as $error): ?>
+                                <li><?php echo htmlspecialchars($error); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                <?php endif; ?>
+
+                <!-- Alert Container for AJAX responses -->
                 <div id="alertContainer"></div>
 
                 <!-- Registration Form -->
-<div class="card">
-    <div class="card-header">
-        <h5 class="mb-0">Student Information</h5>
-    </div>
-    <div class="card-body">
-        <!-- Progress Bar -->
-        <div class="mb-4">
-            <div class="progress" style="height: 8px;">
-                <div class="progress-bar" id="formProgress" role="progressbar" style="width: 0%"></div>
-            </div>
-            <small class="text-muted" id="progressText">0% complete</small>
-        </div>
-
-        <form id="registrationForm" enctype="multipart/form-data" aria-label="Student Registration Form" autocomplete="off">
-            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-            
-            <div class="row">
-                <!-- Personal Information -->
-                <div class="col-md-6">
-                    <h6 class="section-title">Personal Information</h6>
-
-                    <div class="mb-3">
-                        <label for="firstName" class="form-label">First Name <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="firstName" name="first_name" required aria-required="true" aria-label="First Name">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="fas fa-clipboard-list me-2"></i>Student Information Form</h5>
                     </div>
-
-                    <div class="mb-3">
-                        <label for="lastName" class="form-label">Last Name <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="lastName" name="last_name" required aria-required="true" aria-label="Last Name">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="email" class="form-label">Email Address <span class="text-danger">*</span></label>
-                        <input type="email" class="form-control" id="email" name="email" required aria-required="true" aria-label="Email Address">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="telephone" class="form-label">Phone Number <span class="text-danger">*</span></label>
-                        <input type="tel" class="form-control" id="telephone" name="telephone" required aria-required="true" aria-label="Phone Number">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="dob" class="form-label">Date of Birth</label>
-                        <input type="date" class="form-control" id="dob" name="dob" aria-label="Date of Birth">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="sex" class="form-label">Gender <span class="text-danger">*</span></label>
-                        <select class="form-control" id="sex" name="sex" required aria-required="true" aria-label="Gender">
-                            <option value="">Select Gender</option>
-                            <option value="Male">Male</option>
-                            <option value="Female">Female</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Academic Information -->
-                <div class="col-md-6">
-                    <h6 class="section-title">Academic Information</h6>
-
-                    <div class="mb-3">
-                        <label for="reg_no" class="form-label">Registration Number <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="reg_no" name="reg_no" required maxlength="20" aria-required="true" aria-label="Registration Number">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="studentIdNumber" class="form-label">Student ID Number</label>
-                        <input type="text" class="form-control" id="studentIdNumber" name="student_id_number" maxlength="16" aria-label="Student ID Number">
-                    </div>
-
-                    <div class="mb-4">
-                        <label for="department" class="form-label d-flex align-items-center justify-content-between">
-                            <span class="d-flex align-items-center">
-                                <i class="fas fa-building me-2 text-primary fs-5"></i>
-                                <strong>Academic Department</strong>
-                            </span>
-                            <span class="badge bg-primary rounded-pill">
-                                <i class="fas fa-star me-1"></i>Required
-                            </span>
-                        </label>
-                        <div class="input-group input-group-lg shadow-sm">
-                            <span class="input-group-text bg-primary text-white border-primary">
-                                <i class="fas fa-university fa-lg"></i>
-                            </span>
-                            <select class="form-select form-select-lg border-primary" id="department" name="department_id" required aria-required="true" aria-label="Department" aria-describedby="departmentHelp">
-                                <option value="">🎓 Select Your Academic Department</option>
-                                <?php
-                                try {
-                                    require_once 'config.php';
-                                    $deptStmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
-                                    while ($dept = $deptStmt->fetch(PDO::FETCH_ASSOC)) {
-                                        echo "<option value=\"{$dept['id']}\">📚 {$dept['name']}</option>";
-                                    }
-                                } catch (Exception $e) {
-                                    echo "<option value=\"\">❌ Error loading departments</option>";
-                                }
-                                ?>
-                            </select>
-                            <span class="input-group-text bg-light">
-                                <i class="fas fa-chevron-down text-muted"></i>
-                            </span>
-                        </div>
-                        <div class="form-text mt-2" id="departmentHelp">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-lightbulb text-warning me-2"></i>
-                                <small class="text-muted fw-medium">Choose your academic department to unlock available programs and specializations</small>
+                    <div class="card-body">
+                        <!-- Progress Bar -->
+                        <div class="mb-4">
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-success" id="formProgress" role="progressbar" style="width: 0%"></div>
                             </div>
+                            <small class="text-muted mt-1" id="progressText">0% complete</small>
                         </div>
-                    </div>
 
-                    <div class="mb-4">
-                        <label for="option" class="form-label d-flex align-items-center justify-content-between">
-                            <span class="d-flex align-items-center">
-                                <i class="fas fa-graduation-cap me-2 text-success fs-5"></i>
-                                <strong>Program/Specialization</strong>
-                            </span>
-                            <span class="badge bg-success rounded-pill">
-                                <i class="fas fa-star me-1"></i>Required
-                            </span>
-                        </label>
-                        <div class="input-group input-group-lg shadow-sm">
-                            <span class="input-group-text bg-success text-white border-success">
-                                <i class="fas fa-book-open fa-lg"></i>
-                            </span>
-                            <select class="form-select form-select-lg border-success" id="option" name="option_id" required disabled aria-required="true" aria-label="Program" aria-describedby="programHelp">
-                                <option value="">🎯 Select Department First to Load Programs</option>
-                            </select>
-                            <div class="spinner-border spinner-border-sm text-success d-none program-loading ms-2" role="status" aria-hidden="true">
-                                <span class="visually-hidden">Loading programs...</span>
-                            </div>
-                            <span class="input-group-text bg-light d-none" id="programLoadedIcon">
-                                <i class="fas fa-check-circle text-success"></i>
-                            </span>
-                        </div>
-                        <div class="form-text mt-2" id="programHelp">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-info-circle text-info me-2"></i>
-                                <small class="text-muted fw-medium">Available programs will appear after selecting a department above</small>
-                            </div>
-                        </div>
-                        <div class="mt-3">
-                            <div id="programCount" class="alert alert-info d-none py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
-                                <div class="d-flex align-items-center">
-                                    <i class="fas fa-chart-line text-info me-2 fs-5"></i>
-                                    <div>
-                                        <strong class="text-info">Program Options Available</strong><br>
-                                        <small id="programCountText" class="text-info-emphasis fw-medium"></small>
+                        <form id="registrationForm" enctype="multipart/form-data" aria-label="Student Registration Form" autocomplete="off">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+
+                            <div class="row">
+                                <!-- Personal Information -->
+                                <div class="col-md-6">
+                                    <h6 class="section-title text-primary border-primary">
+                                        <i class="fas fa-user me-2"></i>Personal Information
+                                    </h6>
+
+                                    <div class="mb-3">
+                                        <label for="firstName" class="form-label fw-semibold">First Name <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="firstName" name="first_name" required aria-required="true" aria-label="First Name">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="lastName" class="form-label fw-semibold">Last Name <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="lastName" name="last_name" required aria-required="true" aria-label="Last Name">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="email" class="form-label fw-semibold">Email Address <span class="text-danger">*</span></label>
+                                        <input type="email" class="form-control" id="email" name="email" required aria-required="true" aria-label="Email Address">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="telephone" class="form-label fw-semibold">Phone Number <span class="text-danger">*</span></label>
+                                        <input type="tel" class="form-control" id="telephone" name="telephone" required aria-required="true" aria-label="Phone Number">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="dob" class="form-label fw-semibold">Date of Birth</label>
+                                        <input type="date" class="form-control" id="dob" name="dob" aria-label="Date of Birth">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="sex" class="form-label fw-semibold">Gender <span class="text-danger">*</span></label>
+                                        <select class="form-select" id="sex" name="sex" required aria-required="true" aria-label="Gender">
+                                            <option value="">Select Gender</option>
+                                            <option value="Male">Male</option>
+                                            <option value="Female">Female</option>
+                                            <option value="Other">Other</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Academic Information -->
+                                <div class="col-md-6">
+                                    <h6 class="section-title text-success border-success">
+                                        <i class="fas fa-graduation-cap me-2"></i>Academic Information
+                                    </h6>
+
+                                    <div class="mb-3">
+                                        <label for="reg_no" class="form-label fw-semibold">Registration Number <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="reg_no" name="reg_no" required maxlength="20" aria-required="true" aria-label="Registration Number">
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="studentIdNumber" class="form-label fw-semibold">Student ID Number</label>
+                                        <input type="text" class="form-control" id="studentIdNumber" name="student_id_number" maxlength="16" aria-label="Student ID Number">
+                                    </div>
+
+                                    <div class="mb-4">
+                                        <label for="department" class="form-label fw-semibold d-flex align-items-center justify-content-between">
+                                            <span class="d-flex align-items-center">
+                                                <i class="fas fa-building me-2 text-primary fs-5"></i>
+                                                Academic Department
+                                            </span>
+                                            <span class="badge bg-primary rounded-pill">
+                                                <i class="fas fa-star me-1"></i>Required
+                                            </span>
+                                        </label>
+                                        <div class="input-group input-group-lg shadow-sm">
+                                            <span class="input-group-text bg-primary text-white border-primary">
+                                                <i class="fas fa-university fa-lg"></i>
+                                            </span>
+                                            <select class="form-select form-select-lg border-primary" id="department" name="department_id" required aria-required="true" aria-label="Department" aria-describedby="departmentHelp">
+                                                <option value="">🎓 Select Your Academic Department</option>
+                                                <?php
+                                                try {
+                                                    require_once 'config.php';
+                                                    $deptStmt = $pdo->query("SELECT id, name FROM departments ORDER BY name");
+                                                    while ($dept = $deptStmt->fetch(PDO::FETCH_ASSOC)) {
+                                                        echo "<option value=\"{$dept['id']}\">📚 {$dept['name']}</option>";
+                                                    }
+                                                } catch (Exception $e) {
+                                                    echo "<option value=\"\">❌ Error loading departments</option>";
+                                                }
+                                                ?>
+                                            </select>
+                                            <span class="input-group-text bg-light">
+                                                <i class="fas fa-chevron-down text-muted"></i>
+                                            </span>
+                                        </div>
+                                        <div class="form-text mt-2" id="departmentHelp">
+                                            <div class="d-flex align-items-center">
+                                                <i class="fas fa-lightbulb text-warning me-2"></i>
+                                                <small class="text-muted fw-medium">Choose your academic department to unlock available programs and specializations</small>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-4">
+                                        <label for="option" class="form-label fw-semibold d-flex align-items-center justify-content-between">
+                                            <span class="d-flex align-items-center">
+                                                <i class="fas fa-graduation-cap me-2 text-success fs-5"></i>
+                                                Program/Specialization
+                                            </span>
+                                            <span class="badge bg-success rounded-pill">
+                                                <i class="fas fa-star me-1"></i>Required
+                                            </span>
+                                        </label>
+                                        <div class="input-group input-group-lg shadow-sm">
+                                            <span class="input-group-text bg-success text-white border-success">
+                                                <i class="fas fa-book-open fa-lg"></i>
+                                            </span>
+                                            <select class="form-select form-select-lg border-success" id="option" name="option_id" required disabled aria-required="true" aria-label="Program" aria-describedby="programHelp">
+                                                <option value="">🎯 Select Department First to Load Programs</option>
+                                            </select>
+                                            <div class="spinner-border spinner-border-sm text-success d-none program-loading ms-2" role="status" aria-hidden="true">
+                                                <span class="visually-hidden">Loading programs...</span>
+                                            </div>
+                                            <span class="input-group-text bg-light d-none" id="programLoadedIcon">
+                                                <i class="fas fa-check-circle text-success"></i>
+                                            </span>
+                                        </div>
+                                        <div class="form-text mt-2" id="programHelp">
+                                            <div class="d-flex align-items-center">
+                                                <i class="fas fa-info-circle text-info me-2"></i>
+                                                <small class="text-muted fw-medium">Available programs will appear after selecting a department above</small>
+                                            </div>
+                                        </div>
+                                        <div class="mt-3">
+                                            <div id="programCount" class="alert alert-info d-none py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
+                                                <div class="d-flex align-items-center">
+                                                    <i class="fas fa-chart-line text-info me-2 fs-5"></i>
+                                                    <div>
+                                                        <strong class="text-info">Program Options Available</strong><br>
+                                                        <small id="programCountText" class="text-info-emphasis fw-medium"></small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="year_level" class="form-label fw-semibold">Year Level <span class="text-danger">*</span></label>
+                                        <select class="form-select" id="year_level" name="year_level" required aria-required="true" aria-label="Year Level">
+                                            <option value="">Select Year Level</option>
+                                            <option value="1">Year 1</option>
+                                            <option value="2">Year 2</option>
+                                            <option value="3">Year 3</option>
+                                        </select>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    </div>
 
-                    <div class="mb-3">
-                        <label for="year_level" class="form-label">Year Level <span class="text-danger">*</span></label>
-                        <select class="form-control" id="year_level" name="year_level" required aria-required="true" aria-label="Year Level">
-                            <option value="">Select Year Level</option>
-                            <option value="1">Year 1</option>
-                            <option value="2">Year 2</option>
-                            <option value="3">Year 3</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Parent/Guardian Information -->
-            <div class="row mt-4">
-                <div class="col-12">
-                    <h6 class="section-title">Parent/Guardian Information</h6>
-                </div>
-                <div class="col-md-4">
-                    <div class="mb-3">
-                        <label for="parent_first_name" class="form-label">Parent First Name</label>
-                        <input type="text" class="form-control" id="parent_first_name" name="parent_first_name" aria-label="Parent First Name">
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="mb-3">
-                        <label for="parent_last_name" class="form-label">Parent Last Name</label>
-                        <input type="text" class="form-control" id="parent_last_name" name="parent_last_name" aria-label="Parent Last Name">
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="mb-3">
-                        <label for="parent_contact" class="form-label">Parent Contact</label>
-                        <input type="tel" class="form-control" id="parent_contact" name="parent_contact" aria-label="Parent Contact">
-                    </div>
-                </div>
-            </div>
-
-
-            <!-- Media Section -->
-            <div class="row mt-4">
-                <div class="col-md-6">
-                    <div class="mb-3">
-                        <label class="form-label">
-                            <i class="fas fa-camera me-2 text-primary"></i>
-                            Face Recognition Setup
-                            <small class="text-muted">(2-5 images required for accurate face recognition)</small>
-                        </label>
-
-
-                        <!-- File Upload Fallback -->
-                        <div class="file-upload-section">
-                            <div class="text-center mb-2">
-                                <small class="text-muted">Or upload existing images:</small>
-                            </div>
-                            <input type="file" class="form-control d-none" id="faceImagesInput" name="face_images[]" accept="image/jpeg,image/png,image/webp" multiple>
-                            <div class="face-images-upload-area" id="faceImagesUploadArea">
-                                <div class="face-images-placeholder">
-                                    <i class="fas fa-images fa-2x text-muted mb-2"></i>
-                                    <p class="mb-2">Click to select face images</p>
-                                    <small class="text-muted">JPEG, PNG, WebP (Max 5MB each, 2-5 images)</small>
+                            <!-- Parent/Guardian Information -->
+                            <div class="row mt-4">
+                                <div class="col-12">
+                                    <h6 class="section-title text-info border-info">
+                                        <i class="fas fa-users me-2"></i>Parent/Guardian Information
+                                    </h6>
                                 </div>
-                                <div id="faceImagesPreview" class="face-images-preview d-none">
-                                    <!-- Image previews will be inserted here -->
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="parent_first_name" class="form-label fw-semibold">Parent First Name</label>
+                                        <input type="text" class="form-control" id="parent_first_name" name="parent_first_name" aria-label="Parent First Name">
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="mt-2">
-                                <button type="button" class="btn btn-sm btn-outline-primary me-2" id="selectFaceImagesBtn">
-                                    <i class="fas fa-folder-open me-1"></i>Choose Files
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="clearFaceImages">
-                                    <i class="fas fa-trash me-1"></i>Clear All
-                                </button>
-                            </div>
-                            <div class="mt-2">
-                                <small id="faceImagesCount" class="text-muted">0 images selected</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="mb-3">
-                        <label class="form-label">
-                            <i class="fas fa-fingerprint me-2 text-info"></i>
-                            Fingerprint Registration
-                            <small class="text-muted">(Optional - enhances security)</small>
-                        </label>
-                        <div class="fingerprint-container">
-                            <div class="fingerprint-display">
-                                <canvas id="fingerprintCanvas" width="200" height="200" class="d-none"></canvas>
-                                <div id="fingerprintPlaceholder" class="fingerprint-placeholder">
-                                    <i class="fas fa-fingerprint fa-3x text-muted mb-2"></i>
-                                    <p class="text-muted">No fingerprint captured</p>
-                                    <small class="text-muted">Click "Capture Fingerprint" to enroll</small>
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="parent_last_name" class="form-label fw-semibold">Parent Last Name</label>
+                                        <input type="text" class="form-control" id="parent_last_name" name="parent_last_name" aria-label="Parent Last Name">
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="fingerprint-controls mt-3">
-                                <button type="button" class="btn btn-outline-info" id="captureFingerprintBtn">
-                                    <i class="fas fa-fingerprint me-2"></i>Capture Fingerprint
-                                </button>
-                                <button type="button" class="btn btn-outline-danger d-none" id="clearFingerprintBtn">
-                                    <i class="fas fa-times me-2"></i>Clear
-                                </button>
-                                <button type="button" class="btn btn-outline-success d-none" id="enrollFingerprintBtn">
-                                    <i class="fas fa-save me-2"></i>Enroll Fingerprint
-                                </button>
-                            </div>
-                            <div class="fingerprint-status mt-2">
-                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint</small>
-                            </div>
-                            <div class="mt-2">
-                                <div class="alert alert-info py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
-                                    <div class="d-flex align-items-center">
-                                        <i class="fas fa-info-circle text-info me-2 fs-6"></i>
-                                        <small class="text-info-emphasis fw-medium">Fingerprint enhances attendance security but is optional</small>
+                                <div class="col-md-4">
+                                    <div class="mb-3">
+                                        <label for="parent_contact" class="form-label fw-semibold">Parent Contact</label>
+                                        <input type="tel" class="form-control" id="parent_contact" name="parent_contact" aria-label="Parent Contact">
                                     </div>
                                 </div>
                             </div>
-                        </div>
+
+                            <!-- Media Section -->
+                            <div class="row mt-4">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label fw-semibold">
+                                            <i class="fas fa-camera me-2 text-primary"></i>
+                                            Face Recognition Setup
+                                            <small class="text-muted">(2-5 images required for accurate face recognition)</small>
+                                        </label>
+
+                                        <!-- File Upload Fallback -->
+                                        <div class="file-upload-section">
+                                            <div class="text-center mb-2">
+                                                <small class="text-muted">Or upload existing images:</small>
+                                            </div>
+                                            <input type="file" class="form-control d-none" id="faceImagesInput" name="face_images[]" accept="image/jpeg,image/png,image/webp" multiple>
+                                            <div class="face-images-upload-area border-primary" id="faceImagesUploadArea">
+                                                <div class="face-images-placeholder">
+                                                    <i class="fas fa-images fa-2x text-muted mb-2"></i>
+                                                    <p class="mb-2">Click to select face images</p>
+                                                    <small class="text-muted">JPEG, PNG, WebP (Max 5MB each, 2-5 images)</small>
+                                                </div>
+                                                <div id="faceImagesPreview" class="face-images-preview d-none">
+                                                    <!-- Image previews will be inserted here -->
+                                                </div>
+                                            </div>
+                                            <div class="mt-2">
+                                                <button type="button" class="btn btn-sm btn-outline-primary me-2" id="selectFaceImagesBtn">
+                                                    <i class="fas fa-folder-open me-1"></i>Choose Files
+                                                </button>
+                                                <button type="button" class="btn btn-sm btn-outline-danger d-none" id="clearFaceImages">
+                                                    <i class="fas fa-trash me-1"></i>Clear All
+                                                </button>
+                                            </div>
+                                            <div class="mt-2">
+                                                <small id="faceImagesCount" class="text-muted">0 images selected</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label class="form-label fw-semibold">
+                                            <i class="fas fa-fingerprint me-2 text-info"></i>
+                                            Fingerprint Registration
+                                            <small class="text-muted">(Optional - enhances security)</small>
+                                        </label>
+                                        <div class="fingerprint-container border-info">
+                                            <div class="fingerprint-display">
+                                                <canvas id="fingerprintCanvas" width="200" height="200" class="d-none"></canvas>
+                                                <div id="fingerprintPlaceholder" class="fingerprint-placeholder">
+                                                    <i class="fas fa-fingerprint fa-3x text-muted mb-2"></i>
+                                                    <p class="text-muted">No fingerprint captured</p>
+                                                    <small class="text-muted">Click "Capture Fingerprint" to enroll</small>
+                                                </div>
+                                            </div>
+                                            <div class="fingerprint-controls mt-3">
+                                                <button type="button" class="btn btn-outline-info" id="captureFingerprintBtn">
+                                                    <i class="fas fa-fingerprint me-2"></i>Capture Fingerprint
+                                                </button>
+                                                <button type="button" class="btn btn-outline-danger d-none" id="clearFingerprintBtn">
+                                                    <i class="fas fa-times me-2"></i>Clear
+                                                </button>
+                                                <button type="button" class="btn btn-outline-success d-none" id="enrollFingerprintBtn">
+                                                    <i class="fas fa-save me-2"></i>Enroll Fingerprint
+                                                </button>
+                                            </div>
+                                            <div class="fingerprint-status mt-2">
+                                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint</small>
+                                            </div>
+                                            <div class="mt-2">
+                                                <div class="alert alert-info py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
+                                                    <div class="d-flex align-items-center">
+                                                        <i class="fas fa-info-circle text-info me-2 fs-6"></i>
+                                                        <small class="text-info-emphasis fw-medium">Fingerprint enhances attendance security but is optional</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Submit Button -->
+                            <div class="row mt-4">
+                                <div class="col-12 text-center">
+                                    <button type="submit" class="btn btn-primary btn-lg px-5" id="submitBtn">
+                                        <i class="fas fa-paper-plane me-2"></i>Register Student
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
                     </div>
                 </div>
-            </div>
 
-            <!-- Submit Button -->
-            <div class="row mt-4">
-                <div class="col-12 text-center">
-                    <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
-                        <i class="fas fa-paper-plane me-2"></i>Register Student
-                    </button>
+                <!-- Loading Overlay -->
+                <div class="loading-overlay d-none" id="loadingOverlay">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <div class="mt-2">Processing registration...</div>
                 </div>
-            </div>
-        </form>
-    </div>
-</div>
-
-    <!-- Loading Overlay -->
-    <div class="loading-overlay d-none" id="loadingOverlay">
-        <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Loading...</span>
+            </main>
         </div>
-        <div class="mt-2">Processing registration...</div>
     </div>
 
     <!-- Custom CSS -->
@@ -717,7 +924,6 @@ if (empty($departments)) {
             flex-wrap: wrap;
         }
 
-
         /* Enhanced mobile fingerprint UI */
         @media (max-width: 768px) {
             .fingerprint-container {
@@ -818,179 +1024,49 @@ if (empty($departments)) {
 
     <!-- JavaScript -->
     <script>
-/**
-  * Enhanced Student Registration System - JavaScript
-  * Refined with better error handling and performance
-  */
-class StudentRegistration {
-    constructor() {
-        this.retryAttempts = 3;
-        this.retryDelay = 1000;
-        this.csrfToken = '<?= addslashes($csrf_token) ?>';
-        this.fingerprintCaptured = false;
-        this.fingerprintData = null;
-        this.fingerprintQuality = 0;
-        this.isCapturing = false;
-        this.originalCellOptions = [];
-        this.init();
-    }
+    /**
+     * Enhanced Student Registration System - JavaScript
+     * Refined with better error handling and performance
+     */
+    class StudentRegistration {
+        constructor() {
+            this.retryAttempts = 3;
+            this.retryDelay = 1000;
+            this.csrfToken = '<?= addslashes($csrf_token) ?>';
+            this.fingerprintCaptured = false;
+            this.fingerprintData = null;
+            this.fingerprintQuality = 0;
+            this.isCapturing = false;
+            this.originalCellOptions = [];
+            this.init();
+        }
 
-    init() {
-        try {
-            this.setupEventListeners();
+        init() {
+            try {
+                this.setupEventListeners();
+                this.updateProgress();
+                this.initializeFormState();
+                this.showWelcomeMessage();
+                this.setupGlobalErrorHandler();
+                this.checkServerConnectivity();
+            } catch (error) {
+                console.error('Initialization error:', error);
+                this.showAlert('System initialization failed. Please refresh the page.', 'error', false);
+            }
+        }
+
+        initializeFormState() {
+            // Set initial form state
             this.updateProgress();
-            this.initializeFormState();
-            this.showWelcomeMessage();
-            this.setupGlobalErrorHandler();
-            this.checkServerConnectivity();
-        } catch (error) {
-            console.error('Initialization error:', error);
-            this.showAlert('System initialization failed. Please refresh the page.', 'error', false);
+
+            // Pre-validate form on load
+            setTimeout(() => {
+                this.validateForm();
+            }, 1000);
+
+            // Initialize fingerprint UI
+            this.updateFingerprintUI('ready');
         }
-    }
-
-    initializeFormState() {
-        // Set initial form state
-        this.updateProgress();
-
-        // Pre-validate form on load
-        setTimeout(() => {
-            this.validateForm();
-        }, 1000);
-
-        // Initialize fingerprint UI
-        this.updateFingerprintUI('ready');
-    }
-
-
-
-    setupGlobalErrorHandler() {
-        // Handle unhandled promise rejections
-        window.addEventListener('unhandledrejection', (event) => {
-            console.error('Unhandled promise rejection:', event.reason);
-            this.showAlert('An unexpected error occurred. Please try again.', 'error');
-            event.preventDefault();
-        });
-
-        // Handle global JavaScript errors
-        window.addEventListener('error', (event) => {
-            console.error('Global JavaScript error:', event.error);
-            // Don't show alert for minor errors to avoid spam
-            if (event.error && !event.error.message.includes('Script error')) {
-                this.showAlert('A system error occurred. Please refresh if issues persist.', 'error');
-            }
-        });
-    }
-
-    async checkServerConnectivity() {
-        try {
-            // Quick connectivity check to a lightweight endpoint
-            const response = await fetch('api/department-option-api.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: `action=get_options&department_id=1&csrf_token=${this.csrfToken}`,
-                signal: AbortSignal.timeout(5000) // 5 second timeout
-            });
-
-            if (response.ok) {
-                console.log('✅ Server connectivity check passed');
-            } else {
-                console.warn('⚠️ Server connectivity check failed with status:', response.status);
-                this.showAlert('⚠️ Server connection may be unstable. Please check your internet connection.', 'warning');
-            }
-        } catch (error) {
-            console.error('❌ Server connectivity check failed:', error);
-            this.showAlert('⚠️ Unable to connect to server. Please check your internet connection and try refreshing the page.', 'warning');
-        }
-    }
-
-    setupEventListeners() {
-        // Department change with error handling
-        $('#department').on('change', this.debounce(this.handleDepartmentChange.bind(this), 300));
-
-
-        // Face images handling
-        $('#selectFaceImagesBtn').on('click', () => $('#faceImagesInput').click());
-        $('#faceImagesInput').on('change', this.handleFaceImagesSelect.bind(this));
-        $('#clearFaceImages').on('click', this.clearFaceImages.bind(this));
-        $(document).on('click', '.remove-image', this.removeFaceImage.bind(this));
-
-        // Drag and drop for face images
-        $('#faceImagesUploadArea').on('dragover dragenter', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            $(e.currentTarget).addClass('dragover');
-        }).on('dragleave dragend drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            $(e.currentTarget).removeClass('dragover');
-        }).on('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const files = e.originalEvent.dataTransfer.files;
-            if (files.length > 0) {
-                // Create a synthetic event for the file input
-                const syntheticEvent = { target: { files: files } };
-                this.handleFaceImagesSelect(syntheticEvent);
-            }
-        }).on('click', () => $('#faceImagesInput').click());
-
-
-        // Form submission
-        $('#registrationForm').on('submit', this.handleSubmit.bind(this));
-
-        // Real-time validation
-        $('input[required]').on('blur', this.validateField.bind(this));
-        $('input[required]').on('input', this.debounce(this.updateProgress.bind(this), 200));
-
-        // Enhanced registration number validation
-        $('input[name="reg_no"]').on('input', this.validateRegistrationNumber.bind(this));
-
-        // Real-time email validation
-        $('input[name="email"]').on('blur', this.validateEmailField.bind(this));
-
-        // Real-time phone validation
-        $('input[name="telephone"], input[name="parent_contact"]').on('blur', this.validatePhoneField.bind(this));
-        $('#studentIdNumber').on('input', this.validateStudentId.bind(this));
-
-        // Phone number input filtering (digits only, max 10 characters)
-        $('input[name="telephone"]').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
-        });
-
-        // Student ID number input filtering (digits only)
-        $('#studentIdNumber').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
-
-        // Parent contact input filtering (digits only, max 10 characters)
-        $('input[name="parent_contact"]').on('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '').substring(0, 10);
-        });
-
-        // Fingerprint functionality
-        $('#captureFingerprintBtn').on('click', this.startFingerprintCapture.bind(this));
-        $('#clearFingerprintBtn').on('click', this.clearFingerprint.bind(this));
-        $('#enrollFingerprintBtn').on('click', this.enrollFingerprint.bind(this));
-    }
-
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    async handleDepartmentChange() {
-        const deptId = $('#department').val();
         const $option = $('#option');
         const $loadingSpinner = $('.program-loading');
 
@@ -1260,10 +1336,10 @@ class StudentRegistration {
 
     escapeHtml(unsafe) {
         return unsafe
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
+            .replace(/&/g, "&")
+            .replace(/</g, "<")
+            .replace(/>/g, ">")
+            .replace(/"/g, """)
             .replace(/'/g, "&#039;");
     }
 
@@ -1618,8 +1694,6 @@ class StudentRegistration {
             $countElement.removeClass('text-muted text-success').addClass('text-warning');
         }
     }
-
-
 
 
 
@@ -2103,9 +2177,6 @@ class StudentRegistration {
             errorMessage = `Request error (${error.status}: ${error.statusText}).`;
             errorTitle = 'Request Error';
             troubleshooting = ' Please try again or contact support if this persists.';
-        } else if (error.statusText) {
-            errorMessage = `Network error: ${error.statusText}`;
-            errorTitle = 'Network Error';
         }
 
         // Add troubleshooting information
@@ -2131,12 +2202,12 @@ $(document).ready(() => {
     // Initialize with error handling
     try {
         window.registrationApp = new StudentRegistration();
-        
+
         // Add performance monitoring
         if (performance.mark) {
             performance.mark('registration_loaded');
         }
-        
+
         console.log('✅ Student Registration System initialized successfully');
     } catch (error) {
         console.error('❌ Failed to initialize registration system:', error);
@@ -2166,4 +2237,5 @@ $(document).ready(() => {
 });
     </script>
 </body>
+
 </html>

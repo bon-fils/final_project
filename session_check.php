@@ -316,4 +316,35 @@ function check_rate_limit($action, $limit = 5, $time_window = 300) { // 5 attemp
     $_SESSION['rate_limit'][$key]['count']++;
     return true;
 }
+
+// Authentication check function
+function checkAuthentication() {
+    // Check if user is logged in
+    if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+        // Detect AJAX requests
+        $is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+            http_response_code(401);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Authentication required. Please login.',
+                'error_code' => 'AUTH_REQUIRED',
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+            exit;
+        } else {
+            header("Location: login.php");
+            exit;
+        }
+    }
+
+    // Additional validation for user_id format
+    if (!is_numeric($_SESSION['user_id'])) {
+        session_destroy();
+        header("Location: login.php?error=invalid_session");
+        exit;
+    }
+}
 ?>
