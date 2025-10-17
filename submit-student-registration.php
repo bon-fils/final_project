@@ -8,11 +8,25 @@
 require_once 'config.php';
 require_once 'security_utils.php';
 require_once 'backend/classes/Logger.php';
+require_once 'backend/classes/DataSanitizer.php';
+
+// Fallback DataSanitizer class if the file doesn't exist
+if (!class_exists('DataSanitizer')) {
+    class DataSanitizer {
+        public static function string($value) {
+            return trim(filter_var($value, FILTER_SANITIZE_STRING, FILTER_FLAG_NO_ENCODE_QUOTES));
+        }
+
+        public static function email($value) {
+            return filter_var(trim($value), FILTER_SANITIZE_EMAIL);
+        }
+    }
+}
 
 // Rate limiting for registration attempts
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 $rate_limit_key = "student_registration_{$client_ip}";
-if (!check_ip_rate_limit($rate_limit_key, 5, 300)) { // 5 attempts per 5 minutes
+if (!SecurityUtils::checkRateLimit($rate_limit_key, 5, 300)) { // 5 attempts per 5 minutes
     http_response_code(429);
     echo json_encode([
         'success' => false,
@@ -186,56 +200,136 @@ function validateStudentInput($postData, $logger) {
         'has_files' => isset($_FILES['face_images'])
     ]);
 
-    $validator = new InputValidator($postData);
+    // Check if InputValidator class exists, fallback to manual validation
+    if (class_exists('InputValidator')) {
+        $validator = new InputValidator($postData);
 
-    // Required field validations with enhanced security
-    $validator
-        ->required(['first_name', 'last_name', 'email', 'telephone', 'department_id', 'option_id', 'reg_no', 'sex', 'year_level'])
-        ->length('first_name', 2, 50)
-        ->length('last_name', 2, 50)
-        ->email('email')
-        ->phone('telephone')
-        ->length('reg_no', 5, 20)
-        ->custom('reg_no', function($v) {
-            // Additional validation for registration number format
-            return preg_match('/^[A-Za-z0-9_-]{5,20}$/', $v);
-        }, 'Registration number must contain only letters, numbers, underscores, and hyphens (5-20 characters)')
-        ->custom('department_id', fn($v) => is_numeric($v) && (int)$v > 0, 'Please select a valid department')
-        ->custom('option_id', fn($v) => is_numeric($v) && (int)$v > 0, 'Please select a valid program')
-        ->custom('year_level', fn($v) => in_array((string)$v, ['1','2','3']), 'Please select a valid year level')
-        ->custom('sex', fn($v) => in_array($v, ['Male','Female','Other']), 'Please select a valid gender');
+        // Required field validations with enhanced security
+        $validator
+            ->required(['first_name', 'last_name', 'email', 'telephone', 'department_id', 'option_id', 'reg_no', 'sex', 'year_level'])
+            ->length('first_name', 2, 50)
+            ->length('last_name', 2, 50)
+            ->email('email')
+            ->phone('telephone')
+            ->length('reg_no', 5, 20)
+            ->custom('reg_no', function($v) {
+                // Additional validation for registration number format
+                return preg_match('/^[A-Za-z0-9_-]{5,20}$/', $v);
+            }, 'Registration number must contain only letters, numbers, underscores, and hyphens (5-20 characters)')
+            ->custom('department_id', fn($v) => is_numeric($v) && (int)$v > 0, 'Please select a valid department')
+            ->custom('option_id', fn($v) => is_numeric($v) && (int)$v > 0, 'Please select a valid program')
+            ->custom('year_level', fn($v) => in_array((string)$v, ['1','2','3']), 'Please select a valid year level')
+            ->custom('sex', fn($v) => in_array($v, ['Male','Female','Other']), 'Please select a valid gender');
+    } else {
+        // Fallback manual validation
+        $errors = [];
 
-    if (!empty($postData['parent_contact'])) {
-        $validator->phone('parent_contact');
+        // Required fields check
+        $requiredFields = ['first_name', 'last_name', 'email', 'telephone', 'department_id', 'option_id', 'reg_no', 'sex', 'year_level'];
+        foreach ($requiredFields as $field) {
+            if (empty(trim($postData[$field] ?? ''))) {
+                $errors[$field] = ucfirst(str_replace('_', ' ', $field)) . ' is required';
+            }
+        }
+
+        // Length validations
+        if (isset($postData['first_name']) && (strlen($postData['first_name']) < 2 || strlen($postData['first_name']) > 50)) {
+            $errors['first_name'] = 'First name must be between 2 and 50 characters';
+        }
+        if (isset($postData['last_name']) && (strlen($postData['last_name']) < 2 || strlen($postData['last_name']) > 50)) {
+            $errors['last_name'] = 'Last name must be between 2 and 50 characters';
+        }
+
+        // Email validation
+        if (isset($postData['email']) && !filter_var($postData['email'], FILTER_VALIDATE_EMAIL)) {
+            $errors['email'] = 'Please enter a valid email address';
+        }
+
+        // Phone validation (basic)
+        if (isset($postData['phone']) && !preg_match('/^0\d{9}$/', $postData['phone'])) {
+            $errors['telephone'] = 'Phone number must be exactly 10 digits starting with 0';
+        }
+
+        // Registration number validation
+        if (isset($postData['reg_no'])) {
+            if (strlen($postData['reg_no']) < 5 || strlen($postData['reg_no']) > 20) {
+                $errors['reg_no'] = 'Registration number must be 5-20 characters';
+            } elseif (!preg_match('/^[A-Za-z0-9_-]{5,20}$/', $postData['reg_no'])) {
+                $errors['reg_no'] = 'Registration number must contain only letters, numbers, underscores, and hyphens';
+            }
+        }
+
+        // Department and option validation
+        if (isset($postData['department_id']) && (!is_numeric($postData['department_id']) || (int)$postData['department_id'] <= 0)) {
+            $errors['department_id'] = 'Please select a valid department';
+        }
+        if (isset($postData['option_id']) && (!is_numeric($postData['option_id']) || (int)$postData['option_id'] <= 0)) {
+            $errors['option_id'] = 'Please select a valid program';
+        }
+
+        // Year level validation
+        if (isset($postData['year_level']) && !in_array((string)$postData['year_level'], ['1','2','3'])) {
+            $errors['year_level'] = 'Please select a valid year level';
+        }
+
+        // Gender validation
+        if (isset($postData['sex']) && !in_array($postData['sex'], ['Male','Female','Other'])) {
+            $errors['sex'] = 'Please select a valid gender';
+        }
+
+        if (!empty($errors)) {
+            $logger->warning('StudentRegistration', 'Validation failed for student registration', [
+                'errors' => $errors,
+                'error_count' => count($errors),
+                'email' => $postData['email'] ?? 'unknown',
+                'reg_no' => $postData['reg_no'] ?? 'unknown'
+            ]);
+
+            return [
+                'valid' => false,
+                'response' => createErrorResponse('Please correct the following errors:', 422, $errors)
+            ];
+        }
+
+        // Skip the rest of the validation function since we did manual validation
+        $validator = null; // Set to null to indicate manual validation was used
     }
-    if (!empty($postData['studentIdNumber'])) {
-        $validator->custom('studentIdNumber', function($v) {
-            return preg_match('/^\d{16}$/', $v);
-        }, 'Student ID number must be exactly 16 digits');
-    }
-    if (!empty($postData['dob'])) {
-        $validator->date('dob', 'Y-m-d');
-        $dob = $postData['dob'];
-        $birthDate = DateTime::createFromFormat('Y-m-d', $dob);
-        $today = new DateTime();
-        $age = $birthDate ? $today->diff($birthDate)->y : null;
-        if (!$birthDate || $age < 16 || $age > 60) {
-            $validator->custom('dob', fn() => false, 'Student must be between 16 and 60 years old');
+
+    if ($validator) {
+        if (!empty($postData['parent_contact'])) {
+            $validator->phone('parent_contact');
+        }
+        if (!empty($postData['studentIdNumber'])) {
+            $validator->custom('studentIdNumber', function($v) {
+                return preg_match('/^\d{16}$/', $v);
+            }, 'Student ID number must be exactly 16 digits');
+        }
+        if (!empty($postData['dob'])) {
+            $validator->date('dob', 'Y-m-d');
+            $dob = $postData['dob'];
+            $birthDate = DateTime::createFromFormat('Y-m-d', $dob);
+            $today = new DateTime();
+            $age = $birthDate ? $today->diff($birthDate)->y : null;
+            if (!$birthDate || $age < 16 || $age > 60) {
+                $validator->custom('dob', fn() => false, 'Student must be between 16 and 60 years old');
+            }
         }
     }
 
-    // Validate name fields for potential XSS
-    $nameFields = ['first_name', 'last_name', 'parent_first_name', 'parent_last_name'];
-    foreach ($nameFields as $field) {
-        if (!empty($postData[$field])) {
-            $validator->custom($field, function($v) {
-                // Check for suspicious patterns
-                return !preg_match('/[<>\"\'&]/', $v);
-            }, "Invalid characters in {$field}");
+    // Validate name fields for potential XSS (only if validator exists)
+    if ($validator) {
+        $nameFields = ['first_name', 'last_name', 'parent_first_name', 'parent_last_name'];
+        foreach ($nameFields as $field) {
+            if (!empty($postData[$field])) {
+                $validator->custom($field, function($v) {
+                    // Check for suspicious patterns
+                    return !preg_match('/[<>\"\'&]/', $v);
+                }, "Invalid characters in {$field}");
+            }
         }
     }
 
-    if ($validator->fails()) {
+    if ($validator && $validator->fails()) {
         $errors = $validator->errors();
         $logger->warning('StudentRegistration', 'Validation failed for student registration', [
             'errors' => $errors,
@@ -252,19 +346,19 @@ function validateStudentInput($postData, $logger) {
 
     // Enhanced data sanitization with additional security measures
     $studentData = [
-        'first_name' => DataSanitizer::string($postData['first_name']),
-        'last_name' => DataSanitizer::string($postData['last_name']),
-        'email' => DataSanitizer::email($postData['email']),
-        'telephone' => DataSanitizer::string($postData['telephone']),
+        'first_name' => trim($postData['first_name']),
+        'last_name' => trim($postData['last_name']),
+        'email' => filter_var(trim($postData['email']), FILTER_SANITIZE_EMAIL),
+        'telephone' => trim($postData['telephone']),
         'department_id' => (int)$postData['department_id'],
         'option_id' => (int)$postData['option_id'],
-        'reg_no' => DataSanitizer::string(strtoupper($postData['reg_no'])), // Normalize to uppercase
-        'student_id' => DataSanitizer::string($postData['studentIdNumber'] ?? ''),
-        'parent_first_name' => DataSanitizer::string($postData['parent_first_name'] ?? ''),
-        'parent_last_name' => DataSanitizer::string($postData['parent_last_name'] ?? ''),
-        'parent_contact' => DataSanitizer::string($postData['parent_contact'] ?? ''),
-        'dob' => DataSanitizer::string($postData['dob'] ?? ''),
-        'sex' => DataSanitizer::string($postData['sex'] ?? ''),
+        'reg_no' => strtoupper(trim($postData['reg_no'])), // Normalize to uppercase
+        'student_id' => trim($postData['studentIdNumber'] ?? ''),
+        'parent_first_name' => trim($postData['parent_first_name'] ?? ''),
+        'parent_last_name' => trim($postData['parent_last_name'] ?? ''),
+        'parent_contact' => trim($postData['parent_contact'] ?? ''),
+        'dob' => trim($postData['dob'] ?? ''),
+        'sex' => trim($postData['sex'] ?? ''),
         'year_level' => (int)($postData['year_level'] ?? 1)
     ];
 
@@ -650,11 +744,13 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             INSERT INTO students (
                 user_id, option_id, year_level, reg_no, student_id_number,
                 fingerprint_path, fingerprint_quality, student_photos,
-                department_id, parent_first_name, parent_last_name, parent_contact
+                department_id, parent_first_name, parent_last_name, parent_contact,
+                status, fingerprint_status
             ) VALUES (
                 :user_id, :option_id, :year_level, :reg_no, :student_id,
                 :fingerprint_path, :fingerprint_quality, :student_photos,
-                :department_id, :parent_first_name, :parent_last_name, :parent_contact
+                :department_id, :parent_first_name, :parent_last_name, :parent_contact,
+                'active', :fingerprint_status
             )
         ");
 
@@ -670,7 +766,8 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             ':department_id' => $studentData['department_id'],
             ':parent_first_name' => $studentData['parent_first_name'],
             ':parent_last_name' => $studentData['parent_last_name'],
-            ':parent_contact' => $studentData['parent_contact']
+            ':parent_contact' => $studentData['parent_contact'],
+            ':fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled'
         ]);
 
         $studentId = $pdo->lastInsertId();
@@ -705,6 +802,7 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             'face_images_count' => count($faceImagePaths),
             'fingerprint_enrolled' => !empty($fingerprintData['path']),
             'fingerprint_quality' => $fingerprintData['quality'] ?? 0,
+            'fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled',
             'biometric_types' => array_filter([
                 !empty($faceImagePaths) ? 'face_recognition' : null,
                 !empty($fingerprintData['path']) ? 'fingerprint' : null
@@ -744,6 +842,7 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             'record_creation_time_ms' => round($recordTime * 1000, 2),
             'face_images_count' => count($faceImagePaths),
             'fingerprint_enrolled' => !empty($fingerprintData['path']),
+            'fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled',
             'guardian_registered' => !empty($studentData['parent_first_name']) || !empty($studentData['parent_last_name'])
         ]);
 

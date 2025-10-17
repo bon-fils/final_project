@@ -175,7 +175,6 @@ function loadRoleSpecificData($pdo, $user) {
                     ]);
                     return "students-dashboard.php";
                 }
-                break;
 
             case 'lecturer':
             case 'hod':

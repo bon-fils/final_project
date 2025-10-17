@@ -13,7 +13,10 @@ $referer = $_SERVER['HTTP_REFERER'] ?? '';
 $isFromRegistration = strpos($referer, 'register-student.php') !== false ||
                       strpos($referer, 'admin-register-lecturer.php') !== false;
 
-if (!$isFromRegistration) {
+// Allow unauthenticated access for basic connectivity checks and registration page
+if (!$isFromRegistration && !isset($_POST['action'])) {
+    // For connectivity checks, skip authentication
+} elseif (!$isFromRegistration) {
     require_once "../session_check.php";
     require_role(['admin', 'lecturer', 'hod']);
 }
@@ -31,6 +34,16 @@ header('X-Content-Type-Options: nosniff');
 // Request handler
 try {
     $action = $_POST['action'] ?? $_GET['action'] ?? '';
+
+    // Handle connectivity check (no action specified)
+    if (empty($action)) {
+        echo json_encode([
+            'success' => true,
+            'message' => 'API connectivity check successful',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+        exit;
+    }
 
     switch ($action) {
         case 'get_options':
@@ -74,6 +87,18 @@ function handleGetOptions() {
                    filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
 
     if (!$departmentId) {
+        // For registration page (unauthenticated), return empty result for connectivity check
+        if (!isset($_SESSION['role'])) {
+            echo json_encode([
+                'success' => true,
+                'data' => [],
+                'count' => 0,
+                'message' => 'No department specified for options retrieval',
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+            return;
+        }
+
         // For admin users, allow getting all options if no department specified
         if (isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
             // Return all active options for admin

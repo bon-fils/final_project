@@ -1,0 +1,25 @@
+# ESP32 Fingerprint System Configuration
+# Copy these settings to your .env file
+
+# ESP32 Device Configuration
+ESP32_IP=192.168.1.100
+ESP32_PORT=80
+ESP32_TIMEOUT=10
+
+# Fingerprint System Settings
+FINGERPRINT_ENABLED=true
+FINGERPRINT_MAX_RETRIES=3
+FINGERPRINT_ENROLLMENT_TIMEOUT=60
+
+# Network Configuration
+FINGERPRINT_NETWORK_TIMEOUT=5
+FINGERPRINT_RETRY_DELAY=2000
+
+# Security Settings
+FINGERPRINT_API_KEY=your_secure_api_key_here
+FINGERPRINT_RATE_LIMIT=10
+
+# Logging
+FINGERPRINT_LOG_LEVEL=info
+FINGERPRINT_LOG_ENROLLMENT=true
+FINGERPRINT_LOG_IDENTIFICATION=true

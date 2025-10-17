@@ -14,9 +14,15 @@ require_role(['admin']);
  * Uses a single query with multiple COUNT aggregations for better performance
  */
 function getDashboardStats() {
-    global $pdo;
+    global $pdo, $redisCache;
 
-    // Check cache first (cache for 5 minutes)
+    // Try Redis cache first
+    $cachedStats = $redisCache->getCachedDashboardStats('admin');
+    if ($cachedStats) {
+        return $cachedStats;
+    }
+
+    // Check file cache as fallback
     $cache_key = 'dashboard_stats';
     $cache_file = 'cache/dashboard_stats.cache';
     $cache_time = 300; // 5 minutes
@@ -24,6 +30,8 @@ function getDashboardStats() {
     if (file_exists($cache_file) && (time() - filemtime($cache_file)) < $cache_time) {
         $cached_data = json_decode(file_get_contents($cache_file), true);
         if ($cached_data) {
+            // Also cache in Redis for next time
+            $redisCache->cacheDashboardStats('admin', $cached_data, $cache_time);
             return $cached_data;
         }
     }
@@ -89,11 +97,14 @@ function getDashboardStats() {
             'last_updated' => date('Y-m-d H:i:s')
         ];
 
-        // Cache the results
+        // Cache the results in both Redis and file cache
         if (!is_dir('cache')) {
             mkdir('cache', 0755, true);
         }
         file_put_contents($cache_file, json_encode($stats));
+        
+        // Cache in Redis for better performance
+        $redisCache->cacheDashboardStats('admin', $stats, $cache_time);
 
         return $stats;
 

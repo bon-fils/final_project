@@ -26,7 +26,7 @@ $isFromRegistration = strpos($referer, 'register-student.php') !== false;
 if (!$isFromRegistration) {
     $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
     $rate_limit_key = "location_api_{$client_ip}";
-    if (!check_ip_rate_limit($rate_limit_key, 100, 3600)) { // 100 requests per hour
+    if (!SecurityUtils::checkRateLimit($rate_limit_key, 100, 3600)) { // 100 requests per hour
         http_response_code(429);
         echo json_encode([
             'success' => false,

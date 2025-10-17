@@ -80,10 +80,12 @@ try {
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
-            PDO::ATTR_TIMEOUT            => 30, // 30 second timeout
-            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
+            PDO::ATTR_TIMEOUT            => 30 // 30 second timeout
         ]
     );
+
+    // Execute charset setting manually for compatibility
+    $pdo->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
 
     // Set connection attributes for better performance and security
     $pdo->setAttribute(PDO::ATTR_STRINGIFY_FETCHES, false);
@@ -156,10 +158,25 @@ function sanitize_filename(string $filename): string {
     return $filename;
 }
 
+// Initialize security features
+require_once __DIR__ . '/security_utils.php';
+require_once __DIR__ . '/redis_cache_manager.php';
+
+// Enforce HTTPS in production
+SecurityUtils::enforceHTTPS();
+
+// Set security headers
+SecurityUtils::setSecurityHeaders();
+
+// Initialize Redis cache
+$redisCache = new RedisCacheManager();
+
 // Initialize application
 log_message('info', 'Application initialized', [
     'version' => APP_VERSION,
     'environment' => APP_ENV,
-    'database' => $db_name
+    'database' => $db_name,
+    'https_enabled' => SecurityUtils::isHTTPS(),
+    'cache_type' => $redisCache->getStats()['type'] ?? 'unknown'
 ]);
 ?>

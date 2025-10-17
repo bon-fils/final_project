@@ -3,10 +3,16 @@ require_once "config.php";
 
 echo "=== LOGIN TEST ===\n\n";
 
-// Test admin login
-$email = "admin@rp.ac.rw";
-$password = "admin123";
+// Use environment variables for test credentials
+$email = $_ENV['TEST_ADMIN_EMAIL'] ?? "admin@rp.ac.rw";
+$password = $_ENV['TEST_ADMIN_PASSWORD'] ?? null;
 $role = "admin";
+
+if (!$password) {
+    echo "❌ Test password not configured. Set TEST_ADMIN_PASSWORD environment variable.\n";
+    echo "For security, never hardcode passwords in source code.\n";
+    exit(1);
+}
 
 try {
     // Check if user exists
