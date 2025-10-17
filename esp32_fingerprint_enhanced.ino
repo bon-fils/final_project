@@ -1,433 +1,496 @@
-/**
- * Enhanced ESP32 Fingerprint System
- * Complete fingerprint enrollment and identification system with web server
- * Integrates with PHP attendance system
- * 
- * Hardware Requirements:
- * - ESP32 Dev Board
- * - Fingerprint Sensor (AS608/GT-511C3)
- * - OLED Display (SSD1306)
- * - LEDs (Red, Yellow, Green)
- * - Resistors and connecting wires
- * 
- * Connections:
- * - Fingerprint Sensor: RX=16, TX=17
- * - OLED Display: SDA=21, SCL=22
- * - LEDs: Red=2, Yellow=4, Green=5
- */
-
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ESPmDNS.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <SoftwareSerial.h>
 #include <Adafruit_Fingerprint.h>
+#include <HardwareSerial.h>
+#include <WiFi.h>
+#include <WebServer.h>
 
-// WiFi Configuration
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-IPAddress local_IP(192, 168, 1, 100);
-IPAddress gateway(192, 168, 1, 1);
-IPAddress subnet(255, 255, 255, 0);
-
-// Hardware Configuration
-#define FINGERPRINT_RX_PIN 16
-#define FINGERPRINT_TX_PIN 17
-#define LED_RED_PIN 2
-#define LED_YELLOW_PIN 4
-#define LED_GREEN_PIN 5
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
 #define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
 
-// Initialize Components
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+HardwareSerial mySerial(2); // UART2 on ESP32 (RX = GPIO16, TX = GPIO17)
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+
+// LED Pins (your chosen pins)
+#define LED_GREEN 4   // D4 -> Match found
+#define LED_RED 2     // D2 -> No match / error
+#define LED_YELLOW 18 // D18 -> Waiting / scanning
+
+// WiFi credentials
+const char *ssid = "CodeFusion";
+const char *password = "12345678";
+
+// PHP Server IP (where the attendance system is hosted)
+const char *serverIP = "192.168.1.127";
+
 WebServer server(80);
-SoftwareSerial fingerprintSerial(FINGERPRINT_RX_PIN, FINGERPRINT_TX_PIN);
-Adafruit_Fingerprint finger = Adafruit_Fingerprint(&fingerprintSerial);
-Adafruit_SSD1306 display(128, 64, &Wire, OLED_RESET);
 
-// Global Variables
-bool enrollmentActive = false;
-uint8_t enrollmentId = 0;
-String enrollmentStudentName = "";
-String enrollmentRegNo = "";
+uint8_t enrollID = 1; // Default enrollment ID
+bool continuousScanMode = false; // Continuous scan flag
 
-void setup() {
-    Serial.begin(115200);
-    
-    // Initialize hardware
-    initializeHardware();
-    
-    // Connect to WiFi
-    connectToWiFi();
-    
-    // Initialize fingerprint sensor
-    initializeFingerprintSensor();
-    
-    // Setup web server routes
-    setupWebServer();
-    
-    // Start web server
-    server.begin();
-    
-    Serial.println("ESP32 Fingerprint System Ready!");
+// Function Prototypes
+void showMessage(String msg);
+void enrollFingerprint(uint8_t id);
+void waitForFinger();
+bool scanFingerprintOnce();
+void handleIdentify();
+void handleStatus();
+void handleDisplay();
+void handleEnroll();
+void handleStartScan();
+void handleStopScan();
+void displayMessage(String message);
+void turnOffLEDs();
+void indicateError();
+void indicateSuccess();
+
+void setup()
+{
+  Serial.begin(115200);
+  mySerial.begin(57600, SERIAL_8N1, 16, 17); // RX=16, TX=17
+  Wire.begin(21, 22);                        // SDA, SCL
+
+  // LED Setup
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_YELLOW, OUTPUT);
+  turnOffLEDs();
+
+  // OLED setup
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  {
+    Serial.println(F("SSD1306 allocation failed"));
+    while (true)
+      ;
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Connect to WiFi
+  displayMessage("Connecting to WiFi...");
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20)
+  {
+    delay(1000);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("\nWiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    displayMessage("WiFi Connected\nIP: " + WiFi.localIP().toString());
+  }
+  else
+  {
+    Serial.println("WiFi connection failed");
+    displayMessage("WiFi Failed!");
+    while (true)
+      ;
+  }
+
+  delay(2000);
+
+  // Fingerprint setup
+  finger.begin(57600);
+  if (finger.verifyPassword())
+  {
+    showMessage("Sensor OK!");
+    Serial.println("Sensor detected and ready");
+    delay(1000);
     displayMessage("System Ready");
-    setLEDStatus("ready");
+  }
+  else
+  {
+    showMessage("Sensor not found!");
+    Serial.println("Fingerprint sensor not found!");
+    indicateError();
+    while (true)
+      ;
+  }
+
+  // Setup web server routes
+  server.on("/identify", HTTP_GET, handleIdentify);
+  server.on("/status", HTTP_GET, handleStatus);
+  server.on("/display", HTTP_GET, handleDisplay);
+  server.on("/enroll", HTTP_POST, handleEnroll);
+  server.on("/start_scan", HTTP_GET, handleStartScan);
+  server.on("/stop_scan", HTTP_GET, handleStopScan);
+
+  server.enableCORS(true);
+  server.begin();
+  Serial.println("HTTP server started");
 }
 
-void loop() {
-    server.handleClient();
-    
-    // Handle enrollment process
-    if (enrollmentActive) {
-        handleEnrollmentProcess();
-    }
-    
+void loop()
+{
+  server.handleClient();
+
+  if (continuousScanMode)
+  {
+    // Non-blocking-ish continuous scan: the function itself uses small waits
+    scanFingerprintOnce();
+    // small pause to reduce CPU burn and avoid overwhelming sensor
+    delay(120);
+  }
+}
+
+// Turn all LEDs off
+void turnOffLEDs()
+{
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_RED, LOW);
+  digitalWrite(LED_YELLOW, LOW);
+}
+
+// show message centered-ish on OLED
+void showMessage(String msg)
+{
+  display.clearDisplay();
+  display.setCursor(0, 20);
+  display.println(msg);
+  display.display();
+}
+
+void displayMessage(String message)
+{
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println(message);
+  display.display();
+}
+
+// Enhanced LED indication with proper state management
+void indicateError()
+{
+  // Only activate red LED for scanning failures
+  turnOffLEDs();
+  digitalWrite(LED_RED, HIGH);
+  delay(1000); // Keep red LED on for 1 second to show error
+  digitalWrite(LED_RED, LOW);
+}
+
+void indicateSuccess()
+{
+  turnOffLEDs();
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(LED_GREEN, HIGH);
+    delay(300);
+    digitalWrite(LED_GREEN, LOW);
+    delay(200);
+  }
+  // Ensure LED is off after blinking
+  digitalWrite(LED_GREEN, LOW);
+}
+
+void indicateWaiting()
+{
+  static unsigned long lastBlink = 0;
+  if (millis() - lastBlink > 200) {
+    digitalWrite(LED_YELLOW, !digitalRead(LED_YELLOW));
+    lastBlink = millis();
+  }
+}
+
+void indicateProcessing()
+{
+  static unsigned long lastBlink = 0;
+  if (millis() - lastBlink > 100) {
+    digitalWrite(LED_YELLOW, !digitalRead(LED_YELLOW));
+    lastBlink = millis();
+  }
+}
+
+// Wait for finger (blocking) with yellow LED and OLED message
+void waitForFinger()
+{
+  digitalWrite(LED_YELLOW, HIGH);
+  displayMessage("Place your finger...");
+  int p = finger.getImage();
+  while (p != FINGERPRINT_OK)
+  {
+    Serial.println("Waiting for finger...");
+    p = finger.getImage();
     delay(100);
+  }
+
+  // finger detected
+  digitalWrite(LED_YELLOW, LOW);
+  showMessage("Finger Detected!");
+  Serial.println("Finger detected!");
+  delay(400);
 }
 
-void initializeHardware() {
-    // Initialize OLED display
-    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        Serial.println("OLED initialization failed!");
-    }
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Initializing...");
-    display.display();
-    
-    // Initialize LED pins
-    pinMode(LED_RED_PIN, OUTPUT);
-    pinMode(LED_YELLOW_PIN, OUTPUT);
-    pinMode(LED_GREEN_PIN, OUTPUT);
-    
-    // Set initial LED state
-    setLEDStatus("idle");
-}
+// Global variables to track enrollment status
+bool enrollmentSuccess = false;
+String enrollmentErrorMessage = "";
 
-void connectToWiFi() {
-    WiFi.config(local_IP, gateway, subnet);
-    WiFi.begin(ssid, password);
-    
-    displayMessage("Connecting to WiFi...");
-    
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(1000);
-        attempts++;
-        Serial.print(".");
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi Connected!");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        displayMessage("WiFi Connected");
-        setLEDStatus("ready");
-    } else {
-        Serial.println("\nWiFi Connection Failed!");
-        displayMessage("WiFi Failed");
-        setLEDStatus("error");
-    }
-}
+// Enrollment logic with detailed error tracking
+void enrollFingerprint(uint8_t id)
+{
+  enrollmentSuccess = false; // Reset flag
+  enrollmentErrorMessage = ""; // Reset error message
+  int p = -1;
 
-void initializeFingerprintSensor() {
-    finger.begin(57600);
-    
-    if (finger.verifyPassword()) {
-        Serial.println("Fingerprint sensor found!");
-        displayMessage("Sensor Ready");
-    } else {
-        Serial.println("Fingerprint sensor not found!");
-        displayMessage("Sensor Error");
-        setLEDStatus("error");
-    }
-}
+  Serial.println("Starting fingerprint enrollment for ID: " + String(id));
 
-void setupWebServer() {
-    // Enable CORS for browser requests
-    server.enableCORS(true);
-    
-    // API Endpoints
-    server.on("/identify", HTTP_GET, handleIdentify);
-    server.on("/status", HTTP_GET, handleStatus);
-    server.on("/display", HTTP_GET, handleDisplay);
-    server.on("/enroll", HTTP_POST, handleEnroll);
-    server.on("/test", HTTP_GET, handleTest);
-    
-    // Root endpoint
-    server.on("/", HTTP_GET, []() {
-        server.send(200, "text/html", getStatusPage());
-    });
-}
-
-void handleIdentify() {
-    Serial.println("Fingerprint identification requested");
-    
-    if (enrollmentActive) {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"Enrollment in progress\"}");
-        return;
-    }
-    
-    displayMessage("Place finger to identify");
-    setLEDStatus("scanning");
-    
-    // Get fingerprint image
-    int p = finger.getImage();
-    if (p != FINGERPRINT_OK) {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"No finger detected\"}");
-        setLEDStatus("error");
-        return;
-    }
-    
-    // Convert image to template
-    p = finger.image2Tz();
-    if (p != FINGERPRINT_OK) {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"Image conversion failed\"}");
-        setLEDStatus("error");
-        return;
-    }
-    
-    // Search for matching fingerprint
-    p = finger.fingerFastSearch();
-    if (p != FINGERPRINT_OK) {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"No match found\"}");
-        setLEDStatus("error");
-        return;
-    }
-    
-    // Success - fingerprint identified
-    String response = "{\"success\":true,\"fingerprint_id\":\"" + String(finger.fingerID) + "\",\"confidence\":\"" + String(finger.confidence) + "\"}";
-    server.send(200, "application/json", response);
-    
-    displayMessage("Fingerprint identified");
-    setLEDStatus("success");
-    
-    // Reset LED after 2 seconds
+  // Step 1: First scan
+  Serial.println("Step 1: Waiting for first finger scan...");
+  waitForFinger();
+  p = finger.image2Tz(1);
+  if (p != FINGERPRINT_OK)
+  {
+    enrollmentErrorMessage = "Failed to capture first fingerprint image";
+    displayMessage("Error reading finger!");
+    Serial.println("Error reading first image: " + String(p));
+    indicateError();
     delay(2000);
-    setLEDStatus("ready");
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return;
+  }
+  Serial.println("First image captured successfully");
+
+  // Step 2: Remove finger
+  displayMessage("Remove finger");
+  Serial.println("Step 2: Please remove finger...");
+  delay(1500);
+  int removeAttempts = 0;
+  while (finger.getImage() != FINGERPRINT_NOFINGER && removeAttempts < 50)
+  {
+    delay(100);
+    removeAttempts++;
+  }
+  if (removeAttempts >= 50)
+  {
+    enrollmentErrorMessage = "Finger not removed within timeout";
+    displayMessage("Remove finger timeout!");
+    Serial.println("Finger removal timeout");
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return;
+  }
+  Serial.println("Finger removed successfully");
+
+  // Step 3: Second scan
+  Serial.println("Step 3: Waiting for second finger scan...");
+  waitForFinger();
+  p = finger.image2Tz(2);
+  if (p != FINGERPRINT_OK)
+  {
+    enrollmentErrorMessage = "Failed to capture second fingerprint image";
+    displayMessage("Error reading finger!");
+    Serial.println("Error reading second image: " + String(p));
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return;
+  }
+  Serial.println("Second image captured successfully");
+
+  // Step 4: Create model
+  displayMessage("Creating model...");
+  Serial.println("Step 4: Creating fingerprint model...");
+  p = finger.createModel();
+  if (p != FINGERPRINT_OK)
+  {
+    enrollmentErrorMessage = "Failed to create fingerprint model";
+    displayMessage("Error creating model!");
+    Serial.println("Error creating model: " + String(p));
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return;
+  }
+  Serial.println("Fingerprint model created successfully");
+
+  // Step 5: Store model
+  displayMessage("Storing model...");
+  Serial.println("Step 5: Storing fingerprint model...");
+  p = finger.storeModel(id);
+  if (p == FINGERPRINT_OK)
+  {
+    displayMessage("Enrollment Success!");
+    Serial.println("Enrollment Success! Fingerprint stored with ID: " + String(id));
+    enrollmentSuccess = true; // Set success flag
+    indicateSuccess();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+  }
+  else
+  {
+    enrollmentErrorMessage = "Failed to store fingerprint model";
+    displayMessage("Error storing model!");
+    Serial.println("Error storing model: " + String(p));
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+  }
 }
 
-void handleStatus() {
+// Single scan function
+bool scanFingerprintOnce()
+{
+  // Indicate waiting/scanning with blinking
+  displayMessage("Place Finger...");
+
+  int p = finger.getImage();
+  if (p != FINGERPRINT_OK)
+  {
+    // still waiting; continue blinking
+    indicateWaiting();
+    return false; // no finger present
+  }
+
+  // Finger detected: stop waiting LED
+  turnOffLEDs();
+
+  // Processing finger image
+  displayMessage("Processing...");
+
+  p = finger.image2Tz();
+  if (p != FINGERPRINT_OK)
+  {
+    Serial.println("image2Tz failed: " + String(p));
+    displayMessage("Read Error");
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return false;
+  }
+
+  // Searching for match
+  displayMessage("Searching...");
+
+  p = finger.fingerFastSearch();
+  if (p != FINGERPRINT_OK)
+  {
+    // No match
+    Serial.println("No match found: " + String(p));
+    displayMessage("No Match");
+    indicateError();
+    delay(2000);
+    turnOffLEDs();
+    displayMessage("System Ready");
+    return false;
+  }
+
+  // Match found
+  uint16_t id = finger.fingerID;
+  Serial.println("MATCH! ID: " + String(id));
+  displayMessage("MATCH!\nID: " + String(id));
+  indicateSuccess();
+  delay(2000);
+  turnOffLEDs();
+  displayMessage("System Ready");
+  return true;
+}
+
+// Web server handlers
+void handleIdentify()
+{
+  displayMessage("Scanning...");
+  bool ok = scanFingerprintOnce();
+  if (ok)
+    server.send(200, "application/json", "{\"success\":true}");
+  else
+    server.send(200, "application/json", "{\"success\":false}");
+}
+
+void handleStatus()
+{
+  String response = "{";
+  response += "\"status\":\"ok\",";
+  response += "\"fingerprint_sensor\":\"" + String(finger.verifyPassword() ? "connected" : "disconnected") + "\",";
+  response += "\"wifi\":\"" + String(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected") + "\",";
+  response += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  response += "}";
+  server.send(200, "application/json", response);
+}
+
+void handleDisplay()
+{
+  if (server.hasArg("message"))
+  {
+    String message = server.arg("message");
+    displayMessage(message);
+    server.send(200, "application/json", "{\"success\":true}");
+  }
+  else
+  {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"No message parameter\"}");
+  }
+}
+
+void handleEnroll()
+{
+  if (!server.hasArg("id"))
+  {
+    server.send(400, "application/json", "{\"success\":false,\"error\":\"No ID parameter\"}");
+    return;
+  }
+
+  uint8_t id = server.arg("id").toInt();
+
+  // Perform enrollment
+  enrollFingerprint(id);
+
+  // Check enrollment success using the global flag
+  if (enrollmentSuccess)
+  {
     String response = "{";
-    response += "\"status\":\"ok\",";
-    response += "\"fingerprint_sensor\":\"" + String(finger.verifyPassword() ? "connected" : "disconnected") + "\",";
-    response += "\"wifi\":\"" + String(WiFi.status() == WL_CONNECTED ? "connected" : "disconnected") + "\",";
-    response += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
-    response += "\"enrollment_active\":\"" + String(enrollmentActive ? "true" : "false") + "\"";
+    response += "\"success\":true,";
+    response += "\"message\":\"Enrollment completed successfully\",";
+    response += "\"template\":\"template_" + String(id) + "_" + String(random(1000000, 9999999)) + "\",";
+    response += "\"hash\":\"hash_" + String(id) + "_" + String(random(1000000, 9999999)) + "\",";
+    response += "\"version\":\"v1.0\"";
     response += "}";
-    
+
     server.send(200, "application/json", response);
-}
-
-void handleDisplay() {
-    if (server.hasArg("message")) {
-        String message = server.arg("message");
-        displayMessage(message);
-        server.send(200, "application/json", "{\"success\":true}");
-    } else {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"No message parameter\"}");
+  }
+  else
+  {
+    String errorResponse = "{\"success\":false,\"error\":\"Fingerprint enrollment failed\"";
+    if (enrollmentErrorMessage != "")
+    {
+      errorResponse += ",\"details\":\"" + enrollmentErrorMessage + "\"";
     }
+    errorResponse += "}";
+    server.send(200, "application/json", errorResponse);
+  }
 }
 
-void handleEnroll() {
-    if (server.hasArg("plain")) {
-        // Handle JSON body
-        String body = server.arg("plain");
-        DynamicJsonDocument doc(1024);
-        deserializeJson(doc, body);
-        
-        if (doc.containsKey("id")) {
-            enrollmentId = doc["id"];
-            enrollmentStudentName = doc["student_name"] | "";
-            enrollmentRegNo = doc["reg_no"] | "";
-            
-            startEnrollment();
-            server.send(200, "application/json", "{\"success\":true,\"message\":\"Enrollment started\"}");
-        } else {
-            server.send(400, "application/json", "{\"success\":false,\"error\":\"No ID parameter\"}");
-        }
-    } else {
-        server.send(400, "application/json", "{\"success\":false,\"error\":\"Invalid request format\"}");
-    }
+void handleStartScan()
+{
+  continuousScanMode = true;
+  displayMessage("Scan Mode ON\nPlace finger...");
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Continuous scan mode started\"}");
+  Serial.println("Continuous scan mode started");
 }
 
-void handleTest() {
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"ESP32 Fingerprint System is working\"}");
-}
-
-void startEnrollment() {
-    enrollmentActive = true;
-    displayMessage("Enrollment Started");
-    setLEDStatus("enrolling");
-    
-    Serial.println("Starting enrollment for ID: " + String(enrollmentId));
-}
-
-void handleEnrollmentProcess() {
-    static int step = 0;
-    static unsigned long lastStepTime = 0;
-    
-    if (millis() - lastStepTime < 2000) return; // Wait 2 seconds between steps
-    
-    switch (step) {
-        case 0:
-            displayMessage("Place finger on sensor");
-            setLEDStatus("waiting");
-            step++;
-            break;
-            
-        case 1:
-            if (enrollFingerprintStep1()) {
-                step++;
-            } else {
-                step = 0; // Restart if failed
-            }
-            break;
-            
-        case 2:
-            displayMessage("Remove finger");
-            setLEDStatus("ready");
-            step++;
-            break;
-            
-        case 3:
-            if (enrollFingerprintStep2()) {
-                step++;
-            } else {
-                step = 0; // Restart if failed
-            }
-            break;
-            
-        case 4:
-            displayMessage("Place same finger");
-            setLEDStatus("waiting");
-            step++;
-            break;
-            
-        case 5:
-            if (enrollFingerprintStep3()) {
-                enrollmentActive = false;
-                displayMessage("Enrollment Complete!");
-                setLEDStatus("success");
-                step = 0;
-                
-                // Send completion notification
-                sendEnrollmentComplete();
-            } else {
-                step = 0; // Restart if failed
-            }
-            break;
-    }
-    
-    lastStepTime = millis();
-}
-
-bool enrollFingerprintStep1() {
-    int p = finger.getImage();
-    if (p != FINGERPRINT_OK) {
-        displayMessage("No finger detected");
-        return false;
-    }
-    
-    p = finger.image2Tz(1);
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Image conversion failed");
-        return false;
-    }
-    
-    displayMessage("Finger 1 captured");
-    return true;
-}
-
-bool enrollFingerprintStep2() {
-    int p = finger.getImage();
-    if (p != FINGERPRINT_OK) {
-        displayMessage("No finger detected");
-        return false;
-    }
-    
-    p = finger.image2Tz(2);
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Image conversion failed");
-        return false;
-    }
-    
-    displayMessage("Finger 2 captured");
-    return true;
-}
-
-bool enrollFingerprintStep3() {
-    int p = finger.createModel();
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Template creation failed");
-        return false;
-    }
-    
-    p = finger.storeModel(enrollmentId);
-    if (p != FINGERPRINT_OK) {
-        displayMessage("Storage failed");
-        return false;
-    }
-    
-    displayMessage("Enrollment successful!");
-    return true;
-}
-
-void sendEnrollmentComplete() {
-    // This could send a notification to the PHP system
-    // For now, just log it
-    Serial.println("Enrollment completed for ID: " + String(enrollmentId));
-}
-
-void displayMessage(String message) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println(message);
-    display.display();
-    
-    Serial.println("Display: " + message);
-}
-
-void setLEDStatus(String status) {
-    // Turn off all LEDs first
-    digitalWrite(LED_RED_PIN, LOW);
-    digitalWrite(LED_YELLOW_PIN, LOW);
-    digitalWrite(LED_GREEN_PIN, LOW);
-    
-    if (status == "idle" || status == "ready") {
-        digitalWrite(LED_RED_PIN, HIGH);
-    } else if (status == "waiting" || status == "scanning" || status == "enrolling") {
-        digitalWrite(LED_YELLOW_PIN, HIGH);
-    } else if (status == "success") {
-        digitalWrite(LED_GREEN_PIN, HIGH);
-    } else if (status == "error") {
-        // Blink red LED
-        digitalWrite(LED_RED_PIN, HIGH);
-        delay(100);
-        digitalWrite(LED_RED_PIN, LOW);
-        delay(100);
-        digitalWrite(LED_RED_PIN, HIGH);
-    }
-}
-
-String getStatusPage() {
-    return "<!DOCTYPE html><html><head><title>ESP32 Fingerprint System</title></head><body>"
-           "<h1>ESP32 Fingerprint System</h1>"
-           "<p>Status: Ready</p>"
-           "<p>IP: " + WiFi.localIP().toString() + "</p>"
-           "<p>Fingerprint Sensor: " + String(finger.verifyPassword() ? "Connected" : "Disconnected") + "</p>"
-           "<h2>API Endpoints:</h2>"
-           "<ul>"
-           "<li>GET /identify - Identify fingerprint</li>"
-           "<li>GET /status - Get system status</li>"
-           "<li>GET /display?message=text - Display message</li>"
-           "<li>POST /enroll - Start enrollment</li>"
-           "<li>GET /test - Test endpoint</li>"
-           "</ul>"
-           "</body></html>";
+void handleStopScan()
+{
+  continuousScanMode = false;
+  turnOffLEDs();
+  displayMessage("Scan Mode OFF");
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"Continuous scan mode stopped\"}");
+  Serial.println("Continuous scan mode stopped");
 }

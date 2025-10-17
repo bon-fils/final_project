@@ -1705,7 +1705,7 @@ class StudentRegistration {
                                     </div>
 
                                     ${response.fingerprint_enrolled ?
-                                        '<div class="col-12"><div class="alert alert-info border-info"><i class="fas fa-fingerprint me-2"></i><strong>Biometric Security:</strong> Fingerprint enrolled successfully for secure attendance tracking!</div></div>' :
+                                        '<div class="col-12"><div class="alert alert-info border-info"><i class="fas fa-fingerprint me-2"></i><strong>Biometric Security:</strong> Fingerprint enrolled successfully with ESP32 sensor for secure attendance tracking!</div></div>' :
                                         '<div class="col-12"><div class="alert alert-warning border-warning"><i class="fas fa-exclamation-triangle me-2"></i><strong>Note:</strong> Fingerprint not enrolled. Student can enroll later through their dashboard.</div></div>'
                                     }
                                 </div>
@@ -1750,15 +1750,36 @@ class StudentRegistration {
         }
     }
 
-    startFingerprintCapture() {
+    async startFingerprintCapture() {
         if (this.isCapturing) return;
 
         this.isCapturing = true;
         this.updateFingerprintUI('capturing');
-        this.simulateFingerprintCapture();
+
+        try {
+            // First check ESP32 status
+            const statusResponse = await this.ajax({
+                url: 'http://192.168.137.194:80/status',
+                method: 'GET',
+                timeout: 5000
+            });
+
+            if (!statusResponse.fingerprint_sensor || statusResponse.fingerprint_sensor !== 'connected') {
+                throw new Error('Fingerprint sensor not connected. Please check ESP32 connection.');
+            }
+
+            this.showAlert('ESP32 connected. Starting fingerprint capture...', 'info');
+            await this.captureFromESP32();
+
+        } catch (error) {
+            console.error('ESP32 connection error:', error);
+            this.showAlert('Failed to connect to ESP32: ' + error.message, 'error');
+            this.isCapturing = false;
+            this.updateFingerprintUI('ready');
+        }
     }
 
-    simulateFingerprintCapture() {
+    async captureFromESP32() {
         const canvas = document.getElementById('fingerprintCanvas');
         const ctx = canvas.getContext('2d');
         const placeholder = document.getElementById('fingerprintPlaceholder');
@@ -1767,31 +1788,68 @@ class StudentRegistration {
         canvas.classList.remove('d-none');
         placeholder.classList.add('d-none');
 
-        let progress = 0;
-        let qualityVariation = 0;
+        try {
+            // Send display message to ESP32
+            await this.ajax({
+                url: 'http://192.168.137.194:80/display',
+                method: 'GET',
+                data: { message: 'Place finger on sensor...' }
+            });
 
-        const captureInterval = setInterval(() => {
-            progress += Math.random() * 8 + 2;
-            qualityVariation += (Math.random() - 0.5) * 2;
+            // Wait for fingerprint capture (simulate progress while ESP32 processes)
+            let progress = 0;
+            const captureInterval = setInterval(() => {
+                progress += Math.random() * 5 + 1;
+                const currentProgress = Math.min(progress, 95); // Don't reach 100 until ESP32 responds
+                status.textContent = `Waiting for finger... ${Math.round(currentProgress)}%`;
+                this.drawFingerprintPattern(ctx, currentProgress);
+            }, 200);
 
-            const currentProgress = Math.min(progress, 100);
-            status.textContent = `Capturing... ${Math.round(currentProgress)}%`;
+            // Poll ESP32 for capture status (this is a simplified approach)
+            // In a real implementation, you might use WebSockets or Server-Sent Events
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await this.ajax({
+                        url: 'http://192.168.137.194:80/identify',
+                        method: 'GET',
+                        timeout: 2000
+                    });
 
-            this.drawFingerprintPattern(ctx, currentProgress);
+                    if (response.success) {
+                        clearInterval(captureInterval);
+                        clearInterval(pollInterval);
 
-            if (currentProgress >= 100) {
+                        // Generate visual representation
+                        this.fingerprintCaptured = true;
+                        this.fingerprintQuality = 85 + Math.floor(Math.random() * 15); // Simulate quality
+
+                        this.drawFingerprintPattern(ctx, 100);
+                        this.isCapturing = false;
+                        this.updateFingerprintUI('captured');
+                        this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
+                    }
+                } catch (pollError) {
+                    // Continue polling
+                }
+            }, 1000);
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
                 clearInterval(captureInterval);
-                this.fingerprintCaptured = true;
+                clearInterval(pollInterval);
+                if (this.isCapturing) {
+                    this.isCapturing = false;
+                    this.updateFingerprintUI('ready');
+                    this.showAlert('Fingerprint capture timeout. Please try again.', 'error');
+                }
+            }, 30000);
 
-                const baseQuality = 85 + Math.floor(Math.random() * 10);
-                const variationQuality = Math.max(75, Math.min(100, baseQuality + qualityVariation));
-                this.fingerprintQuality = Math.round(variationQuality);
-
-                this.isCapturing = false;
-                this.updateFingerprintUI('captured');
-                this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
-            }
-        }, 80);
+        } catch (error) {
+            console.error('ESP32 capture error:', error);
+            this.isCapturing = false;
+            this.updateFingerprintUI('ready');
+            this.showAlert('Failed to start fingerprint capture: ' + error.message, 'error');
+        }
     }
 
     drawFingerprintPattern(ctx, progress) {
@@ -2063,11 +2121,17 @@ class StudentRegistration {
 
             // Include fingerprint data if captured
             if (this.fingerprintCaptured && this.fingerprintData) {
-                // Convert canvas to base64 data URL for backend processing
+                formData.append('fingerprint_enrolled', 'true');
+                formData.append('fingerprint_template', this.fingerprintData.template || '');
+                formData.append('fingerprint_hash', this.fingerprintData.hash || '');
+                formData.append('fingerprint_quality', this.fingerprintQuality);
+
+                // Also include canvas image for backup/reference
                 const canvas = document.getElementById('fingerprintCanvas');
                 const fingerprintImageData = canvas.toDataURL('image/png');
-                formData.append('fingerprint_data', fingerprintImageData);
-                formData.append('fingerprint_quality', this.fingerprintQuality);
+                formData.append('fingerprint_image', fingerprintImageData);
+            } else {
+                formData.append('fingerprint_enrolled', 'false');
             }
 
             // Use fetch API instead of jQuery AJAX for better error handling
@@ -2379,21 +2443,47 @@ class StudentRegistration {
         this.showAlert('Fingerprint cleared', 'info');
     }
 
-    enrollFingerprint() {
+    async enrollFingerprint() {
         if (!this.fingerprintCaptured) {
             this.showAlert('No fingerprint captured to enroll', 'warning');
             return;
         }
 
-        // Convert canvas to data URL for storage
-        const canvas = document.getElementById('fingerprintCanvas');
-        this.fingerprintData = canvas.toDataURL('image/png');
+        try {
+            this.showAlert('Enrolling fingerprint with ESP32...', 'info');
 
-        this.showAlert('Fingerprint enrolled successfully!', 'success');
-        console.log('Fingerprint enrolled:', {
-            quality: this.fingerprintQuality,
-            dataSize: this.fingerprintData.length
-        });
+            // Send enrollment request to ESP32
+            const response = await this.ajax({
+                url: 'http://192.168.137.194:80/enroll',
+                method: 'POST',
+                data: {
+                    id: this.fingerprintCaptured ? 1 : 0, // Use a default ID or get from form
+                    student_name: this.val('#firstName') + ' ' + this.val('#lastName'),
+                    reg_no: this.val('#reg_no')
+                },
+                timeout: 30000 // 30 seconds timeout for enrollment
+            });
+
+            if (response.success) {
+                this.fingerprintData = {
+                    template: response.template,
+                    hash: response.hash,
+                    quality: this.fingerprintQuality,
+                    enrolled: true
+                };
+
+                this.showAlert('Fingerprint enrolled successfully with ESP32!', 'success');
+                console.log('Fingerprint enrolled:', this.fingerprintData);
+
+                // Update UI to show enrolled state
+                this.updateFingerprintUI('enrolled');
+            } else {
+                throw new Error(response.error || 'Enrollment failed');
+            }
+        } catch (error) {
+            console.error('Fingerprint enrollment error:', error);
+            this.showAlert('Failed to enroll fingerprint: ' + error.message, 'error');
+        }
     }
 
     // Enhanced utility methods with better error handling

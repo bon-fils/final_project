@@ -247,7 +247,7 @@ function checkESP32Status() {
  * Send request to ESP32
  */
 function sendToESP32($endpoint, $data = []) {
-    $esp32Ip = $_ENV['ESP32_IP'] ?? '192.168.1.100';
+    $esp32Ip = $_ENV['ESP32_IP'] ?? '192.168.137.194';
     $esp32Port = $_ENV['ESP32_PORT'] ?? '80';
     $timeout = 10; // seconds
     
