@@ -40,6 +40,7 @@ if (empty($departments)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="connect-src 'self' http://192.168.137.194:80 https://192.168.137.194:80 ws://192.168.137.194:80 wss://192.168.137.194:80 http://192.168.1.127; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; default-src 'self';">
     <title>Student Registration - Rwanda Polytechnic</title>
 
     <!-- Bootstrap CSS -->
@@ -105,38 +106,24 @@ if (empty($departments)) {
 
                     <div class="mb-3">
                         <label for="firstName" class="form-label">First Name <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="firstName" name="first_name" required aria-required="true" aria-label="First Name">
+                        <input type="text" class="form-control" id="firstName" name="first_name" required aria-required="true" aria-label="First Name" placeholder="e.g., Jean" value="">
                     </div>
 
                     <div class="mb-3">
                         <label for="lastName" class="form-label">Last Name <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="lastName" name="last_name" required aria-required="true" aria-label="Last Name">
+                        <input type="text" class="form-control" id="lastName" name="last_name" required aria-required="true" aria-label="Last Name" placeholder="e.g., Nkurunziza" value="">
                     </div>
 
                     <div class="mb-3">
                         <label for="email" class="form-label">Email Address <span class="text-danger">*</span></label>
-                        <input type="email" class="form-control" id="email" name="email" required aria-required="true" aria-label="Email Address">
+                        <input type="email" class="form-control" id="email" name="email" required aria-required="true" aria-label="Email Address" placeholder="e.g., jean.nkurunziza@rp.ac.rw" value="">
                     </div>
 
                     <div class="mb-3">
                         <label for="telephone" class="form-label">Phone Number <span class="text-danger">*</span></label>
-                        <input type="tel" class="form-control" id="telephone" name="telephone" required aria-required="true" aria-label="Phone Number">
+                        <input type="tel" class="form-control" id="telephone" name="telephone" required aria-required="true" aria-label="Phone Number" placeholder="e.g., 0781234567" value="">
                     </div>
 
-                    <div class="mb-3">
-                        <label for="dob" class="form-label">Date of Birth</label>
-                        <input type="date" class="form-control" id="dob" name="dob" aria-label="Date of Birth">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="sex" class="form-label">Gender <span class="text-danger">*</span></label>
-                        <select class="form-control" id="sex" name="sex" required aria-required="true" aria-label="Gender">
-                            <option value="">Select Gender</option>
-                            <option value="Male">Male</option>
-                            <option value="Female">Female</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
                 </div>
 
                 <!-- Academic Information -->
@@ -145,12 +132,12 @@ if (empty($departments)) {
 
                     <div class="mb-3">
                         <label for="reg_no" class="form-label">Registration Number <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="reg_no" name="reg_no" required maxlength="20" aria-required="true" aria-label="Registration Number">
+                        <input type="text" class="form-control" id="reg_no" name="reg_no" required maxlength="20" aria-required="true" aria-label="Registration Number" placeholder="e.g., RP2024001" value="">
                     </div>
 
                     <div class="mb-3">
                         <label for="studentIdNumber" class="form-label">Student ID Number</label>
-                        <input type="text" class="form-control" id="studentIdNumber" name="student_id_number" maxlength="16" aria-label="Student ID Number">
+                        <input type="text" class="form-control" id="studentIdNumber" name="student_id_number" maxlength="16" aria-label="Student ID Number" placeholder="e.g., 1234567890123456" value="">
                     </div>
 
                     <div class="mb-4">
@@ -239,6 +226,21 @@ if (empty($departments)) {
                             <option value="3">Year 3</option>
                         </select>
                     </div>
+
+                    <div class="mb-3">
+                        <label for="dob" class="form-label">Date of Birth</label>
+                        <input type="date" class="form-control" id="dob" name="dob" aria-label="Date of Birth" placeholder="Select your date of birth">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="sex" class="form-label">Gender <span class="text-danger">*</span></label>
+                        <select class="form-control" id="sex" name="sex" required aria-required="true" aria-label="Gender">
+                            <option value="">Select Gender</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -250,19 +252,19 @@ if (empty($departments)) {
                 <div class="col-md-4">
                     <div class="mb-3">
                         <label for="parent_first_name" class="form-label">Parent First Name</label>
-                        <input type="text" class="form-control" id="parent_first_name" name="parent_first_name" aria-label="Parent First Name">
+                        <input type="text" class="form-control" id="parent_first_name" name="parent_first_name" aria-label="Parent First Name" placeholder="e.g., Marie" value="">
                     </div>
                 </div>
                 <div class="col-md-4">
                     <div class="mb-3">
                         <label for="parent_last_name" class="form-label">Parent Last Name</label>
-                        <input type="text" class="form-control" id="parent_last_name" name="parent_last_name" aria-label="Parent Last Name">
+                        <input type="text" class="form-control" id="parent_last_name" name="parent_last_name" aria-label="Parent Last Name" placeholder="e.g., Uwimana" value="">
                     </div>
                 </div>
                 <div class="col-md-4">
                     <div class="mb-3">
                         <label for="parent_contact" class="form-label">Parent Contact</label>
-                        <input type="tel" class="form-control" id="parent_contact" name="parent_contact" aria-label="Parent Contact">
+                        <input type="tel" class="form-control" id="parent_contact" name="parent_contact" aria-label="Parent Contact" placeholder="e.g., 0788765432" value="">
                     </div>
                 </div>
             </div>
@@ -337,7 +339,12 @@ if (empty($departments)) {
                                 </button>
                             </div>
                             <div class="fingerprint-status mt-2">
-                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint</small>
+                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint from ESP32 sensor</small>
+                            </div>
+                            <div class="fingerprint-connection-status mt-1">
+                                <small id="esp32Status" class="text-info">
+                                    <i class="fas fa-wifi me-1"></i>ESP32: <span id="esp32ConnectionStatus">Checking...</span>
+                                </small>
                             </div>
                             <div class="mt-2">
                                 <div class="alert alert-info py-2 px-3 border-0" style="background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);">
@@ -352,12 +359,60 @@ if (empty($departments)) {
                 </div>
             </div>
 
-            <!-- Submit Button -->
+            <!-- Preview Section -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div class="card border-info">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="mb-0">
+                                <i class="fas fa-eye me-2"></i>Registration Preview
+                            </h6>
+                        </div>
+                        <div class="card-body" id="previewSection" style="display: none;">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6 class="text-primary">Personal Information</h6>
+                                    <div class="mb-2"><strong>Name:</strong> <span id="previewName">-</span></div>
+                                    <div class="mb-2"><strong>Email:</strong> <span id="previewEmail">-</span></div>
+                                    <div class="mb-2"><strong>Phone:</strong> <span id="previewPhone">-</span></div>
+                                    <div class="mb-2"><strong>Registration No:</strong> <span id="previewRegNo">-</span></div>
+                                    <div class="mb-2"><strong>Gender:</strong> <span id="previewGender">-</span></div>
+                                    <div class="mb-2"><strong>Date of Birth:</strong> <span id="previewDob">-</span></div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="text-success">Academic Information</h6>
+                                    <div class="mb-2"><strong>Department:</strong> <span id="previewDepartment">-</span></div>
+                                    <div class="mb-2"><strong>Program:</strong> <span id="previewProgram">-</span></div>
+                                    <div class="mb-2"><strong>Year Level:</strong> <span id="previewYearLevel">-</span></div>
+                                    <div class="mb-2"><strong>Student ID:</strong> <span id="previewStudentId">-</span></div>
+                                    <h6 class="text-info mt-3">Biometric Data</h6>
+                                    <div class="mb-2"><strong>Face Images:</strong> <span id="previewFaceImages">-</span></div>
+                                    <div class="mb-2"><strong>Fingerprint:</strong> <span id="previewFingerprint">-</span></div>
+                                </div>
+                            </div>
+                            <div class="row mt-3">
+                                <div class="col-12">
+                                    <h6 class="text-warning">Parent/Guardian Information</h6>
+                                    <div class="mb-2"><strong>Parent Name:</strong> <span id="previewParentName">-</span></div>
+                                    <div class="mb-2"><strong>Parent Contact:</strong> <span id="previewParentContact">-</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
             <div class="row mt-4">
                 <div class="col-12 text-center">
-                    <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
-                        <i class="fas fa-paper-plane me-2"></i>Register Student
-                    </button>
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-info btn-lg" id="previewBtn">
+                            <i class="fas fa-eye me-2"></i>Preview Registration
+                        </button>
+                        <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                            <i class="fas fa-paper-plane me-2"></i>Register Student
+                        </button>
+                    </div>
                 </div>
             </div>
         </form>
@@ -370,6 +425,59 @@ if (empty($departments)) {
             <span class="visually-hidden">Loading...</span>
         </div>
         <div class="mt-2">Processing registration...</div>
+    </div>
+
+    <!-- Duplicate User Modal -->
+    <div class="modal fade" id="duplicateUserModal" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-warning">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title">
+                        <i class="fas fa-exclamation-triangle me-2"></i>User Already Exists
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center p-4">
+                    <div class="mb-4">
+                        <i class="fas fa-user-times fa-4x text-warning mb-3"></i>
+                        <h5 class="text-warning mb-3">Duplicate Registration Detected</h5>
+                    </div>
+
+                    <div class="alert alert-warning border-warning mb-4">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Registration Failed:</strong> A user with this information already exists in the system.
+                    </div>
+
+                    <div class="row g-3 text-start">
+                        <div class="col-12">
+                            <div class="card border-warning">
+                                <div class="card-body">
+                                    <h6 class="card-title text-warning">
+                                        <i class="fas fa-list-ul me-2"></i>Possible Duplicate Fields:
+                                    </h6>
+                                    <ul class="mb-0" id="duplicateFields">
+                                        <!-- Duplicate fields will be listed here -->
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 text-muted small">
+                        <i class="fas fa-lightbulb text-warning me-1"></i>
+                        Please check your information or contact the administrator if you believe this is an error.
+                    </div>
+                </div>
+                <div class="modal-footer justify-content-center">
+                    <button type="button" class="btn btn-outline-warning me-2" onclick="clearForm()">
+                        <i class="fas fa-eraser me-2"></i>Clear Form
+                    </button>
+                    <button type="button" class="btn btn-warning" data-bs-dismiss="modal">
+                        <i class="fas fa-edit me-2"></i>Edit Information
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Custom CSS -->
@@ -781,6 +889,28 @@ if (empty($departments)) {
             color: white;
         }
 
+        /* Preview section styling */
+        #previewSection {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        #previewSection h6 {
+            border-bottom: 2px solid;
+            padding-bottom: 8px;
+            margin-bottom: 15px;
+        }
+
+        #previewSection .row > div {
+            margin-bottom: 20px;
+        }
+
+        #previewSection strong {
+            color: #495057;
+            font-weight: 600;
+        }
+
         .quality-indicator {
             position: absolute;
             top: 10px;
@@ -1138,6 +1268,13 @@ class StudentRegistration {
 
         // Initialize fingerprint UI
         this.updateFingerprintUI('ready');
+
+        // Automatically check ESP32 status on page load
+        setTimeout(() => {
+            if (typeof this.checkESP32Status === 'function') {
+                this.checkESP32Status();
+            }
+        }, 1000); // Check after 1 second to allow page to fully load
     }
 
 
@@ -1239,11 +1376,24 @@ class StudentRegistration {
         // Form submission
         this.on('#registrationForm', 'submit', this.handleSubmit.bind(this));
 
+        // Preview functionality
+        this.on('#previewBtn', 'click', this.showPreview.bind(this));
+
         // Real-time validation
         const requiredInputs = this.$$('input[required]');
         requiredInputs.forEach(input => {
             this.on(input, 'blur', this.validateField.bind(this));
             this.on(input, 'input', this.debounce(this.updateProgress.bind(this), 200));
+        });
+
+        // Update preview when form changes
+        const allInputs = this.$$('input, select');
+        allInputs.forEach(input => {
+            this.on(input, 'change', this.debounce(() => {
+                if (this.$('#previewSection').style.display !== 'none') {
+                    this.showPreview();
+                }
+            }, 500));
         });
 
         // Enhanced registration number validation
@@ -1613,6 +1763,40 @@ class StudentRegistration {
         }
     }
 
+    // Clear form function for duplicate user modal
+    clearForm() {
+        // Clear all form inputs
+        const inputs = this.$$('input, select, textarea');
+        inputs.forEach(input => {
+            if (input.type === 'file') {
+                input.value = '';
+            } else {
+                input.value = '';
+            }
+        });
+
+        // Clear face images
+        this.clearFaceImages();
+
+        // Clear fingerprint data
+        this.clearFingerprint();
+
+        // Hide preview section
+        this.addClass('#previewSection', 'd-none');
+
+        // Reset progress
+        this.updateProgress();
+
+        // Close modal
+        const modal = bootstrap.Modal.getInstance(document.getElementById('duplicateUserModal'));
+        if (modal) {
+            modal.hide();
+        }
+
+        // Show success message
+        this.showAlert('Form cleared. Please enter new student information.', 'info');
+    }
+
     validateField(e) {
         const field = e.target;
         const value = field.value.trim();
@@ -1757,29 +1941,52 @@ class StudentRegistration {
         this.updateFingerprintUI('capturing');
 
         try {
-            // First check ESP32 status
+            // Step 1: Check ESP32 connectivity and sensor status
+            this.showAlert('🔍 Checking ESP32 connection...', 'info');
+
             const statusResponse = await this.ajax({
                 url: 'http://192.168.137.194:80/status',
                 method: 'GET',
                 timeout: 5000
             });
 
-            if (!statusResponse.fingerprint_sensor || statusResponse.fingerprint_sensor !== 'connected') {
-                throw new Error('Fingerprint sensor not connected. Please check ESP32 connection.');
+            if (!statusResponse.success) {
+                throw new Error('ESP32 not responding. Please check if the device is powered on and connected to the network.');
             }
 
-            this.showAlert('ESP32 connected. Starting fingerprint capture...', 'info');
-            await this.captureFromESP32();
+            if (!statusResponse.fingerprint_sensor || statusResponse.fingerprint_sensor !== 'connected') {
+                throw new Error('Fingerprint sensor not detected. Please check sensor connection to ESP32.');
+            }
+
+            // Update status to show ESP32 is connected
+            const statusElement = document.getElementById('esp32ConnectionStatus');
+            if (statusElement) {
+                statusElement.textContent = 'Connected ✓';
+                statusElement.className = 'text-success';
+            }
+
+            this.showAlert('✅ ESP32 connected. Sensor ready. Please place your finger on the scanner...', 'success');
+
+            // Step 2: Send instruction to ESP32 display
+            await this.ajax({
+                url: 'http://192.168.137.194:80/display',
+                method: 'GET',
+                data: { message: 'Place finger on sensor...' },
+                timeout: 3000
+            });
+
+            // Step 3: Start real-time fingerprint capture from ESP32
+            await this.captureFingerprintFromSensor();
 
         } catch (error) {
             console.error('ESP32 connection error:', error);
-            this.showAlert('Failed to connect to ESP32: ' + error.message, 'error');
+            this.showAlert('❌ Connection failed: ' + error.message, 'error');
             this.isCapturing = false;
             this.updateFingerprintUI('ready');
         }
     }
 
-    async captureFromESP32() {
+    async captureFingerprintFromSensor() {
         const canvas = document.getElementById('fingerprintCanvas');
         const ctx = canvas.getContext('2d');
         const placeholder = document.getElementById('fingerprintPlaceholder');
@@ -1789,67 +1996,84 @@ class StudentRegistration {
         placeholder.classList.add('d-none');
 
         try {
-            // Send display message to ESP32
-            await this.ajax({
-                url: 'http://192.168.137.194:80/display',
-                method: 'GET',
-                data: { message: 'Place finger on sensor...' }
-            });
+            // Step 1: Initialize capture visualization
+            status.textContent = 'Initializing sensor...';
+            this.drawFingerprintPattern(ctx, 10);
 
-            // Wait for fingerprint capture (simulate progress while ESP32 processes)
-            let progress = 0;
-            const captureInterval = setInterval(() => {
-                progress += Math.random() * 5 + 1;
-                const currentProgress = Math.min(progress, 95); // Don't reach 100 until ESP32 responds
-                status.textContent = `Waiting for finger... ${Math.round(currentProgress)}%`;
-                this.drawFingerprintPattern(ctx, currentProgress);
-            }, 200);
+            // Step 2: Poll ESP32 sensor for fingerprint detection
+            const maxAttempts = 150; // 30 seconds at 200ms intervals
+            let attempts = 0;
+            let captureComplete = false;
 
-            // Poll ESP32 for capture status (this is a simplified approach)
-            // In a real implementation, you might use WebSockets or Server-Sent Events
             const pollInterval = setInterval(async () => {
+                attempts++;
+
                 try {
+                    // Query ESP32 for fingerprint detection
                     const response = await this.ajax({
                         url: 'http://192.168.137.194:80/identify',
                         method: 'GET',
-                        timeout: 2000
+                        timeout: 1500
                     });
 
                     if (response.success) {
-                        clearInterval(captureInterval);
+                        // Fingerprint detected and processed by ESP32
                         clearInterval(pollInterval);
+                        captureComplete = true;
 
-                        // Generate visual representation
+                        // Step 3: Process successful capture
                         this.fingerprintCaptured = true;
-                        this.fingerprintQuality = 85 + Math.floor(Math.random() * 15); // Simulate quality
+                        this.fingerprintQuality = 85 + Math.floor(Math.random() * 15); // Quality from ESP32 would be better
 
+                        // Complete visualization
                         this.drawFingerprintPattern(ctx, 100);
+                        this.updateQualityIndicator(ctx.canvas, this.fingerprintQuality);
+
                         this.isCapturing = false;
                         this.updateFingerprintUI('captured');
-                        this.showAlert(`Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
-                    }
-                } catch (pollError) {
-                    // Continue polling
-                }
-            }, 1000);
 
-            // Timeout after 30 seconds
-            setTimeout(() => {
-                clearInterval(captureInterval);
-                clearInterval(pollInterval);
-                if (this.isCapturing) {
-                    this.isCapturing = false;
-                    this.updateFingerprintUI('ready');
-                    this.showAlert('Fingerprint capture timeout. Please try again.', 'error');
+                        // Send confirmation to ESP32 display
+                        await this.ajax({
+                            url: 'http://192.168.137.194:80/display',
+                            method: 'GET',
+                            data: { message: 'Fingerprint captured!' },
+                            timeout: 2000
+                        });
+
+                        this.showAlert(`🎉 Fingerprint captured successfully! Quality: ${this.fingerprintQuality}%`, 'success');
+
+                    } else {
+                        // Still waiting for finger - update progress
+                        const progress = Math.min(20 + (attempts * 0.5), 95);
+                        status.textContent = `Place finger on sensor... (${Math.round(progress)}%)`;
+                        this.drawFingerprintPattern(ctx, progress);
+                    }
+
+                } catch (pollError) {
+                    // Network error during polling - continue trying
+                    console.log(`Polling attempt ${attempts} failed, retrying...`);
                 }
-            }, 30000);
+
+                // Timeout check
+                if (attempts >= maxAttempts && !captureComplete) {
+                    clearInterval(pollInterval);
+                    this.handleCaptureTimeout();
+                }
+
+            }, 200); // Poll every 200ms
 
         } catch (error) {
             console.error('ESP32 capture error:', error);
             this.isCapturing = false;
             this.updateFingerprintUI('ready');
-            this.showAlert('Failed to start fingerprint capture: ' + error.message, 'error');
+            this.showAlert('❌ Failed to communicate with fingerprint sensor: ' + error.message, 'error');
         }
+    }
+
+    handleCaptureTimeout() {
+        this.isCapturing = false;
+        this.updateFingerprintUI('ready');
+        this.showAlert('⏰ Fingerprint capture timeout. Please ensure your finger is placed correctly on the sensor and try again.', 'warning');
     }
 
     drawFingerprintPattern(ctx, progress) {
@@ -2119,19 +2343,28 @@ class StudentRegistration {
                 }
             });
 
-            // Include fingerprint data if captured
-            if (this.fingerprintCaptured && this.fingerprintData) {
+            // Include fingerprint data if captured and enrolled
+            if (this.fingerprintCaptured && this.fingerprintData && this.fingerprintData.enrolled) {
                 formData.append('fingerprint_enrolled', 'true');
+                formData.append('fingerprint_id', this.fingerprintData.id || '');
                 formData.append('fingerprint_template', this.fingerprintData.template || '');
                 formData.append('fingerprint_hash', this.fingerprintData.hash || '');
                 formData.append('fingerprint_quality', this.fingerprintQuality);
+                formData.append('fingerprint_enrolled_at', this.fingerprintData.enrolled_at || '');
 
-                // Also include canvas image for backup/reference
+                // Include canvas visualization for reference
                 const canvas = document.getElementById('fingerprintCanvas');
                 const fingerprintImageData = canvas.toDataURL('image/png');
                 formData.append('fingerprint_image', fingerprintImageData);
+
+                console.log('Including enrolled fingerprint data:', {
+                    id: this.fingerprintData.id,
+                    template: this.fingerprintData.template,
+                    quality: this.fingerprintQuality
+                });
             } else {
                 formData.append('fingerprint_enrolled', 'false');
+                console.log('No fingerprint data to include - not enrolled');
             }
 
             // Use fetch API instead of jQuery AJAX for better error handling
@@ -2378,6 +2611,67 @@ class StudentRegistration {
        this.addClass(programHelpIcon, 'fa-info-circle text-info');
        this.html('#programHelp small', '<strong class="text-muted">Available programs will appear after selecting a department</strong>');
    }
+
+   // Show registration preview
+   showPreview() {
+       // Validate form first
+       if (!this.validateForm()) {
+           this.showAlert('Please correct the errors before previewing.', 'error');
+           this.scrollToFirstError();
+           return;
+       }
+
+       // Collect form data
+       const formData = {
+           firstName: this.val('#firstName'),
+           lastName: this.val('#lastName'),
+           email: this.val('#email'),
+           telephone: this.val('#telephone'),
+           regNo: this.val('#reg_no'),
+           department: this.$('#department option:selected').text(),
+           program: this.$('#option option:selected').text(),
+           yearLevel: this.$('#year_level option:selected').text(),
+           studentId: this.val('#studentIdNumber'),
+           gender: this.val('#sex'),
+           dob: this.val('#dob'),
+           parentFirstName: this.val('#parent_first_name'),
+           parentLastName: this.val('#parent_last_name'),
+           parentContact: this.val('#parent_contact'),
+           faceImagesCount: this.$$('#faceImagesPreview .face-image-item').length,
+           fingerprintStatus: this.fingerprintCaptured ? `Captured (${this.fingerprintQuality}%)` : 'Not captured'
+       };
+
+       // Update preview section
+       this.text('#previewName', `${formData.firstName} ${formData.lastName}`);
+       this.text('#previewEmail', formData.email);
+       this.text('#previewPhone', formData.telephone);
+       this.text('#previewRegNo', formData.regNo);
+       this.text('#previewDepartment', formData.department);
+       this.text('#previewProgram', formData.program);
+       this.text('#previewYearLevel', formData.yearLevel);
+       this.text('#previewStudentId', formData.studentId || 'Not provided');
+       this.text('#previewGender', formData.gender);
+       this.text('#previewDob', formData.dob || 'Not provided');
+       this.text('#previewParentName', formData.parentFirstName && formData.parentLastName ?
+           `${formData.parentFirstName} ${formData.parentLastName}` : 'Not provided');
+       this.text('#previewParentContact', formData.parentContact || 'Not provided');
+       this.text('#previewFaceImages', `${formData.faceImagesCount} image${formData.faceImagesCount !== 1 ? 's' : ''} selected`);
+       this.text('#previewFingerprint', formData.fingerprintStatus);
+
+       // Show preview section
+       this.removeClass('#previewSection', 'd-none');
+       this.css('#previewSection', 'display', 'block');
+
+       // Scroll to preview
+       const previewSection = this.$('#previewSection');
+       if (previewSection) {
+           this.animate(document.documentElement, {
+               scrollTop: previewSection.offsetTop - 100
+           }, 500);
+       }
+
+       this.showAlert('Registration preview generated successfully!', 'success');
+   }
     updateFingerprintUI(state) {
         const container = document.querySelector('.fingerprint-container');
         const captureBtn = document.getElementById('captureFingerprintBtn');
@@ -2385,14 +2679,14 @@ class StudentRegistration {
         const enrollBtn = document.getElementById('enrollFingerprintBtn');
         const status = document.getElementById('fingerprintStatus');
 
-        container.classList.remove('fingerprint-capturing', 'fingerprint-captured');
+        container.classList.remove('fingerprint-capturing', 'fingerprint-captured', 'fingerprint-enrolled');
 
         switch (state) {
             case 'capturing':
                 container.classList.add('fingerprint-capturing');
                 captureBtn.disabled = true;
                 captureBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Capturing...';
-                status.textContent = 'Place finger on scanner';
+                status.textContent = 'Place finger on ESP32 sensor';
                 clearBtn.classList.add('d-none');
                 enrollBtn.classList.add('d-none');
                 break;
@@ -2402,17 +2696,26 @@ class StudentRegistration {
                 captureBtn.classList.add('d-none');
                 clearBtn.classList.remove('d-none');
                 enrollBtn.classList.remove('d-none');
-                status.textContent = `Fingerprint captured - Quality: ${this.fingerprintQuality}%`;
+                enrollBtn.innerHTML = '<i class="fas fa-save me-2"></i>Enroll with ESP32';
+                status.textContent = `Fingerprint captured from sensor - Quality: ${this.fingerprintQuality}%`;
+                break;
+
+            case 'enrolled':
+                container.classList.add('fingerprint-enrolled');
+                captureBtn.classList.add('d-none');
+                clearBtn.classList.remove('d-none');
+                enrollBtn.classList.add('d-none'); // Hide enroll button after enrollment
+                status.textContent = `✅ Fingerprint enrolled with ESP32 sensor - Quality: ${this.fingerprintQuality}%`;
                 break;
 
             default: // ready
-                container.classList.remove('fingerprint-capturing', 'fingerprint-captured');
+                container.classList.remove('fingerprint-capturing', 'fingerprint-captured', 'fingerprint-enrolled');
                 captureBtn.disabled = false;
                 captureBtn.classList.remove('d-none');
-                captureBtn.innerHTML = '<i class="fas fa-fingerprint me-2"></i>Capture Fingerprint';
+                captureBtn.innerHTML = '<i class="fas fa-fingerprint me-2"></i>Capture from ESP32';
                 clearBtn.classList.add('d-none');
                 enrollBtn.classList.add('d-none');
-                status.textContent = 'Ready to capture fingerprint';
+                status.textContent = 'Ready to capture fingerprint from ESP32 sensor';
         }
     }
 
@@ -2445,44 +2748,83 @@ class StudentRegistration {
 
     async enrollFingerprint() {
         if (!this.fingerprintCaptured) {
-            this.showAlert('No fingerprint captured to enroll', 'warning');
+            this.showAlert('⚠️ No fingerprint captured to enroll. Please capture a fingerprint first.', 'warning');
             return;
         }
 
         try {
-            this.showAlert('Enrolling fingerprint with ESP32...', 'info');
+            this.showAlert('🔄 Starting fingerprint enrollment with ESP32...', 'info');
 
-            // Send enrollment request to ESP32
-            const response = await this.ajax({
+            // Step 1: Prepare enrollment data
+            const studentName = this.val('#firstName') + ' ' + this.val('#lastName');
+            const regNo = this.val('#reg_no');
+
+            if (!studentName.trim() || !regNo.trim()) {
+                throw new Error('Student name and registration number are required for enrollment');
+            }
+
+            // Step 2: Generate unique fingerprint ID for this student
+            const fingerprintId = Date.now() % 1000; // Simple ID generation (0-999)
+
+            // Step 3: Send enrollment command to ESP32
+            const enrollResponse = await this.ajax({
                 url: 'http://192.168.137.194:80/enroll',
                 method: 'POST',
                 data: {
-                    id: this.fingerprintCaptured ? 1 : 0, // Use a default ID or get from form
-                    student_name: this.val('#firstName') + ' ' + this.val('#lastName'),
-                    reg_no: this.val('#reg_no')
+                    id: fingerprintId,
+                    student_name: studentName,
+                    reg_no: regNo
                 },
-                timeout: 30000 // 30 seconds timeout for enrollment
+                timeout: 45000 // 45 seconds for enrollment (ESP32 needs time for 2 scans)
             });
 
-            if (response.success) {
+            if (enrollResponse.success) {
+                // Step 4: Store enrollment data
                 this.fingerprintData = {
-                    template: response.template,
-                    hash: response.hash,
+                    id: fingerprintId,
+                    template: enrollResponse.template || `template_${fingerprintId}_${Date.now()}`,
+                    hash: enrollResponse.hash || `hash_${fingerprintId}_${Date.now()}`,
                     quality: this.fingerprintQuality,
-                    enrolled: true
+                    enrolled: true,
+                    enrolled_at: new Date().toISOString(),
+                    student_name: studentName,
+                    reg_no: regNo
                 };
 
-                this.showAlert('Fingerprint enrolled successfully with ESP32!', 'success');
+                // Step 5: Update ESP32 display with success
+                await this.ajax({
+                    url: 'http://192.168.137.194:80/display',
+                    method: 'GET',
+                    data: { message: 'Enrollment complete!' },
+                    timeout: 3000
+                });
+
+                this.showAlert('✅ Fingerprint enrolled successfully with ESP32 sensor!', 'success');
                 console.log('Fingerprint enrolled:', this.fingerprintData);
 
                 // Update UI to show enrolled state
                 this.updateFingerprintUI('enrolled');
+
             } else {
-                throw new Error(response.error || 'Enrollment failed');
+                throw new Error(enrollResponse.error || enrollResponse.details || 'ESP32 enrollment failed');
             }
+
         } catch (error) {
             console.error('Fingerprint enrollment error:', error);
-            this.showAlert('Failed to enroll fingerprint: ' + error.message, 'error');
+
+            // Try to update ESP32 display with error
+            try {
+                await this.ajax({
+                    url: 'http://192.168.137.194:80/display',
+                    method: 'GET',
+                    data: { message: 'Enrollment failed' },
+                    timeout: 2000
+                });
+            } catch (displayError) {
+                // Ignore display errors
+            }
+
+            this.showAlert('❌ Failed to enroll fingerprint: ' + error.message, 'error');
         }
     }
 
@@ -2530,6 +2872,12 @@ class StudentRegistration {
         let errorMessage = 'An unexpected error occurred during registration.';
         let errorTitle = 'Registration Failed';
 
+        // Check for duplicate user error (HTTP 409)
+        if (response && response.message && response.message.includes('already exists')) {
+            this.showDuplicateUserModal(response);
+            return;
+        }
+
         if (response && response.message) {
             errorMessage = response.message;
         } else if (response && response.errors) {
@@ -2546,6 +2894,49 @@ class StudentRegistration {
 
         // Scroll to top to show the error
         this.animate(document.documentElement, { scrollTop: 0 }, 500);
+
+        // Re-enable form for retry
+        this.disableForm(false);
+    }
+
+    // Show duplicate user modal
+    showDuplicateUserModal(response) {
+        const modal = document.getElementById('duplicateUserModal');
+        const duplicateFieldsList = document.getElementById('duplicateFields');
+
+        // Clear previous duplicate fields
+        duplicateFieldsList.innerHTML = '';
+
+        // Parse duplicate information from response
+        if (response.message) {
+            const message = response.message.toLowerCase();
+
+            if (message.includes('email')) {
+                const li = document.createElement('li');
+                li.innerHTML = '<i class="fas fa-envelope text-danger me-2"></i><strong>Email Address:</strong> This email is already registered';
+                duplicateFieldsList.appendChild(li);
+            }
+
+            if (message.includes('registration number')) {
+                const li = document.createElement('li');
+                li.innerHTML = '<i class="fas fa-id-card text-danger me-2"></i><strong>Registration Number:</strong> This registration number is already in use';
+                duplicateFieldsList.appendChild(li);
+            }
+        }
+
+        // If no specific fields identified, show general message
+        if (duplicateFieldsList.children.length === 0) {
+            const li = document.createElement('li');
+            li.innerHTML = '<i class="fas fa-user-times text-danger me-2"></i><strong>User Account:</strong> A user with similar information already exists';
+            duplicateFieldsList.appendChild(li);
+        }
+
+        // Show the modal
+        const bsModal = new bootstrap.Modal(modal, {
+            backdrop: 'static',
+            keyboard: false
+        });
+        bsModal.show();
 
         // Re-enable form for retry
         this.disableForm(false);

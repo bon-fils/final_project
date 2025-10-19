@@ -124,7 +124,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" style="background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%); min-height: 100vh;">
         <?php if (!$is_lecturer_registration): ?>
         <div class="d-flex align-items-center justify-content-between mb-4">
             <div>
@@ -241,32 +241,6 @@
             </div>
         </div>
 
-        <!-- Quick Actions Toolbar -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <div class="row align-items-center">
-                    <div class="col-md-8">
-                        <h6 class="mb-0 text-primary">
-                            <i class="fas fa-bolt me-2"></i>Quick Actions
-                        </h6>
-                        <small class="text-muted">Perform bulk operations on selected users</small>
-                    </div>
-                    <div class="col-md-4 text-end">
-                        <div class="btn-group" role="group">
-                            <button class="btn btn-outline-success btn-sm" id="bulkActivate" disabled>
-                                <i class="fas fa-play me-1"></i>Activate Selected
-                            </button>
-                            <button class="btn btn-outline-warning btn-sm" id="bulkDeactivate" disabled>
-                                <i class="fas fa-pause me-1"></i>Deactivate Selected
-                            </button>
-                            <button class="btn btn-outline-danger btn-sm" id="bulkDelete" disabled>
-                                <i class="fas fa-trash me-1"></i>Delete Selected
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- Filters and Search -->
         <div class="card mb-4">

@@ -63,6 +63,11 @@ define('SMTP_PORT', (int)($_ENV['SMTP_PORT'] ?? 587));
 define('SMTP_USER', $_ENV['SMTP_USER'] ?? '');
 define('SMTP_PASS', $_ENV['SMTP_PASS'] ?? '');
 
+// ESP32 Configuration
+define('ESP32_IP', $_ENV['ESP32_IP'] ?? '192.168.137.194');
+define('ESP32_PORT', (int)($_ENV['ESP32_PORT'] ?? 80));
+define('ESP32_TIMEOUT', (int)($_ENV['ESP32_TIMEOUT'] ?? 30)); // seconds
+
 // Validate required configuration
 if (empty($db_name) || empty($username)) {
     error_log('Database configuration is incomplete');
@@ -99,7 +104,12 @@ try {
     if (APP_ENV === 'production') {
         die('Database connection failed. Please try again later.');
     } else {
-        die("Database connection failed: " . $e->getMessage());
+        // Check if this is a CLI request (command line execution)
+        if (php_sapi_name() === 'cli') {
+            die("Database connection failed: " . $e->getMessage() . " (Host: $host, DB: $db_name)");
+        } else {
+            die("Database connection failed: " . $e->getMessage());
+        }
     }
 }
 
@@ -171,12 +181,76 @@ SecurityUtils::setSecurityHeaders();
 // Initialize Redis cache
 $redisCache = new RedisCacheManager();
 
+// ESP32 communication function
+function esp32Request(string $endpoint, string $method = 'GET', array $data = []): ?array {
+    $url = 'http://' . ESP32_IP . ':' . ESP32_PORT . $endpoint;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, ESP32_TIMEOUT);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'User-Agent: RP-Attendance-System/1.0'
+    ]);
+
+    if ($method === 'POST' && !empty($data)) {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    }
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($error) {
+        log_message('error', 'ESP32 communication error', [
+            'endpoint' => $endpoint,
+            'error' => $error,
+            'url' => $url
+        ]);
+        return null;
+    }
+
+    if ($httpCode !== 200) {
+        log_message('warning', 'ESP32 returned non-200 status', [
+            'endpoint' => $endpoint,
+            'status' => $httpCode,
+            'response' => $response
+        ]);
+        return null;
+    }
+
+    $decodedResponse = json_decode($response, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        log_message('warning', 'Invalid JSON response from ESP32', [
+            'endpoint' => $endpoint,
+            'response' => $response
+        ]);
+        return null;
+    }
+
+    log_message('info', 'ESP32 request successful', [
+        'endpoint' => $endpoint,
+        'method' => $method,
+        'response_keys' => array_keys($decodedResponse)
+    ]);
+
+    return $decodedResponse;
+}
+
 // Initialize application
 log_message('info', 'Application initialized', [
     'version' => APP_VERSION,
     'environment' => APP_ENV,
     'database' => $db_name,
     'https_enabled' => SecurityUtils::isHTTPS(),
-    'cache_type' => $redisCache->getStats()['type'] ?? 'unknown'
+    'cache_type' => $redisCache->getStats()['type'] ?? 'unknown',
+    'esp32_ip' => ESP32_IP,
+    'esp32_port' => ESP32_PORT
 ]);
 ?>

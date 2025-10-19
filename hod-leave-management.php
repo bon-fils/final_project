@@ -156,42 +156,400 @@ if(isset($_GET['ajax'])){
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body { font-family:'Segoe UI',sans-serif; background:linear-gradient(to right, #0066cc, #003366); margin:0; }
-.sidebar { position:fixed; top:0; left:0; width:250px; height:100vh; background:#003366; color:white; padding-top:20px; }
-.sidebar a { display:block; padding:12px 20px; color:#fff; text-decoration:none; }
-.sidebar a:hover, .sidebar a.active { background:#0059b3; }
-.topbar { margin-left:250px; background:#fff; padding:10px 30px; border-bottom:1px solid #ddd; }
-.main-content { margin-left:250px; padding:30px; }
-.footer { text-align:center; margin-left:250px; padding:15px; font-size:0.9rem; color:#666; background:#f0f0f0; }
-.btn-approve { background-color:#28a745; color:white; }
-.btn-reject { background-color:#dc3545; color:white; }
-.btn-approve:hover { background-color:#218838; }
-.btn-reject:hover { background-color:#c82333; }
-@media(max-width:768px){ .sidebar,.topbar,.main-content,.footer{ margin-left:0!important; width:100%; } .sidebar{ display:none; } }
+:root {
+    --primary-color: #000000;
+    --primary-dark: #000000;
+    --primary-light: #f8f9fa;
+    --primary-gradient: linear-gradient(135deg, #000000 0%, #333333 100%);
+
+    --success-color: #10b981;
+    --success-light: #d1fae5;
+    --success-dark: #047857;
+
+    --danger-color: #ef4444;
+    --danger-light: #fee2e2;
+    --danger-dark: #dc2626;
+
+    --warning-color: #f59e0b;
+    --warning-light: #fef3c7;
+    --warning-dark: #d97706;
+
+    --info-color: #06b6d4;
+    --info-light: #cffafe;
+    --info-dark: #0891b2;
+
+    --shadow-light: 0 4px 15px rgba(0,0,0,0.08);
+    --shadow-medium: 0 8px 25px rgba(0,0,0,0.15);
+    --shadow-heavy: 0 12px 35px rgba(0,0,0,0.2);
+    --border-radius: 12px;
+    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #000000;
+    min-height: 100vh;
+    margin: 0;
+    position: relative;
+    overflow-x: hidden;
+}
+
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
+    border-right: 1px solid rgba(0, 0, 0, 0.1);
+    padding: 0;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar .logo {
+    background: #000000;
+    color: white;
+    padding: 25px 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.sidebar .logo h4 {
+    color: white;
+    font-weight: 700;
+    margin: 0;
+    font-size: 1.4rem;
+    position: relative;
+    z-index: 2;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.sidebar-nav {
+    list-style: none;
+    padding: 20px 0;
+    margin: 0;
+}
+
+.sidebar-nav .nav-section {
+    padding: 15px 20px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    margin-bottom: 10px;
+}
+
+.sidebar-nav a {
+    display: block;
+    padding: 14px 25px;
+    color: #000000;
+    text-decoration: none;
+    border-radius: 0 25px 25px 0;
+    margin: 0 0 2px 0;
+    transition: var(--transition);
+    font-weight: 500;
+    position: relative;
+    border-left: 3px solid transparent;
+}
+
+.sidebar-nav a:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #000000;
+    border-left-color: #000000;
+    transform: translateX(8px);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+}
+
+.sidebar-nav a.active {
+    background: rgba(0, 0, 0, 0.1);
+    color: #000000;
+    border-left-color: #000000;
+    font-weight: 600;
+}
+
+.sidebar-nav a i {
+    margin-right: 12px;
+    width: 20px;
+    text-align: center;
+    font-size: 1.1rem;
+}
+
+.topbar {
+    margin-left: 280px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    padding: 20px 30px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    box-shadow: var(--shadow-light);
+}
+
+.main-content {
+    margin-left: 280px;
+    padding: 40px 30px;
+    max-width: calc(100% - 280px);
+    overflow-x: auto;
+}
+
+.footer {
+    text-align: center;
+    margin-left: 280px;
+    padding: 20px;
+    font-size: 0.9rem;
+    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    position: fixed;
+    bottom: 0;
+    width: calc(100% - 280px);
+    box-shadow: 0 -1px 5px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+}
+
+.card {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-light);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: #000000;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow-medium);
+}
+
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 10px 20px;
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-primary {
+    background: #000000;
+    border: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.btn-primary:hover {
+    background: #333333;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.btn-approve {
+    background-color: #10b981 !important;
+    color: white !important;
+    border: none !important;
+}
+
+.btn-reject {
+    background-color: #ef4444 !important;
+    color: white !important;
+    border: none !important;
+}
+
+.btn-approve:hover {
+    background-color: #047857 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+}
+
+.btn-reject:hover {
+    background-color: #dc2626 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+}
+
+.table {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-light);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.table thead th {
+    background: #000000;
+    color: white;
+    border: none;
+    font-weight: 600;
+    padding: 15px;
+    position: relative;
+}
+
+.table tbody td {
+    padding: 15px;
+    border-color: rgba(0, 0, 0, 0.1);
+    transition: var(--transition);
+}
+
+.table tbody tr:hover td {
+    background: rgba(0, 0, 0, 0.05);
+    transform: translateX(5px);
+}
+
+.mobile-menu-toggle {
+    display: none;
+    position: fixed;
+    top: 15px;
+    left: 15px;
+    z-index: 1003;
+    background: #000000;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    transition: var(--transition);
+}
+
+.mobile-menu-toggle:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        width: 260px;
+        z-index: 1002;
+    }
+
+    .sidebar.show {
+        transform: translateX(0);
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .sidebar.show::after {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 260px;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(2px);
+        z-index: -1;
+    }
+
+    .topbar,
+    .main-content,
+    .footer {
+        margin-left: 0 !important;
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+
+    .topbar {
+        padding: 15px 20px;
+    }
+
+    .main-content {
+        padding: 20px 15px;
+    }
+
+    .mobile-menu-toggle {
+        display: block !important;
+    }
+
+    .sidebar-nav a {
+        padding: 16px 20px;
+        font-size: 0.95rem;
+    }
+
+    .sidebar-nav .nav-section {
+        padding: 12px 20px 8px;
+        font-size: 0.7rem;
+    }
+}
+
+/* Form styling */
+.form-label {
+    color: #000000;
+    font-weight: 600;
+}
+
+.form-control, .form-select {
+    color: #000000;
+    border: 1px solid #000000;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: #000000;
+    box-shadow: 0 0 0 0.2rem rgba(0, 0, 0, 0.25);
+}
 </style>
 </head>
 <body>
 
-<div class="sidebar">
-  <div class="text-center mb-4">
-    <img src="RP_Logo.jpeg" alt="RP Logo" width="100" class="mb-2" />
-    <h5>HoD Panel</h5>
-    <hr style="border-color:#ffffff66;">
-  </div>
-  <a href="hod-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
-  <a href="hod-department-reports.php"><i class="fas fa-chart-bar me-2"></i> Department Reports</a>
-  <a href="hod-leave-management.php" class="active"><i class="fas fa-envelope-open-text me-2"></i> Manage Leave</a>
-  <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
-</div>
+<!-- Include Admin Sidebar -->
+<?php include 'includes/admin-sidebar.php'; ?>
 
-<div class="topbar d-flex justify-content-between align-items-center">
-  <h5 class="m-0 fw-bold">Manage Leave Requests</h5>
-  <span>Welcome, Head of Department</span>
+<div class="topbar">
+    <div class="d-flex align-items-center justify-content-end">
+        <div class="d-flex gap-2 align-items-center">
+            <div class="badge bg-primary fs-6 px-3 py-2">
+                <i class="fas fa-clock me-1"></i>Live Updates
+            </div>
+            <div class="badge bg-success fs-6 px-3 py-2">
+                <i class="fas fa-user-tie me-1"></i>Head of Department
+            </div>
+            <button class="btn btn-outline-primary btn-sm" onclick="refreshTable()">
+                <i class="fas fa-sync-alt me-1"></i>Refresh
+            </button>
+        </div>
+    </div>
 </div>
 
 <div class="main-content">
-  <div class="card p-4">
-    <h6 class="mb-3">Pending Leave Requests</h6>
+    <!-- Page Header -->
+    <div class="page-header text-center py-4" style="background: linear-gradient(135deg, #f8fafc 0%, #000000 100%); border-bottom: 2px solid #000000; margin-bottom: 20px;">
+        <div class="d-flex align-items-center justify-content-center">
+            <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" style="height: 60px; width: auto; margin-right: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" onerror="this.style.display='none'">
+            <h1 style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin: 0; font-weight: 700;">
+                Leave Management
+            </h1>
+        </div>
+    </div>
+
+    <div class="card p-4">
+        <h6 class="mb-3"><i class="fas fa-envelope-open-text me-2"></i>Department Leave Requests</h6>
     <div class="table-responsive">
       <table class="table table-bordered table-hover align-middle">
         <thead class="table-light">
@@ -240,7 +598,9 @@ body { font-family:'Segoe UI',sans-serif; background:linear-gradient(to right, #
   </div>
 </div>
 
-<div class="footer">&copy; 2025 Rwanda Polytechnic | HoD Panel</div>
+<div class="footer">
+    &copy; 2025 Rwanda Polytechnic | Head of Department Panel
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>

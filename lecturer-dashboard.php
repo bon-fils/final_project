@@ -3711,68 +3711,8 @@ input[type="range"]::-moz-range-thumb:hover {
         <i class="fas fa-bars" aria-hidden="true"></i>
     </button>
 
-    <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-        <div class="logo" style="text-align: center; padding: 20px 0;">
-            <h3 style="margin: 0; font-weight: 700; color: white;"><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
-            <small style="color: rgba(255,255,255,0.8);">Lecturer Panel</small>
-        </div>
-
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <i class="fas fa-th-large me-2"></i>Main Dashboard
-            </li>
-            <li>
-                <a href="lecturer-dashboard.php" class="active">
-                    <i class="fas fa-tachometer-alt"></i>Dashboard Overview
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-book me-2"></i>Course Management
-            </li>
-            <li>
-                <a href="lecturer-my-courses.php">
-                    <i class="fas fa-book"></i>My Courses
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-calendar-check me-2"></i>Attendance
-            </li>
-            <li>
-                <a href="attendance-session.php">
-                    <i class="fas fa-video"></i>Attendance Session
-                </a>
-            </li>
-            <li>
-                <a href="attendance-reports.php">
-                    <i class="fas fa-chart-line"></i>Attendance Reports
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-envelope me-2"></i>Requests
-            </li>
-            <li>
-                <a href="leave-requests.php">
-                    <i class="fas fa-envelope"></i>Leave Requests
-                    <?php if ($pending_leaves > 0): ?>
-                        <span class="notification-badge"><?= $pending_leaves ?></span>
-                    <?php endif; ?>
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-sign-out-alt me-2"></i>Account
-            </li>
-            <li>
-                <a href="logout.php" class="text-danger">
-                    <i class="fas fa-sign-out-alt"></i>Logout
-                </a>
-            </li>
-        </ul>
-    </div>
+    <!-- Include Lecturer Sidebar -->
+    <?php include 'includes/lecturer-sidebar.php'; ?>
 
     <!-- Main Content -->
     <div class="main-content">

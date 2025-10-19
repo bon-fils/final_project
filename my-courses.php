@@ -643,73 +643,10 @@ body {
         <i class="fas fa-bars" aria-hidden="true></i>
     </button>
 
-    <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-        <div class="logo-container text-center">
-            <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" onerror="this.style.display='none'">
-            <div class="logo-glow"></div>
-        </div>
-
-        <div class="text-center mb-4">
-            <h3 style="margin: 0; font-weight: 700; color: white;"><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
-            <small style="color: rgba(255,255,255,0.8);">Lecturer Panel</small>
-        </div>
-
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <i class="fas fa-th-large me-2"></i>Main Dashboard
-            </li>
-            <li>
-                <a href="lecturer-dashboard.php">
-                    <i class="fas fa-tachometer-alt"></i><span class="sidebar-text"> Dashboard Overview</span>
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-book me-2"></i>Course Management
-            </li>
-            <li>
-                <a href="my-courses.php" class="active">
-                    <i class="fas fa-book"></i><span class="sidebar-text"> My Courses</span>
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-calendar-check me-2"></i>Attendance
-            </li>
-            <li>
-                <a href="attendance-session.php">
-                    <i class="fas fa-video"></i><span class="sidebar-text"> Attendance Session</span>
-                </a>
-            </li>
-            <li>
-                <a href="attendance-reports.php">
-                    <i class="fas fa-chart-line"></i><span class="sidebar-text"> Attendance Reports</span>
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-envelope me-2"></i>Requests
-            </li>
-            <li>
-                <a href="leave-requests.php">
-                    <i class="fas fa-envelope"></i><span class="sidebar-text"> Leave Requests</span>
-                    <?php if (isset($_SESSION['pending_leaves']) && $_SESSION['pending_leaves'] > 0): ?>
-                        <span class="notification-badge"><?= $_SESSION['pending_leaves'] ?></span>
-                    <?php endif; ?>
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-sign-out-alt me-2"></i>Account
-            </li>
-            <li>
-                <a href="logout.php" class="text-danger">
-                    <i class="fas fa-sign-out-alt"></i><span class="sidebar-text"> Logout</span>
-                </a>
-            </li>
-        </ul>
-    </div>
+<?php
+// Include lecturer sidebar for consistent navigation
+include 'includes/lecturer_sidebar.php';
+?>
 
     <!-- Main Content -->
     <div class="main-content">

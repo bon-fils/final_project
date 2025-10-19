@@ -183,106 +183,15 @@ $last_updated = $dashboard_stats['last_updated'];
         <i class="fas fa-bars" aria-hidden="true"></i>
     </button>
 
-    <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-        <div class="logo">
-            <h3><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
-            <small>Admin Panel</small>
-        </div>
-
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <i class="fas fa-th-large me-2"></i>Main Dashboard
-            </li>
-            <li>
-                <a href="admin-dashboard.php" class="active">
-                    <i class="fas fa-tachometer-alt"></i>Dashboard Overview
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-users me-2"></i>User Management
-            </li>
-            <li>
-                <a href="register-student.php">
-                    <i class="fas fa-user-plus"></i>Register Student
-                </a>
-            </li>
-            <li>
-                <a href="admin-register-lecturer.php">
-                    <i class="fas fa-chalkboard-teacher"></i>Register Lecturer
-                </a>
-            </li>
-            <li>
-                <a href="manage-users.php">
-                    <i class="fas fa-users-cog"></i>Manage Users
-                </a>
-            </li>
-            <li>
-                <a href="admin-view-users.php">
-                    <i class="fas fa-users"></i>View Users
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-sitemap me-2"></i>Organization
-            </li>
-            <li>
-                <a href="manage-departments.php">
-                    <i class="fas fa-building"></i>Departments
-                </a>
-            </li>
-            <li>
-                <a href="assign-hod.php">
-                    <i class="fas fa-user-tie"></i>Assign HOD
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-chart-bar me-2"></i>Reports & Analytics
-            </li>
-            <li>
-                <a href="admin-reports.php">
-                    <i class="fas fa-chart-line"></i>Analytics Reports
-                </a>
-            </li>
-            <li>
-                <a href="attendance-reports.php">
-                    <i class="fas fa-calendar-check"></i>Attendance Reports
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-cog me-2"></i>System
-            </li>
-            <li>
-                <a href="system-logs.php">
-                    <i class="fas fa-file-code"></i>System Logs
-                </a>
-            </li>
-            <li>
-                <a href="hod-leave-management.php">
-                    <i class="fas fa-clipboard-list"></i>Leave Management
-                </a>
-            </li>
-
-            <li class="nav-section">
-                <i class="fas fa-sign-out-alt me-2"></i>Account
-            </li>
-            <li>
-                <a href="logout.php" class="text-danger">
-                    <i class="fas fa-sign-out-alt"></i>Logout
-                </a>
-            </li>
-        </ul>
-    </div>
+    <!-- Include Admin Sidebar -->
+    <?php include 'includes/admin-sidebar.php'; ?>
 
     <!-- Main Content -->
     <div class="main-content">
         <div class="topbar">
             <div class="d-flex align-items-center justify-content-between">
                 <div class="d-flex align-items-center">
-                    <h2 class="mb-0" style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
+                    <h2 class="mb-0">
                         <i class="fas fa-tachometer-alt me-3"></i>Admin Dashboard
                     </h2>
                 </div>
@@ -315,7 +224,7 @@ $last_updated = $dashboard_stats['last_updated'];
 
         <!-- Statistics Cards -->
         <div class="row g-4 mb-5">
-        <div class="row g-4 mb-5">
+            <!-- First Row -->
             <div class="col-xl-3 col-lg-6 col-md-6">
                 <div class="stats-card">
                     <i class="fas fa-users text-primary"></i>
@@ -366,7 +275,7 @@ $last_updated = $dashboard_stats['last_updated'];
                 <div class="stats-card">
                     <i class="fas fa-clock text-warning"></i>
                     <h3 id="pending_requests"><?= $pending_requests ?></h3>
-                    <p>Pending Requests</p>
+                    <p>Pending Leaves</p>
                 </div>
             </div>
             <div class="col-xl-3 col-lg-6 col-md-6">
@@ -419,6 +328,11 @@ $last_updated = $dashboard_stats['last_updated'];
                             <div class="col-md-6">
                                 <a href="assign-hod.php" class="btn btn-outline-danger w-100">
                                     <i class="fas fa-user-tie me-2"></i>Assign HOD
+                                </a>
+                            </div>
+                            <div class="col-md-6">
+                                <a href="hod-leave-management.php" class="btn btn-outline-info w-100">
+                                    <i class="fas fa-clipboard-list me-2"></i>Leave Management
                                 </a>
                             </div>
                             <div class="col-md-6">
@@ -485,8 +399,488 @@ $last_updated = $dashboard_stats['last_updated'];
                 </div>
             </div>
         </div>
+
+        <!-- Leave Management Section -->
+        <div id="leaveManagementSection" class="mt-5" style="display: none;">
+            <div class="card border-0 shadow">
+                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-bold">
+                        <i class="fas fa-clipboard-list me-2"></i>Leave Management Overview
+                    </h5>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-light btn-sm" onclick="refreshLeaveData()">
+                            <i class="fas fa-sync-alt me-1"></i>Refresh
+                        </button>
+                        <button class="btn btn-outline-light btn-sm" onclick="hideLeaveManagement()">
+                            <i class="fas fa-times me-1"></i>Close
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <!-- Leave Statistics -->
+                    <div class="row g-4 mb-4">
+                        <div class="col-xl-3 col-lg-6 col-md-6">
+                            <div class="stats-card">
+                                <i class="fas fa-clock text-warning"></i>
+                                <h3 id="totalLeaves">0</h3>
+                                <p>Total Leave Requests</p>
+                            </div>
+                        </div>
+                        <div class="col-xl-3 col-lg-6 col-md-6">
+                            <div class="stats-card">
+                                <i class="fas fa-hourglass-half text-warning"></i>
+                                <h3 id="pendingLeaves">0</h3>
+                                <p>Pending Requests</p>
+                            </div>
+                        </div>
+                        <div class="col-xl-3 col-lg-6 col-md-6">
+                            <div class="stats-card">
+                                <i class="fas fa-check-circle text-success"></i>
+                                <h3 id="approvedLeaves">0</h3>
+                                <p>Approved Requests</p>
+                            </div>
+                        </div>
+                        <div class="col-xl-3 col-lg-6 col-md-6">
+                            <div class="stats-card">
+                                <i class="fas fa-times-circle text-danger"></i>
+                                <h3 id="rejectedLeaves">0</h3>
+                                <p>Rejected Requests</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filters and Search -->
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-3">
+                            <label for="leaveStatusFilter" class="form-label fw-semibold">Status</label>
+                            <select id="leaveStatusFilter" class="form-select" onchange="filterLeaves()">
+                                <option value="all">All Status</option>
+                                <option value="pending">Pending</option>
+                                <option value="approved">Approved</option>
+                                <option value="rejected">Rejected</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="leaveDepartmentFilter" class="form-label fw-semibold">Department</label>
+                            <select id="leaveDepartmentFilter" class="form-select" onchange="filterLeaves()">
+                                <option value="all">All Departments</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="leaveSearch" class="form-label fw-semibold">Search</label>
+                            <input type="text" id="leaveSearch" class="form-control" placeholder="Search by name..." onkeyup="filterLeaves()">
+                        </div>
+                        <div class="col-md-3">
+                            <label for="leaveDateFilter" class="form-label fw-semibold">Date Range</label>
+                            <select id="leaveDateFilter" class="form-select" onchange="filterLeaves()">
+                                <option value="all">All Time</option>
+                                <option value="today">Today</option>
+                                <option value="week">This Week</option>
+                                <option value="month">This Month</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Leave Requests Table -->
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover align-middle" id="leaveTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th scope="col">#</th>
+                                    <th scope="col">Student Name</th>
+                                    <th scope="col">Department</th>
+                                    <th scope="col">Class</th>
+                                    <th scope="col">From Date</th>
+                                    <th scope="col">To Date</th>
+                                    <th scope="col">Days</th>
+                                    <th scope="col">Reason</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Requested</th>
+                                    <th scope="col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="leaveTableBody">
+                                <tr>
+                                    <td colspan="11" class="text-center py-4">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading leave requests...</span>
+                                        </div>
+                                        <p class="mt-2 text-muted">Loading leave requests...</p>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <nav id="leavePagination" class="mt-4" style="display: none;">
+                        <ul class="pagination justify-content-center" id="leavePaginationControls"></ul>
+                    </nav>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="js/admin-dashboard.js"></script>
+    <script>
+        // Leave Management Functions
+        let allLeaveRequests = [];
+        let filteredLeaveRequests = [];
+        let currentLeavePage = 1;
+        const leavesPerPage = 10;
+
+        function showLeaveManagement() {
+            document.getElementById('leaveManagementSection').style.display = 'block';
+            document.getElementById('leaveManagementSection').scrollIntoView({ behavior: 'smooth' });
+
+            // Update active link
+            document.querySelectorAll('.sidebar-nav a').forEach(link => link.classList.remove('active'));
+            document.querySelector('.leave-management-link').classList.add('active');
+
+            // Load leave data if not already loaded
+            if (allLeaveRequests.length === 0) {
+                loadLeaveData();
+            }
+        }
+
+        function hideLeaveManagement() {
+            document.getElementById('leaveManagementSection').style.display = 'none';
+            // Remove active class from leave management link
+            document.querySelector('.leave-management-link').classList.remove('active');
+        }
+
+        async function loadLeaveData() {
+            try {
+                const response = await fetch('api/admin-leave-api.php?action=get_all_leaves', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    allLeaveRequests = result.data.leaves || [];
+                    filteredLeaveRequests = [...allLeaveRequests];
+
+                    // Update statistics
+                    updateLeaveStatistics(result.data.stats || {});
+
+                    // Load departments for filter
+                    loadLeaveDepartments(result.data.departments || []);
+
+                    // Render table
+                    renderLeaveTable();
+                } else {
+                    showLeaveAlert('danger', 'Failed to load leave data: ' + (result.message || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error loading leave data:', error);
+                showLeaveAlert('danger', 'Failed to load leave data. Please try again.');
+            }
+        }
+
+        function updateLeaveStatistics(stats) {
+            document.getElementById('totalLeaves').textContent = stats.total || 0;
+            document.getElementById('pendingLeaves').textContent = stats.pending || 0;
+            document.getElementById('approvedLeaves').textContent = stats.approved || 0;
+            document.getElementById('rejectedLeaves').textContent = stats.rejected || 0;
+        }
+
+        function loadLeaveDepartments(departments) {
+            const select = document.getElementById('leaveDepartmentFilter');
+            select.innerHTML = '<option value="all">All Departments</option>';
+
+            departments.forEach(dept => {
+                const option = document.createElement('option');
+                option.value = dept.id;
+                option.textContent = dept.name;
+                select.appendChild(option);
+            });
+        }
+
+        function filterLeaves() {
+            const statusFilter = document.getElementById('leaveStatusFilter').value;
+            const departmentFilter = document.getElementById('leaveDepartmentFilter').value;
+            const searchTerm = document.getElementById('leaveSearch').value.toLowerCase();
+            const dateFilter = document.getElementById('leaveDateFilter').value;
+
+            filteredLeaveRequests = allLeaveRequests.filter(leave => {
+                // Status filter
+                if (statusFilter !== 'all' && leave.status !== statusFilter) {
+                    return false;
+                }
+
+                // Department filter
+                if (departmentFilter !== 'all' && leave.department_id != departmentFilter) {
+                    return false;
+                }
+
+                // Search filter
+                if (searchTerm) {
+                    const fullName = `${leave.first_name} ${leave.last_name}`.toLowerCase();
+                    if (!fullName.includes(searchTerm) && !leave.reason.toLowerCase().includes(searchTerm)) {
+                        return false;
+                    }
+                }
+
+                // Date filter
+                if (dateFilter !== 'all') {
+                    const requestedDate = new Date(leave.requested_at);
+                    const now = new Date();
+
+                    switch (dateFilter) {
+                        case 'today':
+                            if (requestedDate.toDateString() !== now.toDateString()) return false;
+                            break;
+                        case 'week':
+                            const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                            if (requestedDate < weekAgo) return false;
+                            break;
+                        case 'month':
+                            const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                            if (requestedDate < monthAgo) return false;
+                            break;
+                    }
+                }
+
+                return true;
+            });
+
+            currentLeavePage = 1;
+            renderLeaveTable();
+        }
+
+        function renderLeaveTable() {
+            const tbody = document.getElementById('leaveTableBody');
+            const startIndex = (currentLeavePage - 1) * leavesPerPage;
+            const endIndex = startIndex + leavesPerPage;
+            const pageData = filteredLeaveRequests.slice(startIndex, endIndex);
+
+            if (pageData.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="11" class="text-center py-4">
+                            <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                            <h5 class="text-muted">No Leave Requests Found</h5>
+                            <p class="text-muted">No leave requests match your current filters.</p>
+                        </td>
+                    </tr>
+                `;
+                document.getElementById('leavePagination').style.display = 'none';
+                return;
+            }
+
+            let html = '';
+            pageData.forEach((leave, index) => {
+                const statusClass = leave.status === 'approved' ? 'bg-success' :
+                                  leave.status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark';
+                const statusText = leave.status.charAt(0).toUpperCase() + leave.status.slice(1);
+
+                // Calculate days
+                const fromDate = new Date(leave.from_date);
+                const toDate = new Date(leave.to_date);
+                const days = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24)) + 1;
+
+                html += `
+                    <tr>
+                        <td>${startIndex + index + 1}</td>
+                        <td>
+                            <strong>${leave.first_name} ${leave.last_name}</strong>
+                            <br><small class="text-muted">ID: ${leave.student_id}</small>
+                        </td>
+                        <td>${leave.department_name}</td>
+                        <td>${leave.year_level}</td>
+                        <td>${new Date(leave.from_date).toLocaleDateString()}</td>
+                        <td>${new Date(leave.to_date).toLocaleDateString()}</td>
+                        <td><span class="badge bg-info">${days} day${days !== 1 ? 's' : ''}</span></td>
+                        <td>
+                            <span title="${leave.reason}">${leave.reason.length > 50 ? leave.reason.substring(0, 50) + '...' : leave.reason}</span>
+                        </td>
+                        <td><span class="badge ${statusClass}">${statusText}</span></td>
+                        <td><small class="text-muted">${new Date(leave.requested_at).toLocaleDateString()}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="viewLeaveDetails(${leave.id})" title="View Details">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            ${leave.supporting_file ? `<a href="uploads/${leave.supporting_file}" target="_blank" class="btn btn-sm btn-outline-secondary" title="View Supporting File">
+                                <i class="fas fa-file"></i>
+                            </a>` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = html;
+            renderLeavePagination();
+        }
+
+        function renderLeavePagination() {
+            const totalPages = Math.ceil(filteredLeaveRequests.length / leavesPerPage);
+            const pagination = document.getElementById('leavePaginationControls');
+
+            if (totalPages <= 1) {
+                document.getElementById('leavePagination').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('leavePagination').style.display = 'block';
+
+            let html = '';
+
+            // Previous button
+            html += `<li class="page-item ${currentLeavePage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changeLeavePage(${currentLeavePage - 1})">Previous</a>
+            </li>`;
+
+            // Page numbers
+            const startPage = Math.max(1, currentLeavePage - 2);
+            const endPage = Math.min(totalPages, currentLeavePage + 2);
+
+            if (startPage > 1) {
+                html += `<li class="page-item"><a class="page-link" href="#" onclick="changeLeavePage(1)">1</a></li>`;
+                if (startPage > 2) {
+                    html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+                }
+            }
+
+            for (let i = startPage; i <= endPage; i++) {
+                html += `<li class="page-item ${i === currentLeavePage ? 'active' : ''}">
+                    <a class="page-link" href="#" onclick="changeLeavePage(${i})">${i}</a>
+                </li>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+                }
+                html += `<li class="page-item"><a class="page-link" href="#" onclick="changeLeavePage(${totalPages})">${totalPages}</a></li>`;
+            }
+
+            // Next button
+            html += `<li class="page-item ${currentLeavePage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changeLeavePage(${currentLeavePage + 1})">Next</a>
+            </li>`;
+
+            pagination.innerHTML = html;
+        }
+
+        function changeLeavePage(page) {
+            if (page < 1 || page > Math.ceil(filteredLeaveRequests.length / leavesPerPage)) {
+                return;
+            }
+            currentLeavePage = page;
+            renderLeaveTable();
+        }
+
+        function viewLeaveDetails(leaveId) {
+            const leave = allLeaveRequests.find(l => l.id == leaveId);
+            if (!leave) return;
+
+            // Create modal for leave details
+            const modalHtml = `
+                <div class="modal fade" id="leaveDetailModal" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Leave Request Details</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <h6>Student Information</h6>
+                                        <p><strong>Name:</strong> ${leave.first_name} ${leave.last_name}</p>
+                                        <p><strong>Student ID:</strong> ${leave.student_id}</p>
+                                        <p><strong>Department:</strong> ${leave.department_name}</p>
+                                        <p><strong>Class:</strong> ${leave.year_level}</p>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <h6>Leave Information</h6>
+                                        <p><strong>From:</strong> ${new Date(leave.from_date).toLocaleDateString()}</p>
+                                        <p><strong>To:</strong> ${new Date(leave.to_date).toLocaleDateString()}</p>
+                                        <p><strong>Days:</strong> ${Math.ceil((new Date(leave.to_date) - new Date(leave.from_date)) / (1000 * 60 * 60 * 24)) + 1}</p>
+                                        <p><strong>Status:</strong> <span class="badge ${leave.status === 'approved' ? 'bg-success' : leave.status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark'}">${leave.status.charAt(0).toUpperCase() + leave.status.slice(1)}</span></p>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <h6>Reason</h6>
+                                    <p>${leave.reason}</p>
+                                </div>
+                                ${leave.supporting_file ? `
+                                    <div class="mt-3">
+                                        <h6>Supporting Document</h6>
+                                        <a href="uploads/${leave.supporting_file}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                            <i class="fas fa-file me-1"></i>View Document
+                                        </a>
+                                    </div>
+                                ` : ''}
+                                <div class="mt-3">
+                                    <h6>Request Timeline</h6>
+                                    <p><strong>Requested:</strong> ${new Date(leave.requested_at).toLocaleString()}</p>
+                                    ${leave.reviewed_at ? `<p><strong>Reviewed:</strong> ${new Date(leave.reviewed_at).toLocaleString()}</p>` : ''}
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Remove existing modal if present
+            const existingModal = document.getElementById('leaveDetailModal');
+            if (existingModal) existingModal.remove();
+
+            // Add new modal
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('leaveDetailModal'));
+            modal.show();
+        }
+
+        function refreshLeaveData() {
+            allLeaveRequests = [];
+            filteredLeaveRequests = [];
+            loadLeaveData();
+        }
+
+        function showLeaveAlert(type, message) {
+            const alertContainer = document.getElementById('alertBox');
+            const alertClass = type === 'success' ? 'alert-success' :
+                             type === 'danger' ? 'alert-danger' :
+                             type === 'warning' ? 'alert-warning' : 'alert-info';
+
+            const alertHtml = `
+                <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                    <i class="fas fa-info-circle me-2"></i>${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+
+            alertContainer.innerHTML = alertHtml;
+
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                const alert = alertContainer.querySelector('.alert');
+                if (alert) {
+                    alert.classList.remove('show');
+                    setTimeout(() => alert.remove(), 300);
+                }
+            }, 5000);
+        }
+
+        // Make functions globally available
+        window.showLeaveManagement = showLeaveManagement;
+        window.hideLeaveManagement = hideLeaveManagement;
+        window.refreshLeaveData = refreshLeaveData;
+        window.filterLeaves = filterLeaves;
+        window.changeLeavePage = changeLeavePage;
+        window.viewLeaveDetails = viewLeaveDetails;
+    </script>
 </body>
 </html>

@@ -393,16 +393,12 @@ try {
 </head>
 <body>
 
-<div class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-        <h4>🎓 Student Portal</h4>
-    </div>
-    <a href="students-dashboard.php"><i class="fas fa-home me-2"></i>Dashboard</a>
-    <a href="attendance-records.php"><i class="fas fa-calendar-check me-2"></i>Attendance Records</a>
-    <a href="request-leave.php" class="active"><i class="fas fa-file-signature me-2"></i>Request Leave</a>
-    <a href="leave-status.php"><i class="fas fa-info-circle me-2"></i>Leave Status</a>
-    <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
-</div>
+<?php
+// Include student sidebar for consistent navigation
+$student_name = htmlspecialchars(($student['first_name'] ?? '') . ' ' . ($student['last_name'] ?? ''));
+$student = $student ?? ['department_name' => 'Department'];
+include 'includes/student_sidebar.php';
+?>
 
 <div class="topbar d-flex justify-content-between align-items-center">
     <h5 class="m-0 fw-bold">Request Leave</h5>

@@ -1,150 +1,168 @@
 <?php
+/**
+ * Attendance Session Logger
+ * Handles logging for attendance session operations
+ */
+
 class AttendanceSessionLogger {
-    private $log_file;
-    private $max_file_size = 10485760; // 10MB
+    private $logFile;
+    private $logLevel;
 
-    public function __construct($log_file = null) {
-        $this->log_file = $log_file ?: __DIR__ . '/../logs/attendance_sessions.log';
-        $this->ensureLogDirectory();
-    }
+    const LEVEL_DEBUG = 'DEBUG';
+    const LEVEL_INFO = 'INFO';
+    const LEVEL_WARNING = 'WARNING';
+    const LEVEL_ERROR = 'ERROR';
 
-    private function ensureLogDirectory() {
-        $log_dir = dirname($this->log_file);
-        if (!is_dir($log_dir)) {
-            mkdir($log_dir, 0755, true);
+    public function __construct($logFile = null) {
+        $this->logFile = $logFile ?: __DIR__ . '/../logs/attendance_session.log';
+        $this->logLevel = getenv('LOG_LEVEL') ?: self::LEVEL_INFO;
+
+        // Ensure log directory exists
+        $logDir = dirname($this->logFile);
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0755, true);
         }
     }
 
-    private function rotateLogIfNeeded() {
-        if (file_exists($this->log_file) && filesize($this->log_file) > $this->max_file_size) {
-            $backup_file = $this->log_file . '.' . date('Y-m-d-H-i-s') . '.bak';
-            rename($this->log_file, $backup_file);
-
-            // Keep only last 5 backup files
-            $this->cleanupOldBackups();
-        }
+    /**
+     * Log debug message
+     */
+    public function logDebug($message, $context = []) {
+        $this->log(self::LEVEL_DEBUG, $message, $context);
     }
 
-    private function cleanupOldBackups() {
-        $log_dir = dirname($this->log_file);
-        $pattern = $log_dir . '/attendance_sessions.log.*.bak';
-        $backups = glob($pattern);
-
-        if (count($backups) > 5) {
-            // Sort by modification time, keep newest 5
-            usort($backups, function($a, $b) {
-                return filemtime($b) - filemtime($a);
-            });
-
-            $to_delete = array_slice($backups, 5);
-            foreach ($to_delete as $file) {
-                unlink($file);
-            }
-        }
+    /**
+     * Log info message
+     */
+    public function logInfo($message, $context = []) {
+        $this->log(self::LEVEL_INFO, $message, $context);
     }
 
-    public function log($level, $message, $context = []) {
-        $this->rotateLogIfNeeded();
+    /**
+     * Log warning message
+     */
+    public function logWarning($message, $context = []) {
+        $this->log(self::LEVEL_WARNING, $message, $context);
+    }
+
+    /**
+     * Log error message
+     */
+    public function logError($message, $context = []) {
+        $this->log(self::LEVEL_ERROR, $message, $context);
+    }
+
+    /**
+     * Log message with level
+     */
+    private function log($level, $message, $context = []) {
+        // Check if this level should be logged
+        if (!$this->shouldLog($level)) {
+            return;
+        }
 
         $timestamp = date('Y-m-d H:i:s');
-        $user_id = $_SESSION['user_id'] ?? 'unknown';
-        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $userId = $_SESSION['user_id'] ?? 'unknown';
+        $userRole = $_SESSION['role'] ?? 'unknown';
 
-        $log_entry = [
-            'timestamp' => $timestamp,
-            'level' => strtoupper($level),
-            'user_id' => $user_id,
-            'ip' => $ip,
-            'message' => $message,
-            'context' => $context
+        $logEntry = sprintf(
+            "[%s] %s [%s:%s] %s",
+            $timestamp,
+            $level,
+            $userRole,
+            $userId,
+            $message
+        );
+
+        if (!empty($context)) {
+            $logEntry .= " | " . json_encode($context);
+        }
+
+        $logEntry .= "\n";
+
+        // Write to file
+        file_put_contents($this->logFile, $logEntry, FILE_APPEND | LOCK_EX);
+    }
+
+    /**
+     * Check if message should be logged based on level
+     */
+    private function shouldLog($level) {
+        $levels = [
+            self::LEVEL_DEBUG => 1,
+            self::LEVEL_INFO => 2,
+            self::LEVEL_WARNING => 3,
+            self::LEVEL_ERROR => 4
         ];
 
-        $log_line = json_encode($log_entry) . PHP_EOL;
+        $currentLevelValue = $levels[$this->logLevel] ?? 2;
+        $messageLevelValue = $levels[$level] ?? 2;
 
-        if (file_put_contents($this->log_file, $log_line, FILE_APPEND | LOCK_EX) === false) {
-            error_log("Failed to write to attendance session log: " . $this->log_file);
-        }
+        return $messageLevelValue >= $currentLevelValue;
     }
 
-    public function info($message, $context = []) {
-        $this->log('info', $message, $context);
+    /**
+     * Log API request
+     */
+    public function logApiRequest($action, $params = []) {
+        $this->logInfo("API Request: {$action}", [
+            'action' => $action,
+            'params' => $this->sanitizeParams($params),
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
+        ]);
     }
 
-    public function warning($message, $context = []) {
-        $this->log('warning', $message, $context);
+    /**
+     * Log API response
+     */
+    public function logApiResponse($action, $status, $message = '') {
+        $level = $status === 'success' ? self::LEVEL_INFO : self::LEVEL_WARNING;
+        $this->log($level, "API Response: {$action} - {$status}", [
+            'action' => $action,
+            'status' => $status,
+            'message' => $message
+        ]);
     }
 
-    public function error($message, $context = []) {
-        $this->log('error', $message, $context);
-    }
-
-    public function debug($message, $context = []) {
-        if (defined('DEBUG_MODE') && DEBUG_MODE) {
-            $this->log('debug', $message, $context);
-        }
-    }
-
-    public function logSessionAction($action, $session_id, $user_id, $details = []) {
-        $this->info("Session action: {$action}", array_merge([
-            'session_id' => $session_id,
-            'user_id' => $user_id,
-            'action' => $action
-        ], $details));
-    }
-
-    public function logPerformance($operation, $duration, $details = []) {
-        $this->info("Performance: {$operation}", array_merge([
+    /**
+     * Log session operation
+     */
+    public function logSessionOperation($operation, $sessionId, $details = []) {
+        $this->logInfo("Session Operation: {$operation}", array_merge([
             'operation' => $operation,
-            'duration_ms' => $duration
+            'session_id' => $sessionId
         ], $details));
     }
 
-    public function getRecentLogs($limit = 100, $level = null) {
-        if (!file_exists($this->log_file)) {
-            return [];
-        }
-
-        $logs = [];
-        $handle = fopen($this->log_file, 'r');
-
-        if ($handle) {
-            $lines_read = 0;
-            while (($line = fgets($handle)) !== false && $lines_read < $limit) {
-                $log_entry = json_decode($line, true);
-                if ($log_entry) {
-                    if (!$level || strtoupper($log_entry['level']) === strtoupper($level)) {
-                        $logs[] = $log_entry;
-                        $lines_read++;
-                    }
-                }
-            }
-            fclose($handle);
-        }
-
-        return array_reverse($logs); // Most recent first
+    /**
+     * Log attendance operation
+     */
+    public function logAttendanceOperation($operation, $sessionId, $studentId, $details = []) {
+        $this->logInfo("Attendance Operation: {$operation}", array_merge([
+            'operation' => $operation,
+            'session_id' => $sessionId,
+            'student_id' => $studentId
+        ], $details));
     }
 
-    public function searchLogs($query, $limit = 50) {
-        if (!file_exists($this->log_file)) {
-            return [];
-        }
+    /**
+     * Sanitize parameters for logging (remove sensitive data)
+     */
+    private function sanitizeParams($params) {
+        $sensitiveKeys = ['password', 'csrf_token', 'image_data'];
 
-        $results = [];
-        $handle = fopen($this->log_file, 'r');
-
-        if ($handle) {
-            while (($line = fgets($handle)) !== false && count($results) < $limit) {
-                if (stripos($line, $query) !== false) {
-                    $log_entry = json_decode($line, true);
-                    if ($log_entry) {
-                        $results[] = $log_entry;
-                    }
-                }
+        $sanitized = [];
+        foreach ($params as $key => $value) {
+            if (in_array(strtolower($key), $sensitiveKeys)) {
+                $sanitized[$key] = '[REDACTED]';
+            } elseif (is_string($value) && strlen($value) > 100) {
+                $sanitized[$key] = substr($value, 0, 100) . '...';
+            } else {
+                $sanitized[$key] = $value;
             }
-            fclose($handle);
         }
 
-        return array_reverse($results);
+        return $sanitized;
     }
 }
-?>

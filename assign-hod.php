@@ -1,84 +1,69 @@
 <?php
 /**
- * HOD Assignment System - Refined Version
- * Enhanced with better security, performance, and user experience
+ * HOD Assignment System - Frontend Interface
+ * Clean, modular interface for HOD assignment management
  *
- * @version 4.0.0
+ * This file serves as the main UI for the HOD assignment system.
+ * All business logic has been moved to dedicated classes and API endpoints.
+ *
+ * @version 6.0.0
  * @author RP System Development Team
+ * @since 2025-01-17
  */
 
-// Security headers
+// Security headers - Prevent common web vulnerabilities
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
 header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 
-// Essential dependencies
+// Essential dependencies - Load configuration and security
 require_once "config.php";
 require_once "session_check.php";
 require_once "backend/classes/Logger.php";
 
-// Initialize logger
-$logger = new Logger('logs/hod_assignment.log', Logger::INFO);
+// Initialize logger for security and debugging
+$logger = new Logger('logs/hod_assignment_ui.log', Logger::INFO);
 
-// Verify admin access with enhanced security
+// Verify admin access with comprehensive security checks
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $logger->warning('HOD Assignment', 'Unauthorized access attempt', [
+    $logger->warning('HOD Assignment UI', 'Unauthorized access attempt', [
         'user_id' => $_SESSION['user_id'] ?? 'unknown',
         'role' => $_SESSION['role'] ?? 'unknown',
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown'
     ]);
     header('Location: login.php?error=access_denied');
     exit();
 }
 
-// Generate CSRF token with session fingerprinting
+// Generate CSRF token with session fingerprinting for security
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     $_SESSION['csrf_created'] = time();
 }
 $csrf_token = $_SESSION['csrf_token'];
 
-// Validate CSRF token freshness (24 hours)
+// Validate CSRF token freshness (24 hours expiry)
 if (isset($_SESSION['csrf_created']) && (time() - $_SESSION['csrf_created']) > 86400) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     $_SESSION['csrf_created'] = time();
     $csrf_token = $_SESSION['csrf_token'];
 }
 
-// Rate limiting for API requests with exponential backoff
-function checkApiRateLimit() {
-    $max_requests_per_minute = 30;
-    $time_window = 60;
-
-    if (!isset($_SESSION['api_requests'])) {
-        $_SESSION['api_requests'] = [];
-    }
-
-    $current_time = time();
-
-    // Clean old requests
-    $_SESSION['api_requests'] = array_filter($_SESSION['api_requests'], function($timestamp) use ($current_time, $time_window) {
-        return ($current_time - $timestamp) < $time_window;
-    });
-
-    // Check if under limit
-    if (count($_SESSION['api_requests']) >= $max_requests_per_minute) {
-        return false;
-    }
-
-    // Add current request
-    $_SESSION['api_requests'][] = $current_time;
-    return true;
-}
-
-// Enhanced CSRF validation
+/**
+ * Enhanced CSRF validation with timing attack protection
+ *
+ * @param string $token The token to validate
+ * @return bool True if valid, false otherwise
+ */
 function validateCsrfToken($token) {
     if (empty($token) || empty($_SESSION['csrf_token'])) {
         return false;
     }
 
+    // Use hash_equals for timing attack protection
     if (!hash_equals($_SESSION['csrf_token'], $token)) {
         return false;
     }
@@ -94,7 +79,7 @@ function validateCsrfToken($token) {
 // Validate CSRF token for POST requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
     if (!validateCsrfToken($_POST['csrf_token'])) {
-        $logger->warning('HOD Assignment', 'Invalid CSRF token', [
+        $logger->warning('HOD Assignment UI', 'Invalid CSRF token in POST request', [
             'user_id' => $_SESSION['user_id'],
             'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
         ]);
@@ -104,305 +89,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
     }
 }
 
-// --- Unified Data API for AJAX ---
+// Handle AJAX requests by redirecting to dedicated API endpoint
+// This maintains backward compatibility while centralizing API logic
 if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
-    // Security checks for AJAX requests
-    require_once "config.php";
-    require_once "session_check.php";
+    // For POST requests, forward to API with POST data
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Build the target URL
+        $target_url = 'api/assign-hod-api.php?' . http_build_query($_GET);
 
-    // Ensure user is logged in and is admin
-    if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['status' => 'error', 'message' => 'Unauthorized access']);
-        exit;
-    }
+        // Create a new POST request to the API endpoint
+        $ch = curl_init($target_url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($_POST));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/x-www-form-urlencoded',
+            'X-Forwarded-For: ' . ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR']),
+            'User-Agent: ' . ($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown')
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30); // Add timeout
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10); // Add connection timeout
 
-    // Rate limiting check
-    if (!checkApiRateLimit()) {
-        http_response_code(429);
-        echo json_encode(['status' => 'error', 'message' => 'Too many requests. Please wait before trying again.']);
-        exit;
-    }
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
 
-    header('Content-Type: application/json');
-    header('Cache-Control: no-cache, must-revalidate');
-    header('X-Robots-Tag: noindex, nofollow');
-
-    $action = $_GET['action'] ?? '';
-    
-    try {
-        // Log API request for debugging
-        error_log("HOD Assignment API Request: Action '{$action}' by user ID: " . ($_SESSION['user_id'] ?? 'unknown') .
-                 " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
-
-        switch ($action) {
-            case 'get_lecturers':
-                // Get lecturers with optional department filtering
-                $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
-
-                $where_clause = "WHERE u.role IN ('lecturer', 'hod')";
-                $params = [];
-
-                if ($department_id) {
-                    $where_clause .= " AND l.department_id = ?";
-                    $params[] = $department_id;
-                }
-
-                $stmt = $pdo->prepare("
-                    SELECT l.id, u.first_name, u.last_name, u.email, u.role, u.phone, l.department_id,
-                        CONCAT(u.first_name, ' ', u.last_name) as full_name,
-                        u.username, u.status, u.created_at, u.updated_at,
-                        d.name as department_name,
-                        hd.name as hod_department_name
-                    FROM lecturers l
-                    LEFT JOIN users u ON l.user_id = u.id
-                    LEFT JOIN departments d ON l.department_id = d.id
-                    LEFT JOIN departments hd ON hd.hod_id = l.id
-                    $where_clause
-                    ORDER BY u.first_name, u.last_name
-                ");
-                $stmt->execute($params);
-                $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-                // Validate data integrity
-                foreach ($lecturers as &$lecturer) {
-                    if (empty($lecturer['username']) && !empty($lecturer['email'])) {
-                        $lecturer['data_integrity'] = 'warning';
-                        $lecturer['data_integrity_message'] = 'User account not found';
-                    }
-                }
-
-                echo json_encode(['status' => 'success', 'data' => $lecturers, 'count' => count($lecturers)]);
-                break;
-                
-            case 'get_hods':
-                // Get only HODs
-                $stmt = $pdo->prepare("
-                    SELECT l.id, u.first_name, u.last_name, u.email, u.role, u.phone, l.department_id,
-                        CONCAT(u.first_name, ' ', u.last_name) as full_name,
-                        u.username, u.status, u.created_at, u.updated_at
-                    FROM lecturers l
-                    LEFT JOIN users u ON l.user_id = u.id
-                    WHERE u.role = 'hod'
-                    ORDER BY u.first_name, u.last_name
-                ");
-                $stmt->execute();
-                $hods = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                echo json_encode(['status' => 'success', 'data' => $hods]);
-                break;
-                
-            case 'get_departments':
-                // Get departments with HOD information and data integrity checks
-                $stmt = $pdo->prepare("
-                    SELECT d.id, d.name, d.hod_id,
-                        u.first_name AS hod_first_name,
-                        u.last_name AS hod_last_name,
-                        CONCAT(u.first_name, ' ', u.last_name) as hod_name,
-                        u.email AS hod_email,
-                        u.role AS hod_role,
-                        CASE
-                            WHEN d.hod_id IS NULL THEN 'unassigned'
-                            WHEN d.hod_id IS NOT NULL AND l.id IS NULL THEN 'invalid'
-                            WHEN d.hod_id IS NOT NULL AND u.role != 'hod' THEN 'invalid_role'
-                            ELSE 'assigned'
-                        END as assignment_status
-                    FROM departments d
-                    LEFT JOIN lecturers l ON d.hod_id = l.id
-                    LEFT JOIN users u ON l.user_id = u.id
-                    ORDER BY d.name
-                ");
-                $stmt->execute();
-                $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-                // Add data integrity warnings
-                $integrity_issues = 0;
-                foreach ($departments as &$dept) {
-                    if ($dept['assignment_status'] === 'invalid' || $dept['assignment_status'] === 'invalid_role') {
-                        $integrity_issues++;
-                        $dept['data_integrity'] = 'warning';
-                        $dept['data_integrity_message'] = $dept['assignment_status'] === 'invalid' ?
-                            'HOD ID exists but lecturer not found' :
-                            'Assigned lecturer is not marked as HOD';
-                    }
-                }
-
-                echo json_encode([
-                    'status' => 'success',
-                    'data' => $departments,
-                    'count' => count($departments),
-                    'integrity_issues' => $integrity_issues
-                ]);
-                break;
-                
-            case 'get_assignment_stats':
-                // Get statistics
-                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM departments");
-                $stmt->execute();
-                $totalDepts = $stmt->fetchColumn();
-                
-                $stmt = $pdo->prepare("SELECT COUNT(*) as assigned FROM departments WHERE hod_id IS NOT NULL");
-                $stmt->execute();
-                $assignedDepts = $stmt->fetchColumn();
-                
-                $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM lecturers l LEFT JOIN users u ON l.user_id = u.id WHERE u.role IN ('lecturer', 'hod') AND u.id IS NOT NULL");
-                $stmt->execute();
-                $totalLecturers = $stmt->fetchColumn();
-                
-                echo json_encode([
-                    'status' => 'success', 
-                    'data' => [
-                        'total_departments' => $totalDepts,
-                        'assigned_departments' => $assignedDepts,
-                        'unassigned_departments' => $totalDepts - $assignedDepts,
-                        'total_lecturers' => $totalLecturers
-                    ]
-                ]);
-                break;
-                
-            case 'assign_hod':
-                // Handle HOD assignment with comprehensive validation
-                $department_id = filter_input(INPUT_POST, 'department_id', FILTER_VALIDATE_INT);
-                $hod_id = filter_input(INPUT_POST, 'hod_id', FILTER_VALIDATE_INT);
-
-                // Validate department ID
-                if (!$department_id || $department_id <= 0) {
-                    echo json_encode(['status' => 'error', 'message' => 'Invalid department ID provided']);
-                    exit;
-                }
-
-                // Verify department exists and get current assignment
-                $stmt = $pdo->prepare("SELECT id, name, hod_id FROM departments WHERE id = ?");
-                $stmt->execute([$department_id]);
-                $department = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$department) {
-                    echo json_encode(['status' => 'error', 'message' => 'Department not found in database']);
-                    exit;
-                }
-
-                // Check if this is actually a change
-                $current_hod_id = $department['hod_id'];
-                if ($current_hod_id == $hod_id) {
-                    echo json_encode([
-                        'status' => 'info',
-                        'message' => 'No changes made - same HOD assignment already exists'
-                    ]);
-                    exit;
-                }
-
-                $pdo->beginTransaction();
-
-                try {
-                    if ($hod_id) {
-                        // Validate lecturer exists and get details
-                        $stmt = $pdo->prepare("
-                            SELECT l.id, u.first_name, u.last_name, u.email, u.role, l.department_id
-                            FROM lecturers l
-                            LEFT JOIN users u ON l.user_id = u.id
-                            WHERE l.id = ?
-                        ");
-                        $stmt->execute([$hod_id]);
-                        $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                        if (!$lecturer) {
-                            throw new Exception('Lecturer not found in database');
-                        }
-
-                        // Check if lecturer is already HOD for another department
-                        if ($lecturer['role'] === 'hod' && $current_hod_id != $hod_id) {
-                            $stmt = $pdo->prepare("SELECT name FROM departments WHERE hod_id = ? AND id != ?");
-                            $stmt->execute([$hod_id, $department_id]);
-                            $other_dept = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                            if ($other_dept) {
-                                // Allow reassigning by removing from previous department
-                                $stmt = $pdo->prepare("UPDATE departments SET hod_id = NULL WHERE hod_id = ?");
-                                $stmt->execute([$hod_id]);
-                                error_log("HOD Reassignment: Removed {$lecturer['first_name']} {$lecturer['last_name']} from {$other_dept['name']}");
-                            }
-                        }
-
-                        // Note: Role is stored in users table, not lecturers table
-                        // The user creation/update query below handles role assignment
-
-                        // Create or update user account for HOD
-                        $username = strtolower($lecturer['first_name'] . '.' . $lecturer['last_name']);
-                        $default_password = password_hash('Welcome123!', PASSWORD_DEFAULT);
-
-                        $stmt = $pdo->prepare("
-                            INSERT INTO users (username, email, password, role, status, created_at)
-                            VALUES (?, ?, ?, 'hod', 'active', NOW())
-                            ON DUPLICATE KEY UPDATE
-                            role = 'hod', status = 'active', updated_at = NOW()
-                        ");
-                        $stmt->execute([$username, $lecturer['email'], $default_password]);
-
-                        // Log the assignment
-                        error_log("HOD Assignment: {$lecturer['first_name']} {$lecturer['last_name']} assigned to {$department['name']}");
-
-                    } else {
-                        // Removing HOD assignment - log this action
-                        error_log("HOD Removal: Assignment removed from {$department['name']}");
-                    }
-
-                    // Update department HOD (this is the critical operation)
-                    $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
-                    $stmt->execute([$hod_id ?: null, $department_id]);
-
-                    $pdo->commit();
-
-                    $action = $hod_id ? 'assigned' : 'removed';
-                    $hod_name = $hod_id ? "{$lecturer['first_name']} {$lecturer['last_name']}" : 'None';
-
-                    echo json_encode([
-                        'status' => 'success',
-                        'message' => "Successfully assigned",
-                        'details' => [
-                            'department' => $department['name'],
-                            'hod_name' => $hod_name,
-                            'action' => $action,
-                            'previous_hod_id' => $current_hod_id,
-                            'new_hod_id' => $hod_id,
-                            'department_id' => $department_id
-                        ]
-                    ]);
-
-                } catch (Exception $e) {
-                    $pdo->rollBack();
-                    error_log("HOD Assignment Error: " . $e->getMessage());
-                    echo json_encode([
-                        'status' => 'error',
-                        'message' => 'Assignment failed: ' . $e->getMessage()
-                    ]);
-                }
-                break;
-                
-            default:
-                echo json_encode(['status' => 'error', 'message' => 'Invalid action']);
+        // Check for cURL errors
+        if ($curl_error) {
+            $logger->error('HOD Assignment UI', 'cURL error forwarding request', [
+                'error' => $curl_error,
+                'target_url' => $target_url,
+                'user_id' => $_SESSION['user_id'] ?? 'unknown'
+            ]);
+            http_response_code(500);
+            echo json_encode(['status' => 'error', 'message' => 'Failed to process request: ' . $curl_error]);
+            exit;
         }
-    } catch (PDOException $e) {
-        error_log("HOD Assignment Database Error: " . $e->getMessage() .
-                 " | Action: {$action} | User: " . ($_SESSION['user_id'] ?? 'unknown') .
-                 " | IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 
-        // Don't expose database details to client
-        echo json_encode([
-            'status' => 'error',
-            'message' => 'Database operation failed. Please try again or contact administrator if the problem persists.',
-            'error_code' => 'DB_ERROR'
-        ]);
-    } catch (Exception $e) {
-        error_log("HOD Assignment General Error: " . $e->getMessage() .
-                 " | Action: {$action} | User: " . ($_SESSION['user_id'] ?? 'unknown') .
-                 " | IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+        // Separate headers and body
+        $header_size = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        $headers = substr($response, 0, $header_size);
+        $body = substr($response, $header_size);
 
-        echo json_encode([
-            'status' => 'error',
-            'message' => 'An unexpected error occurred: ' . htmlspecialchars($e->getMessage()),
-            'error_code' => 'GENERAL_ERROR'
-        ]);
+        // Set the response code and output
+        http_response_code($http_code);
+        echo $body;
+        exit;
+    } else {
+        // For GET requests, simple redirect
+        header('Location: api/assign-hod-api.php?' . http_build_query($_GET));
+        exit;
     }
-    exit;
 }
 ?>
 <!DOCTYPE html>
@@ -413,432 +152,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
     <title>Assign HOD | RP Attendance System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root {
-            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --warning-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            --info-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --sidebar-width: 280px;
-            --topbar-height: 80px;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        /* Loading Overlay */
-        .loading-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.85);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 9999;
-            backdrop-filter: blur(10px);
-        }
-
-        .loading-content {
-            text-align: center;
-            color: white;
-            max-width: 400px;
-            padding: 2rem;
-        }
-
-        .loading-spinner {
-            width: 4rem;
-            height: 4rem;
-            border-width: 0.3em;
-        }
-
-        /* Sidebar */
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: var(--sidebar-width);
-            height: 100vh;
-            background: linear-gradient(180deg, #2c3e50 0%, #3498db 100%);
-            color: white;
-            z-index: 1000;
-            transition: transform 0.3s ease;
-            box-shadow: 3px 0 15px rgba(0, 0, 0, 0.1);
-        }
-
-        .sidebar .logo {
-            padding: 2rem 1.5rem 1.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            text-align: center;
-        }
-
-        .sidebar .logo h5 {
-            font-weight: 700;
-            margin-bottom: 0.25rem;
-        }
-
-        .sidebar .logo small {
-            opacity: 0.7;
-            font-size: 0.8rem;
-        }
-
-        .sidebar-nav {
-            list-style: none;
-            padding: 1.5rem 0;
-        }
-
-        .sidebar-nav li {
-            margin-bottom: 0.5rem;
-        }
-
-        .sidebar-nav a {
-            display: flex;
-            align-items: center;
-            padding: 0.75rem 1.5rem;
-            color: rgba(255, 255, 255, 0.8);
-            text-decoration: none;
-            transition: all 0.3s ease;
-            border-left: 3px solid transparent;
-        }
-
-        .sidebar-nav a:hover,
-        .sidebar-nav a.active {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            border-left-color: #3498db;
-        }
-
-        .sidebar-nav a i {
-            width: 1.5rem;
-            margin-right: 0.75rem;
-            font-size: 1.1rem;
-        }
-
-        /* Mobile Menu */
-        .mobile-menu-toggle {
-            position: fixed;
-            top: 1rem;
-            left: 1rem;
-            z-index: 1001;
-            background: var(--primary-gradient);
-            border: none;
-            color: white;
-            width: 3rem;
-            height: 3rem;
-            border-radius: 50%;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        /* Main Content */
-        .main-content {
-            margin-left: var(--sidebar-width);
-            min-height: 100vh;
-            transition: margin-left 0.3s ease;
-        }
-
-        .topbar {
-            background: white;
-            padding: 1.5rem 2rem;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .topbar h2 {
-            font-weight: 700;
-            background: var(--primary-gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        /* Statistics Cards */
-        .stats-card {
-            background: white;
-            border-radius: 1rem;
-            padding: 1.5rem;
-            text-align: center;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            border: none;
-            height: 100%;
-        }
-
-        .stats-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-        }
-
-        .stats-card i {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-            display: block;
-        }
-
-        .stats-card h3 {
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-        }
-
-        .stats-card p {
-            color: #6c757d;
-            font-weight: 500;
-            margin: 0;
-        }
-
-        /* Cards */
-        .card {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
-        }
-
-        .card-header {
-            border-radius: 1rem 1rem 0 0 !important;
-            padding: 1.25rem 1.5rem;
-            font-weight: 600;
-        }
-
-        /* Assignment Cards */
-        .assignments-container {
-            min-height: 300px;
-        }
-
-        .assignment-card {
-            border: none;
-            border-radius: 1rem;
-            transition: all 0.3s ease;
-            overflow: hidden;
-            height: 100%;
-        }
-
-        .assignment-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-        }
-
-        .assignment-card.assigned {
-            border-left: 4px solid #28a745;
-        }
-
-        .assignment-card.unassigned {
-            border-left: 4px solid #ffc107;
-        }
-
-        .assignment-card.invalid {
-            border-left: 4px solid #dc3545;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
-            70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
-        }
-
-        .assignment-card.selected {
-            border: 2px solid #007bff;
-            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
-        }
-
-        /* Buttons */
-        .btn {
-            border-radius: 0.75rem;
-            font-weight: 500;
-            padding: 0.75rem 1.5rem;
-            transition: all 0.3s ease;
-            border: none;
-        }
-
-        .btn-primary {
-            background: var(--primary-gradient);
-        }
-
-        .btn-success {
-            background: var(--success-gradient);
-        }
-
-        .btn-warning {
-            background: var(--warning-gradient);
-        }
-
-        .btn-info {
-            background: var(--info-gradient);
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        /* Alerts */
-        .alert {
-            border: none;
-            border-radius: 1rem;
-            padding: 1rem 1.5rem;
-        }
-
-        .data-integrity-alert {
-            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-            border-left: 4px solid #ffc107;
-        }
-
-        /* Progress Bars */
-        .progress {
-            border-radius: 1rem;
-            height: 6px;
-            background: #e9ecef;
-        }
-
-        .progress-bar {
-            border-radius: 1rem;
-            transition: width 0.6s ease;
-        }
-
-        /* Form Controls */
-        .form-control,
-        .form-select {
-            border-radius: 0.75rem;
-            padding: 0.75rem 1rem;
-            border: 2px solid #e9ecef;
-            transition: all 0.3s ease;
-        }
-
-        .form-control:focus,
-        .form-select:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
-        }
-
-        /* Badges */
-        .badge {
-            border-radius: 0.5rem;
-            font-weight: 500;
-            padding: 0.5rem 1rem;
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-            }
-
-            .sidebar.show {
-                transform: translateX(0);
-            }
-
-            .main-content {
-                margin-left: 0;
-            }
-
-            .mobile-menu-toggle {
-                display: flex;
-            }
-
-            .topbar {
-                padding: 1rem;
-            }
-
-            .topbar h2 {
-                font-size: 1.5rem;
-            }
-
-            .stats-card {
-                padding: 1rem;
-            }
-
-            .stats-card h3 {
-                font-size: 2rem;
-            }
-        }
-
-        /* Skip Link for Accessibility */
-        .skip-link {
-            position: absolute;
-            top: -40px;
-            left: 6px;
-            background: #000;
-            color: white;
-            padding: 8px;
-            z-index: 10000;
-            text-decoration: none;
-            border-radius: 0 0 4px 4px;
-        }
-
-        .skip-link:focus {
-            top: 0;
-        }
-
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--primary-gradient);
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #764ba2;
-        }
-
-        /* Animation Classes */
-        .fade-in {
-            animation: fadeIn 0.5s ease-in;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .slide-in {
-            animation: slideIn 0.3s ease-out;
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(-100%); }
-            to { transform: translateX(0); }
-        }
-
-        /* Print Styles */
-        @media print {
-            .sidebar, .topbar, .btn, .mobile-menu-toggle {
-                display: none !important;
-            }
-
-            .main-content {
-                margin-left: 0 !important;
-            }
-
-            .card {
-                box-shadow: none !important;
-                border: 1px solid #dee2e6 !important;
-            }
-        }
-    </style>
+    <link href="css/assign-hod.css" rel="stylesheet">
 </head>
 
 <body>
@@ -1124,11 +438,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <!-- External Libraries -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Application Scripts -->
+    <script src="js/assign-hod.js"></script>
+
+    <!-- CSRF Token Configuration -->
     <script>
-        // Make CSRF token available globally
-        window.csrfToken = "<?php echo $csrf_token; ?>";
+        // Make CSRF token available globally for AJAX requests
+        window.csrfToken = "<?php echo htmlspecialchars($csrf_token, ENT_QUOTES, 'UTF-8'); ?>";
 
         // Global state management
         const AppState = {
@@ -1967,9 +1287,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     }
 
                     // Scroll to form
-                    $('html, body').animate({
-                        scrollTop: $('#assignHodForm').offset().top - 100
-                    }, 500);
+                    const formElement = document.getElementById('assignHodForm');
+                    if (formElement) {
+                        formElement.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start',
+                            inline: 'nearest'
+                        });
+                    }
 
                     const alertType = isInvalid ? 'warning' : 'info';
                     const alertMessage = isInvalid ?

@@ -465,6 +465,38 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             }
             exit;
 
+        case 'get_lecturers':
+            try {
+                $stmt = $pdo->prepare("
+                    SELECT
+                        l.id,
+                        u.first_name,
+                        u.last_name,
+                        u.email,
+                        u.username,
+                        CONCAT(u.first_name, ' ', u.last_name) as display_name,
+                        d.name as department_name
+                    FROM lecturers l
+                    LEFT JOIN users u ON l.user_id = u.id
+                    LEFT JOIN departments d ON l.department_id = d.id
+                    ORDER BY u.first_name, u.last_name
+                ");
+                $stmt->execute();
+                $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'status' => 'success',
+                    'data' => $lecturers
+                ]);
+            } catch (PDOException $e) {
+                error_log("Get lecturers error: " . $e->getMessage());
+                echo json_encode([
+                    'status' => 'error',
+                    'message' => 'Failed to load lecturers'
+                ]);
+            }
+            exit;
+
         case 'get_paginated_reports':
             try {
                 $page = max(1, (int)($_GET['page'] ?? 1));
@@ -612,11 +644,12 @@ function exportToPDF($reports) {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/daterangepicker@3.1.0/daterangepicker.css" rel="stylesheet" />
-  <link href="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.css" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.css" rel="preload" as="style" onload="this.rel='stylesheet'" type="text/css" crossorigin="anonymous" />
+  <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.css" type="text/css" crossorigin="anonymous"></noscript>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js" type="text/javascript" crossorigin="anonymous" defer></script>
 
   <style>
-    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(to right, #0066cc, #003366); margin: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 50%, #7dd3fc 100%); margin: 0; min-height: 100vh; position: relative; overflow-x: hidden; }
     .sidebar {
         position: fixed;
         top: 0;
@@ -624,15 +657,15 @@ function exportToPDF($reports) {
         width: 280px;
         height: 100vh;
         background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
-        border-right: 1px solid rgba(0, 102, 204, 0.1);
+        border-right: 1px solid rgba(0, 0, 0, 0.1);
         padding: 0;
         overflow-y: auto;
         z-index: 1000;
-        box-shadow: 0 0 20px rgba(0, 102, 204, 0.1);
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
     }
 
     .sidebar .logo {
-        background: linear-gradient(135deg, #0066cc 0%, #004080 100%);
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
         color: white;
         padding: 25px 20px;
         text-align: center;
@@ -697,18 +730,18 @@ function exportToPDF($reports) {
     }
 
     .sidebar-nav a:hover {
-        background: rgba(0, 102, 204, 0.08);
-        color: #0066cc;
-        border-left-color: #0066cc;
+        background: rgba(0, 0, 0, 0.08);
+        color: #000000;
+        border-left-color: #000000;
         transform: translateX(8px);
-        box-shadow: 2px 0 8px rgba(0, 102, 204, 0.15);
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
     }
 
     .sidebar-nav a.active {
-        background: linear-gradient(90deg, rgba(0, 102, 204, 0.15) 0%, rgba(0, 102, 204, 0.05) 100%);
-        color: #0066cc;
-        border-left-color: #0066cc;
-        box-shadow: 2px 0 12px rgba(0, 102, 204, 0.2);
+        background: rgba(0, 0, 0, 0.1);
+        color: #000000;
+        border-left-color: #000000;
+        box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
         font-weight: 600;
     }
 
@@ -736,10 +769,10 @@ function exportToPDF($reports) {
         padding-top: 2rem !important;
         border-top: 1px solid rgba(0, 102, 204, 0.1);
     }
-    .topbar   { margin-left:250px; background:#fff; padding:10px 30px; border-bottom:1px solid #ddd;}
-    .main-content{ margin-left:250px; padding:30px;}
-    .card   { border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.05);}
-    .footer { text-align:center; margin-left:250px; padding:15px; font-size:.9rem; color:#666; background:#f0f0f0;}
+    .topbar   { margin-left:280px; background:rgba(255,255,255,0.95); backdrop-filter:blur(10px); padding:20px 30px; border-bottom:1px solid rgba(0,0,0,0.1); display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:900; box-shadow:0 4px 15px rgba(0,0,0,0.1);}
+    .main-content{ margin-left:280px; padding:40px;}
+    .card   { border-radius:16px; box-shadow:0 10px 25px rgba(0,0,0,0.1); border:2px solid #000000; background:#ffffff;}
+    .footer { text-align:center; margin-left:280px; padding:20px; font-size:.9rem; color:#666; background:rgba(255,255,255,0.9); backdrop-filter:blur(10px); border-top:1px solid rgba(0,0,0,0.1); position:fixed; bottom:0; width:calc(100% - 280px); box-shadow:0 -1px 5px rgba(0,0,0,0.1); z-index:1000;}
     @media (max-width:768px){
         .sidebar,.topbar,.main-content,.footer{margin-left:0;width:100%;} .sidebar{display:none;}
         .stats-row { flex-direction: column; gap: 15px; }
@@ -749,35 +782,35 @@ function exportToPDF($reports) {
 
     /* Enhanced card styling */
     .stats-card {
-        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
-        border-radius: 15px;
-        padding: 25px;
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        border-radius: 12px;
+        padding: 20px;
         color: white;
         transition: all 0.3s ease;
-        border: none;
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        border: 2px solid #000000;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
     }
 
     .stats-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 12px 35px rgba(0,0,0,0.2);
+        transform: translateY(-5px) scale(1.01);
+        box-shadow: 0 15px 30px rgba(0,0,0,0.2);
     }
 
     .stats-card .card-icon {
-        font-size: 3rem;
+        font-size: 2.5rem;
         opacity: 0.9;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
     }
 
     .stats-card h6 {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         opacity: 0.9;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
         font-weight: 500;
     }
 
     .stats-card h4 {
-        font-size: 2.2rem;
+        font-size: 1.8rem;
         font-weight: 700;
         margin: 0;
     }
@@ -790,30 +823,33 @@ function exportToPDF($reports) {
 
     /* Filter enhancements */
     .filter-card {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-        border: none;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        border: 2px solid #000000;
     }
 
     .filter-card .card-header {
         background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
         border-bottom: 1px solid #dee2e6;
         font-weight: 600;
-        border-radius: 12px 12px 0 0 !important;
+        border-radius: 16px 16px 0 0 !important;
     }
 
     .form-select:focus, .form-control:focus {
-        border-color: #0066cc;
-        box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
+        border-color: #0ea5e9;
+        box-shadow: 0 0 0 0.2rem rgba(14, 165, 233, 0.25);
     }
 
     /* Table enhancements */
     .table-card {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
         overflow: hidden;
+        border: 2px solid #000000;
     }
 
     .table-card .card-header {
@@ -858,17 +894,17 @@ function exportToPDF($reports) {
 
     /* Button enhancements */
     .btn-primary {
-        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
-        border: none;
-        border-radius: 8px;
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        border: 2px solid #000000;
+        border-radius: 12px;
         font-weight: 600;
         transition: all 0.3s ease;
     }
 
     .btn-primary:hover {
-        background: linear-gradient(135deg, #004080 0%, #002b50 100%);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 15px rgba(0, 102, 204, 0.4);
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(14, 165, 233, 0.4);
     }
 
     .btn-success {
@@ -884,53 +920,53 @@ function exportToPDF($reports) {
     /* Enhanced mobile responsiveness */
     @media (max-width: 768px) {
         .main-content {
-            padding: 15px;
+            padding: 20px;
         }
 
         .stats-card {
-            padding: 20px 15px;
+            padding: 18px 15px;
             margin-bottom: 15px;
         }
 
         .stats-card h4 {
-            font-size: 1.8rem;
+            font-size: 1.5rem;
         }
 
         .stats-card .card-icon {
-            font-size: 2.5rem;
+            font-size: 2rem;
         }
 
         .chart-container {
-            height: 250px !important;
+            height: 220px !important;
         }
 
         .nav-tabs .nav-link {
-            font-size: 0.9rem;
-            padding: 8px 12px;
+            font-size: 1rem;
+            padding: 10px 15px;
         }
 
         .table th, .table td {
-            padding: 8px 4px;
-            font-size: 0.85rem;
+            padding: 10px 6px;
+            font-size: 0.9rem;
         }
 
         .btn-sm {
-            padding: 4px 8px;
-            font-size: 0.8rem;
+            padding: 6px 12px;
+            font-size: 0.9rem;
         }
 
         .filter-card .card-body {
-            padding: 15px;
+            padding: 20px;
         }
 
         .export-buttons {
             flex-direction: column;
-            gap: 8px;
+            gap: 10px;
         }
 
         .d-flex.gap-2 {
             flex-wrap: wrap;
-            gap: 8px !important;
+            gap: 10px !important;
         }
     }
 
@@ -973,7 +1009,7 @@ function exportToPDF($reports) {
     /* Chart containers */
     .chart-container {
         position: relative;
-        height: 300px;
+        height: 250px;
         width: 100%;
     }
 
@@ -1067,39 +1103,43 @@ function exportToPDF($reports) {
 
     /* Lecturer card styles */
     .lecturer-card {
-        border: none;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        border: 2px solid #000000;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
     }
 
     .lecturer-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        transform: translateY(-5px) scale(1.01);
+        box-shadow: 0 20px 40px rgba(0,0,0,0.2);
     }
 
     .avatar-circle {
         width: 40px;
         height: 40px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
         display: flex;
         align-items: center;
         justify-content: center;
         color: white;
         font-size: 16px;
+        border: 2px solid #000000;
     }
 
     .avatar-circle-lg {
         width: 60px;
         height: 60px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #0066cc 0%, #003366 100%);
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
         display: flex;
         align-items: center;
         justify-content: center;
         color: white;
         font-size: 24px;
+        border: 2px solid #000000;
     }
 
     .stats-grid {
@@ -1139,9 +1179,12 @@ function exportToPDF($reports) {
 
     /* Enhanced table styling for lecturer reports */
     .table-enhanced {
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border-radius: 8px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        border-radius: 16px;
         overflow: hidden;
+        border: 2px solid #000000;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
     }
 
     .table-enhanced thead th {
@@ -1155,15 +1198,17 @@ function exportToPDF($reports) {
 
     /* HOD card styles */
     .hod-card {
-        border: none;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        border: 2px solid #000000;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
     }
 
     .hod-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        transform: translateY(-5px) scale(1.01);
+        box-shadow: 0 20px 40px rgba(0,0,0,0.2);
     }
 
     .hod-info {
@@ -1563,26 +1608,20 @@ function exportToPDF($reports) {
 
             <!-- Table View -->
             <div id="hodTableContainer" class="table-responsive">
-              <table class="table table-hover">
+              <table class="table table-hover table-enhanced">
                 <thead>
                   <tr>
                     <th><i class="fas fa-building me-1"></i>Department</th>
                     <th><i class="fas fa-user-tie me-1"></i>HOD Details</th>
                     <th><i class="fas fa-book me-1"></i>Courses</th>
                     <th><i class="fas fa-users me-1"></i>Students</th>
-                    <th><i class="fas fa-chart-line me-1"></i>Attendance</th>
+                    <th><i class="fas fa-chart-line me-1"></i>Attendance Rate</th>
                     <th><i class="fas fa-trophy me-1"></i>Performance</th>
-                    <th><i class="fas fa-calendar-check me-1"></i>Activity</th>
+                    <th><i class="fas fa-calendar-check me-1"></i>Last Activity</th>
                   </tr>
                 </thead>
                 <tbody id="hodReportsTableBody">
-                  <tr>
-                    <td colspan="7" class="text-center py-4">
-                      <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                      </div>
-                    </td>
-                  </tr>
+                  <!-- Data will be loaded here -->
                 </tbody>
               </table>
             </div>
@@ -1651,6 +1690,40 @@ function exportToPDF($reports) {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Department Performance Overview -->
+        <div class="card mb-4">
+          <div class="card-header">
+            <h6 class="mb-0"><i class="fas fa-building me-2"></i>Department Performance Overview</h6>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-striped table-hover">
+                <thead>
+                  <tr>
+                    <th><i class="fas fa-building me-1"></i>Department</th>
+                    <th><i class="fas fa-users me-1"></i>Students</th>
+                    <th><i class="fas fa-chalkboard-teacher me-1"></i>Lecturers</th>
+                    <th><i class="fas fa-book me-1"></i>Courses</th>
+                    <th><i class="fas fa-calendar-check me-1"></i>Sessions</th>
+                    <th><i class="fas fa-percent me-1"></i>Attendance Rate</th>
+                    <th><i class="fas fa-trophy me-1"></i>Performance</th>
+                  </tr>
+                </thead>
+                <tbody id="departmentOverviewBody">
+                  <tr>
+                    <td colspan="7" class="text-center py-4">
+                      <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading department overview...</span>
+                      </div>
+                      <div class="mt-2">Loading department performance data...</div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -1783,9 +1856,49 @@ function exportToPDF($reports) {
               </div>
             </div>
 
+            <!-- Summary Stats -->
+            <div class="row g-3 mb-4">
+              <div class="col-md-3">
+                <div class="card text-center">
+                  <div class="card-body">
+                    <i class="fas fa-chalkboard-teacher fa-2x text-primary mb-2"></i>
+                    <h5 id="totalLecturersCount">0</h5>
+                    <small class="text-muted">Total Lecturers</small>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card text-center">
+                  <div class="card-body">
+                    <i class="fas fa-building fa-2x text-success mb-2"></i>
+                    <h5 id="departmentsCount">0</h5>
+                    <small class="text-muted">Departments</small>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card text-center">
+                  <div class="card-body">
+                    <i class="fas fa-book fa-2x text-info mb-2"></i>
+                    <h5 id="coursesCount">0</h5>
+                    <small class="text-muted">Total Courses</small>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="card text-center">
+                  <div class="card-body">
+                    <i class="fas fa-percent fa-2x text-warning mb-2"></i>
+                    <h5 id="avgLecturerAttendance">0%</h5>
+                    <small class="text-muted">Avg Attendance</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Table View -->
             <div id="lecturerTableView" class="table-responsive">
-              <table class="table table-hover">
+              <table class="table table-hover table-enhanced">
                 <thead>
                   <tr>
                     <th><i class="fas fa-user me-1"></i>Name</th>
@@ -1799,13 +1912,7 @@ function exportToPDF($reports) {
                   </tr>
                 </thead>
                 <tbody id="lecturerReportsTableBody">
-                  <tr>
-                    <td colspan="8" class="text-center py-4">
-                      <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                      </div>
-                    </td>
-                  </tr>
+                  <!-- Data will be loaded here -->
                 </tbody>
               </table>
             </div>
@@ -1883,8 +1990,8 @@ function exportToPDF($reports) {
   <div class="footer">&copy; 2025 Rwanda Polytechnic | Admin Panel</div>
 
   <!-- Scripts -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/daterangepicker@3.1.0/daterangepicker.min.js"></script>
 
@@ -2377,17 +2484,28 @@ function exportToPDF($reports) {
 
     // Load HOD reports
     function loadHODReports() {
+      $('#hodReportsTableBody').html(`
+        <tr>
+          <td colspan="7" class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Loading HOD reports...</span>
+            </div>
+            <div class="mt-2">Loading HOD performance data...</div>
+          </td>
+        </tr>
+      `);
+
       $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
         if (data.hod_reports && data.hod_reports.length > 0) {
           displayHODTable(data.hod_reports);
           displayHODCards(data.hod_reports);
         } else {
-          $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4">No HOD reports available</td></tr>');
-          $('#hodCardsContainer').html('<div class="col-12 text-center py-4">No HOD reports available</div>');
+          $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No HOD reports available</td></tr>');
+          $('#hodCardsContainer').html('<div class="col-12 text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No HOD reports available</div>');
         }
       }).fail(function() {
-        $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4 text-danger">Failed to load HOD reports</td></tr>');
-        $('#hodCardsContainer').html('<div class="col-12 text-center py-4 text-danger">Failed to load HOD reports</div>');
+        $('#hodReportsTableBody').html('<tr><td colspan="7" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>Failed to load HOD reports</td></tr>');
+        $('#hodCardsContainer').html('<div class="col-12 text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>Failed to load HOD reports</div>');
       });
     }
 
@@ -2565,10 +2683,56 @@ function exportToPDF($reports) {
       toggleHODView();
     });
 
-    // Load advanced analytics
-    function loadAdvancedAnalytics() {
-      // This is handled by the main loadAnalytics function
-      // Additional analytics can be added here
+    // Render department analytics table
+    function renderDepartmentAnalytics(departments) {
+      const tbody = $('#departmentOverviewBody');
+      tbody.empty();
+
+      if (departments.length === 0) {
+        tbody.html('<tr><td colspan="7" class="text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No department data available</td></tr>');
+        return;
+      }
+
+      departments.forEach(dept => {
+        const performanceClass = dept.attendance_rate >= 90 ? 'success' :
+                                dept.attendance_rate >= 75 ? 'warning' : 'danger';
+        const performanceText = dept.attendance_rate >= 90 ? 'Excellent' :
+                               dept.attendance_rate >= 75 ? 'Good' : 'Needs Improvement';
+
+        tbody.append(`
+          <tr>
+            <td>
+              <div class="d-flex align-items-center">
+                <div class="avatar-circle me-2" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                  <i class="fas fa-building text-white"></i>
+                </div>
+                <div>
+                  <strong>${dept.department}</strong>
+                  <br><small class="text-muted">${dept.total_students || 0} students</small>
+                </div>
+              </div>
+            </td>
+            <td><span class="badge bg-primary">${dept.total_students || 0}</span></td>
+            <td><span class="badge bg-success">${dept.total_lecturers || 0}</span></td>
+            <td><span class="badge bg-info">${dept.total_courses || 0}</span></td>
+            <td><span class="badge bg-secondary">${dept.total_sessions || 0}</span></td>
+            <td>
+              <div class="d-flex align-items-center">
+                <span class="badge bg-${performanceClass} me-2">${dept.attendance_rate || 0}%</span>
+                <small class="text-muted">${performanceText}</small>
+              </div>
+            </td>
+            <td>
+              <div class="progress" style="height: 8px;">
+                <div class="progress-bar bg-${performanceClass}" role="progressbar"
+                     style="width: ${dept.attendance_rate || 0}%" aria-valuenow="${dept.attendance_rate || 0}"
+                     aria-valuemin="0" aria-valuemax="100">
+                </div>
+              </div>
+            </td>
+          </tr>
+        `);
+      });
     }
 
     // Show alert helper
@@ -2585,23 +2749,55 @@ function exportToPDF($reports) {
 
     // Load lecturer reports
     function loadLecturerReports() {
+      $('#lecturerReportsTableBody').html(`
+        <tr>
+          <td colspan="8" class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Loading lecturer reports...</span>
+            </div>
+            <div class="mt-2">Loading lecturer performance data...</div>
+          </td>
+        </tr>
+      `);
+
       $.getJSON('admin-reports.php?ajax=1&action=get_lecturer_reports', function(response) {
         if (response.error) {
-          $('#lecturerReportsTableBody').html(`<tr><td colspan="8" class="text-center py-4 text-danger">${response.error}</td></tr>`);
-          $('#lecturerCardsContainer').html(`<div class="col-12 text-center py-4 text-danger">${response.error}</div>`);
+          $('#lecturerReportsTableBody').html(`<tr><td colspan="8" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>${response.error}</td></tr>`);
+          $('#lecturerCardsContainer').html(`<div class="col-12 text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>${response.error}</div>`);
           return;
         }
 
-        if (response.data && response.data.length > 0) {
+        if (response.data && Object.keys(response.data).length > 0) {
           displayLecturerTable(response.data);
           displayLecturerCards(response.data);
+
+          // Update summary stats
+          let totalLecturers = 0;
+          let totalCourses = 0;
+          let totalStudents = 0;
+          let totalAttendance = 0;
+          let departmentCount = Object.keys(response.data).length;
+
+          Object.values(response.data).forEach(deptData => {
+            deptData.lecturers.forEach(lecturer => {
+              totalLecturers++;
+              totalCourses += lecturer.courses_count || 0;
+              totalStudents += lecturer.unique_students || 0;
+              totalAttendance += lecturer.avg_attendance_rate || 0;
+            });
+          });
+
+          $('#totalLecturersCount').text(totalLecturers);
+          $('#departmentsCount').text(departmentCount);
+          $('#coursesCount').text(totalCourses);
+          $('#avgLecturerAttendance').text(totalLecturers > 0 ? Math.round(totalAttendance / totalLecturers) + '%' : '0%');
         } else {
-          $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4">No lecturer reports available</td></tr>');
-          $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4">No lecturer reports available</div>');
+          $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No lecturer reports available</td></tr>');
+          $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No lecturer reports available</div>');
         }
       }).fail(function() {
-        $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4 text-danger">Failed to load lecturer reports</td></tr>');
-        $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4 text-danger">Failed to load lecturer reports</div>');
+        $('#lecturerReportsTableBody').html('<tr><td colspan="8" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>Failed to load lecturer reports</td></tr>');
+        $('#lecturerCardsContainer').html('<div class="col-12 text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>Failed to load lecturer reports</div>');
       });
     }
 
@@ -2870,7 +3066,7 @@ function exportToPDF($reports) {
 
     // Load lecturers for filter dropdown
     function loadLecturersForFilter() {
-      $.getJSON('api/assign-hod-api.php?action=get_lecturers', function(response) {
+      $.getJSON('admin-reports.php?ajax=1&action=get_lecturers', function(response) {
         const select = $('#lecturerFilter');
         select.empty().append('<option value="">All Lecturers</option>');
 
@@ -2893,8 +3089,10 @@ function exportToPDF($reports) {
         const select = $('#lecturerFilter');
         select.empty().append('<option value="">All Lecturers</option>');
         select.append('<option value="" disabled style="color: #dc3545;">Failed to load lecturers</option>');
-        // Show user-friendly message
-        showAlert('Lecturer filter is temporarily unavailable. You can still use other filters.', 'warning');
+        // Show user-friendly message - only if not already shown
+        if (!$('.alert:contains("Lecturer filter is temporarily unavailable")').length) {
+          showAlert('Lecturer filter is temporarily unavailable. You can still use other filters.', 'warning');
+        }
       });
     }
 
@@ -3131,9 +3329,16 @@ function exportToPDF($reports) {
       currentPage = 1; // Reset to first page when applying filters
       loadReports(filters, 1);
 
-      // Update URL without page reload
-      const queryParams = $.param(filters);
-      const newUrl = `${window.location.pathname}?${queryParams}`;
+      // Update URL without page reload - only include non-empty values
+      const cleanFilters = {};
+      Object.keys(filters).forEach(key => {
+        if (filters[key] !== '' && filters[key] !== null && filters[key] !== undefined) {
+          cleanFilters[key] = filters[key];
+        }
+      });
+
+      const queryParams = $.param(cleanFilters);
+      const newUrl = `${window.location.pathname}${queryParams ? '?' + queryParams : ''}`;
       window.history.pushState({}, '', newUrl);
     }
 
@@ -3143,10 +3348,10 @@ function exportToPDF($reports) {
       $('#reportTableBody').html(`
         <tr>
           <td colspan="8" class="text-center py-4">
-            <div class="spinner-border text-primary" style="color: #0066cc !important;" role="status">
+            <div class="spinner-border text-primary" role="status">
               <span class="visually-hidden">Loading...</span>
             </div>
-            <div class="mt-2">Loading reports...</div>
+            <div class="mt-2">Loading attendance reports...</div>
           </td>
         </tr>
       `);
@@ -3347,6 +3552,47 @@ function exportToPDF($reports) {
 
     // Load initial reports
     loadReports();
+
+    // Load advanced analytics data
+    function loadAdvancedAnalytics() {
+      // Load department overview
+      $.getJSON('admin-reports.php?ajax=1&action=get_analytics', function(data) {
+        if (data.department_attendance && data.department_attendance.length > 0) {
+          renderDepartmentAnalytics(data.department_attendance);
+        } else {
+          $('#departmentOverviewBody').html('<tr><td colspan="7" class="text-center py-4"><i class="fas fa-info-circle fa-2x text-muted mb-2"></i><br>No department analytics available</td></tr>');
+        }
+      }).fail(function() {
+        $('#departmentOverviewBody').html('<tr><td colspan="7" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle fa-2x mb-2"></i><br>Failed to load department analytics</td></tr>');
+      });
+    }
+
+    // Initialize tab switching with lazy loading
+    let tabsLoaded = { '#attendance-reports': true }; // Default tab is already loaded
+
+    $('a[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
+      const target = $(e.target).attr('href');
+
+      // Prevent multiple loads of the same tab
+      if (tabsLoaded[target]) return;
+      tabsLoaded[target] = true;
+
+      if (target === '#hod-reports') {
+        loadHODReports();
+      } else if (target === '#advanced-analytics') {
+        loadAdvancedAnalytics();
+      } else if (target === '#lecturer-reports') {
+        loadLecturerReports();
+      }
+    });
+
+    // Auto-load first tab content on page load
+    $(document).ready(function() {
+      // Load HOD reports if that's the active tab (in case of direct links)
+      if ($('#hod-reports').hasClass('active')) {
+        loadHODReports();
+      }
+    });
   </script>
 </body>
 </html>

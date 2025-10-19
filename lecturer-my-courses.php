@@ -1,123 +1,174 @@
 <?php
+/**
+ * Lecturer My Courses - Backend Implementation
+ * Displays courses assigned to lecturer with real database data
+ */
+
 session_start();
 require_once "config.php";
 require_once "session_check.php";
+require_once "dashboard_utils.php";
 require_role(['lecturer', 'hod']);
 
-// Ensure lecturer is logged in
+// Get user information
 $user_id = $_SESSION['user_id'] ?? null;
-if (!$user_id) {
-  header("Location: index.php");
-  exit;
+$lecturer_id = $_SESSION['lecturer_id'] ?? null;
+
+// Debug session data
+error_log("lecturer-my-courses.php - Session Debug:");
+error_log("user_id: " . ($user_id ?? 'NULL'));
+error_log("lecturer_id: " . ($lecturer_id ?? 'NULL'));
+error_log("username: " . ($_SESSION['username'] ?? 'NULL'));
+error_log("role: " . ($_SESSION['role'] ?? 'NULL'));
+
+if (!$user_id || !$lecturer_id) {
+    error_log("Session expired or invalid - redirecting to login");
+    header("Location: login.php?error=session_expired");
+    exit;
 }
 
-// Get lecturer's department_id first - join on email instead of ID
-$dept_stmt = $pdo->prepare("
-    SELECT l.department_id, l.id as lecturer_id
-    FROM lecturers l
-    INNER JOIN users u ON l.email = u.email
-    WHERE u.id = :user_id AND u.role = 'lecturer'
-");
-$dept_stmt->execute(['user_id' => $user_id]);
-$lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
-    // Try to create a lecturer record if it doesn't exist
-    $create_lecturer_stmt = $pdo->prepare("
-        INSERT INTO lecturers (first_name, last_name, email, department_id, role, password)
-        SELECT
-            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', 1) ELSE username END as first_name,
-            CASE WHEN username LIKE '% %' THEN SUBSTRING_INDEX(username, ' ', -1) ELSE '' END as last_name,
-            email, 7, 'lecturer', '12345'
-        FROM users
-        WHERE id = :user_id AND role = 'lecturer'
-        ON DUPLICATE KEY UPDATE email = email
+// Get lecturer information
+try {
+    $stmt = $pdo->prepare("
+        SELECT u.username, u.email, u.first_name, u.last_name,
+               l.department_id, d.name as department_name
+        FROM users u
+        INNER JOIN lecturers l ON u.id = l.user_id
+        LEFT JOIN departments d ON l.department_id = d.id
+        WHERE u.id = :user_id AND u.role = 'lecturer'
     ");
-    $create_lecturer_stmt->execute(['user_id' => $user_id]);
+    $stmt->execute(['user_id' => $user_id]);
+    $lecturer_info = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Try again to get the department
-    $dept_stmt->execute(['user_id' => $user_id]);
-    $lecturer_dept = $dept_stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$lecturer_dept || !isset($lecturer_dept['department_id'])) {
-        // If still not found, redirect with error
-        header("Location: lecturer-dashboard.php?error=lecturer_setup_required");
+    if (!$lecturer_info) {
+        header("Location: login.php?error=lecturer_not_found");
         exit;
     }
-}
 
-// Store lecturer_id in session for other pages to use
-$_SESSION['lecturer_id'] = $lecturer_dept['lecturer_id'];
+    $lecturer_name = trim(($lecturer_info['first_name'] ?? '') . ' ' . ($lecturer_info['last_name'] ?? ''));
+    if (empty($lecturer_name)) {
+        $lecturer_name = $lecturer_info['username'];
+    }
 
-// First, add lecturer_id column to courses table if it doesn't exist
-try {
-    $pdo->query("ALTER TABLE courses ADD COLUMN lecturer_id INT NULL AFTER department_id");
-    $pdo->query("CREATE INDEX idx_lecturer_id ON courses(lecturer_id)");
 } catch (PDOException $e) {
-    // Column might already exist, continue
+    error_log("Lecturer info error: " . $e->getMessage());
+    header("Location: login.php?error=database");
+    exit;
 }
 
-// Update courses to assign them to the current lecturer if not already assigned
-$update_stmt = $pdo->prepare("
-    UPDATE courses
-    SET lecturer_id = :lecturer_id
-    WHERE lecturer_id IS NULL AND department_id = :department_id
-");
-$update_stmt->execute([
-    'lecturer_id' => $lecturer_dept['lecturer_id'],
-    'department_id' => $lecturer_dept['department_id']
-]);
+// Get courses assigned to this lecturer
+try {
+    $courses = [];
 
-// Fetch courses for this lecturer with basic data (all courses in department)
-$sql = "
-  SELECT
-    c.id AS course_id,
-    c.name AS course_name,
-    c.course_code AS course_code,
-    c.description,
-    d.name AS department_name,
-    c.credits,
-    c.duration_hours,
-    c.created_at,
-    CASE WHEN c.lecturer_id = ? THEN 'assigned' ELSE 'department' END as assignment_status
-  FROM courses c
-  INNER JOIN departments d ON c.department_id = d.id
-  WHERE c.department_id = ? AND c.status = 'active'
-  ORDER BY c.name ASC
-";
-$stmt = $pdo->prepare($sql);
-$stmt->execute([$lecturer_dept['lecturer_id'], $lecturer_dept['department_id']]);
-$courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    error_log("Querying courses for lecturer_id: " . $lecturer_id);
 
-// Add basic statistics to each course
-foreach ($courses as &$course) {
-    $course_id = $course['course_id'];
+    // Get courses where lecturer_id matches the logged-in lecturer
+    $stmt = $pdo->prepare("
+        SELECT
+            c.id as course_id,
+            c.course_code,
+            c.name as course_name,
+            c.description,
+            d.name as department_name,
+            c.credits,
+            c.duration_hours,
+            c.created_at,
+            COUNT(DISTINCT st.id) as student_count,
+            COUNT(DISTINCT s.id) as total_sessions,
+            ROUND(
+                CASE
+                    WHEN COUNT(DISTINCT st.id) > 0 AND COUNT(DISTINCT s.id) > 0
+                    THEN (COUNT(ar.id) * 100.0) / (COUNT(DISTINCT st.id) * COUNT(DISTINCT s.id))
+                    ELSE 0
+                END, 1
+            ) as avg_attendance_rate,
+            COUNT(DISTINCT CASE WHEN DATE(s.session_date) = CURDATE() THEN s.id END) as today_sessions
+        FROM courses c
+        INNER JOIN departments d ON c.department_id = d.id
+        LEFT JOIN options o ON c.option_id = o.id
+        LEFT JOIN students st ON o.id = st.option_id
+        LEFT JOIN attendance_sessions s ON c.id = s.course_id
+        LEFT JOIN attendance_records ar ON s.id = ar.session_id
+        WHERE c.lecturer_id = :lecturer_id
+        GROUP BY c.id, c.course_code, c.name, c.description, d.name, c.credits, c.duration_hours, c.created_at
+        ORDER BY c.created_at DESC
+    ");
+    $stmt->execute(['lecturer_id' => $lecturer_id]);
+    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Get student count
-    $student_stmt = $pdo->prepare("SELECT COUNT(*) as count FROM attendance_sessions WHERE course_id = ?");
-    $student_stmt->execute([$course_id]);
-    $student_result = $student_stmt->fetch(PDO::FETCH_ASSOC);
-    $course['student_count'] = (int)($student_result['count'] ?? 0);
+    error_log("Found " . count($courses) . " courses for lecturer_id: " . $lecturer_id);
+    if (!empty($courses)) {
+        foreach ($courses as $course) {
+            error_log("Course: " . $course['course_code'] . " - " . $course['course_name']);
+        }
+    }
 
-    // Get total sessions
-    $attendance_stmt = $pdo->prepare("SELECT COUNT(*) as total_sessions FROM attendance_sessions WHERE course_id = ?");
-    $attendance_stmt->execute([$course_id]);
-    $attendance_result = $attendance_stmt->fetch(PDO::FETCH_ASSOC);
-    $course['total_sessions'] = (int)($attendance_result['total_sessions'] ?? 0);
-    $course['avg_attendance_rate'] = 0; // Placeholder
+    // Calculate total statistics
+    $total_courses = count($courses);
+    $total_students = array_sum(array_column($courses, 'student_count'));
+    $avg_attendance = $total_courses > 0 ? round(array_sum(array_column($courses, 'avg_attendance_rate')) / $total_courses, 1) : 0;
+    $today_sessions = array_sum(array_column($courses, 'today_sessions'));
 
-    // Get today's sessions
-    $today_stmt = $pdo->prepare("SELECT COUNT(*) as today_count FROM attendance_sessions WHERE course_id = ? AND DATE(start_time) = CURDATE()");
-    $today_stmt->execute([$course_id]);
-    $today_result = $today_stmt->fetch(PDO::FETCH_ASSOC);
-    $course['today_sessions'] = (int)($today_result['today_count'] ?? 0);
+    error_log("Statistics: total_courses=$total_courses, total_students=$total_students, avg_attendance=$avg_attendance, today_sessions=$today_sessions");
+
+} catch (PDOException $e) {
+    error_log("Courses query error: " . $e->getMessage());
+    $courses = [];
+    $total_courses = 0;
+    $total_students = 0;
+    $avg_attendance = 0;
+    $today_sessions = 0;
 }
 
-// Get total statistics for the lecturer
-$total_courses = count($courses);
-$total_students = array_sum(array_column($courses, 'student_count'));
-$avg_attendance = 0; // Placeholder
-$today_sessions = array_sum(array_column($courses, 'today_sessions'));
+// Handle AJAX requests for real-time updates
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
+    header('Content-Type: application/json');
+
+    try {
+        // Refresh course data - get courses assigned to this lecturer
+        $stmt = $pdo->prepare("
+            SELECT
+                c.id as course_id,
+                COUNT(DISTINCT st.id) as student_count,
+                COUNT(DISTINCT s.id) as total_sessions,
+                ROUND(
+                    CASE
+                        WHEN COUNT(DISTINCT st.id) > 0 AND COUNT(DISTINCT s.id) > 0
+                        THEN (COUNT(ar.id) * 100.0) / (COUNT(DISTINCT st.id) * COUNT(DISTINCT s.id))
+                        ELSE 0
+                    END, 1
+                ) as avg_attendance_rate,
+                COUNT(DISTINCT CASE WHEN DATE(s.session_date) = CURDATE() THEN s.id END) as today_sessions
+            FROM courses c
+            LEFT JOIN options o ON c.option_id = o.id
+            LEFT JOIN students st ON o.id = st.option_id
+            LEFT JOIN attendance_sessions s ON c.id = s.course_id
+            LEFT JOIN attendance_records ar ON s.id = ar.session_id
+            WHERE c.lecturer_id = :lecturer_id
+            GROUP BY c.id
+        ");
+        $stmt->execute(['lecturer_id' => $lecturer_id]);
+        $updated_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        echo json_encode([
+            'status' => 'success',
+            'data' => [
+                'total_courses' => count($updated_stats),
+                'total_students' => array_sum(array_column($updated_stats, 'student_count')),
+                'avg_attendance' => count($updated_stats) > 0 ? round(array_sum(array_column($updated_stats, 'avg_attendance_rate')) / count($updated_stats), 1) : 0,
+                'today_sessions' => array_sum(array_column($updated_stats, 'today_sessions')),
+                'courses' => $courses
+            ],
+            'timestamp' => time()
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Failed to refresh course data'
+        ]);
+    }
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -128,8 +179,322 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="css/admin-dashboard.css" rel="stylesheet">
-  <link href="css/lecturer-dashboard.css" rel="stylesheet">
+  <!-- Custom Styles -->
+  <style>
+      :root {
+          --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+          --warning-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+          --info-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+          --card-shadow: 0 10px 30px rgba(0,0,0,0.1);
+          --card-shadow-hover: 0 20px 40px rgba(0,0,0,0.15);
+      }
+
+      body {
+          font-family: 'Poppins', sans-serif;
+          background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+          min-height: 100vh;
+      }
+
+      .stats-card {
+          background: white;
+          border-radius: 15px;
+          padding: 25px;
+          box-shadow: var(--card-shadow);
+          transition: all 0.3s ease;
+          border: none;
+          position: relative;
+          overflow: hidden;
+      }
+
+      .stats-card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 4px;
+          background: var(--primary-gradient);
+      }
+
+      .stats-card:hover {
+          transform: translateY(-5px);
+          box-shadow: var(--card-shadow-hover);
+      }
+
+      .stats-icon {
+          width: 60px;
+          height: 60px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 24px;
+          margin-bottom: 15px;
+      }
+
+      .course-card {
+          background: white;
+          border-radius: 15px;
+          overflow: hidden;
+          box-shadow: var(--card-shadow);
+          transition: all 0.3s ease;
+          border: none;
+          margin-bottom: 20px;
+      }
+
+      .course-card:hover {
+          transform: translateY(-5px);
+          box-shadow: var(--card-shadow-hover);
+      }
+
+      .course-header {
+          background: var(--primary-gradient);
+          color: white;
+          padding: 20px;
+          position: relative;
+      }
+
+      .course-status {
+          position: absolute;
+          top: 15px;
+          right: 15px;
+          padding: 5px 12px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 600;
+      }
+
+      .course-body {
+          padding: 25px;
+      }
+
+      .course-title {
+          font-size: 1.3rem;
+          font-weight: 600;
+          margin-bottom: 5px;
+          color: #2d3748;
+      }
+
+      .course-code {
+          color: #718096;
+          font-weight: 500;
+          margin-bottom: 15px;
+      }
+
+      .course-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 15px;
+          margin-bottom: 20px;
+      }
+
+      .meta-item {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          color: #718096;
+          font-size: 0.9rem;
+      }
+
+      .attendance-stats {
+          background: #f8fafc;
+          border-radius: 10px;
+          padding: 15px;
+          margin-bottom: 20px;
+      }
+
+      .stat-item {
+          text-align: center;
+      }
+
+      .stat-value {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: #2d3748;
+      }
+
+      .stat-label {
+          font-size: 0.8rem;
+          color: #718096;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+      }
+
+      .action-buttons {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+      }
+
+      .btn-action {
+          border-radius: 25px;
+          padding: 8px 20px;
+          font-weight: 500;
+          transition: all 0.3s ease;
+      }
+
+      .search-container {
+          background: white;
+          border-radius: 15px;
+          padding: 25px;
+          box-shadow: var(--card-shadow);
+          margin-bottom: 30px;
+      }
+
+      .search-input {
+          border: 2px solid #e2e8f0;
+          border-radius: 25px;
+          padding: 12px 20px;
+          font-size: 1rem;
+          transition: all 0.3s ease;
+      }
+
+      .search-input:focus {
+          border-color: #667eea;
+          box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+          outline: none;
+      }
+
+      .filter-buttons {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-top: 15px;
+      }
+
+      .filter-btn {
+          border-radius: 20px;
+          padding: 6px 15px;
+          border: 2px solid #e2e8f0;
+          background: white;
+          color: #718096;
+          transition: all 0.3s ease;
+      }
+
+      .filter-btn.active {
+          background: var(--primary-gradient);
+          border-color: transparent;
+          color: white;
+      }
+
+      .empty-state {
+          text-align: center;
+          padding: 60px 20px;
+          color: #718096;
+      }
+
+      .empty-state i {
+          font-size: 4rem;
+          margin-bottom: 20px;
+          opacity: 0.5;
+      }
+
+      @media (max-width: 768px) {
+          .stats-card {
+              margin-bottom: 20px;
+          }
+
+          .action-buttons {
+              flex-direction: column;
+          }
+
+          .action-buttons .btn {
+              width: 100%;
+          }
+      }
+
+      .fade-in {
+          animation: fadeIn 0.5s ease-in;
+      }
+
+      @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Sidebar styles */
+      .sidebar {
+          position: fixed;
+          top: 0;
+          left: 0;
+          height: 100vh;
+          width: 250px;
+          background: var(--primary-gradient);
+          color: white;
+          padding: 20px 0;
+          z-index: 100;
+          box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+      }
+
+      .sidebar .sidebar-header {
+          padding: 0 20px 20px;
+          border-bottom: 1px solid rgba(255,255,255,0.2);
+          margin-bottom: 20px;
+      }
+
+      .sidebar .sidebar-header h4 {
+          margin: 0;
+          font-weight: 600;
+          font-size: 18px;
+      }
+
+      .sidebar .sidebar-header .subtitle {
+          font-size: 12px;
+          opacity: 0.8;
+          margin-top: 4px;
+      }
+
+      .sidebar a {
+          color: white;
+          text-decoration: none;
+          padding: 12px 20px;
+          display: block;
+          transition: all 0.3s ease;
+          border-left: 3px solid transparent;
+      }
+
+      .sidebar a:hover, .sidebar a.active {
+          background: rgba(255, 255, 255, 0.1);
+          border-left-color: rgba(255, 255, 255, 0.5);
+      }
+
+      .sidebar a i {
+          margin-right: 10px;
+          width: 16px;
+          text-align: center;
+      }
+
+      .main-content {
+          margin-left: 250px;
+          padding: 20px;
+          min-height: 100vh;
+      }
+
+      .topbar {
+          background: white;
+          padding: 20px;
+          border-radius: 10px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+          margin-bottom: 20px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+      }
+
+      .page-header {
+          text-align: center;
+          padding: 30px 0;
+          margin-bottom: 30px;
+      }
+
+      .footer {
+          text-align: center;
+          padding: 20px;
+          color: #718096;
+          font-size: 0.9rem;
+      }
+  </style>
 
   <style>
     :root {
@@ -369,96 +734,36 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
 
 </head>
 <body>
-    <!-- Mobile Menu Toggle -->
-    <button class="mobile-menu-toggle d-lg-none" onclick="toggleSidebar()" aria-label="Toggle navigation menu">
-        <i class="fas fa-bars" aria-hidden="true"></i>
-    </button>
-
-<!-- Sidebar -->
-<div class="sidebar" id="sidebar">
-    <div class="logo-container text-center">
-        <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" onerror="this.style.display='none'">
-        <div class="logo-glow"></div>
+    <!-- System Status Notice -->
+    <div class="alert alert-info alert-dismissible fade show position-fixed" style="top: 20px; right: 20px; z-index: 9999; min-width: 350px;">
+        <i class="fas fa-info-circle me-2"></i><strong>Live System:</strong> Connected to RP Attendance Database.
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
-    <div class="text-center mb-4">
-        <h3 style="margin: 0; font-weight: 700; color: white;"><i class="fas fa-graduation-cap me-2"></i>RP System</h3>
-        <small style="color: rgba(255,255,255,0.8);">Lecturer Panel</small>
-    </div>
+    <!-- Include Lecturer Sidebar -->
+    <?php include 'includes/lecturer-sidebar.php'; ?>
 
-    <ul class="sidebar-nav">
-        <li class="nav-section">
-            <i class="fas fa-th-large me-2"></i>Main Dashboard
-        </li>
-        <li>
-            <a href="lecturer-dashboard.php">
-                <i class="fas fa-tachometer-alt"></i><span class="sidebar-text"> Dashboard Overview</span>
-            </a>
-        </li>
-
-        <li class="nav-section">
-            <i class="fas fa-book me-2"></i>Course Management
-        </li>
-        <li>
-            <a href="lecturer-my-courses.php" class="active">
-                <i class="fas fa-book"></i><span class="sidebar-text"> My Courses</span>
-            </a>
-        </li>
-
-        <li class="nav-section">
-            <i class="fas fa-calendar-check me-2"></i>Attendance
-        </li>
-        <li>
-            <a href="attendance-session.php">
-                <i class="fas fa-video"></i><span class="sidebar-text"> Attendance Session</span>
-            </a>
-        </li>
-        <li>
-            <a href="attendance-reports.php">
-                <i class="fas fa-chart-line"></i><span class="sidebar-text"> Attendance Reports</span>
-            </a>
-        </li>
-
-        <li class="nav-section">
-            <i class="fas fa-envelope me-2"></i>Requests
-        </li>
-        <li>
-            <a href="leave-requests.php">
-                <i class="fas fa-envelope"></i><span class="sidebar-text"> Leave Requests</span>
-                <?php if (isset($_SESSION['pending_leaves']) && $_SESSION['pending_leaves'] > 0): ?>
-                    <span class="notification-badge"><?= $_SESSION['pending_leaves'] ?></span>
-                <?php endif; ?>
-            </a>
-        </li>
-
-        <li class="nav-section">
-            <i class="fas fa-sign-out-alt me-2"></i>Account
-        </li>
-        <li>
-            <a href="logout.php" class="text-danger">
-                <i class="fas fa-sign-out-alt"></i><span class="sidebar-text"> Logout</span>
-            </a>
-        </li>
-    </ul>
-</div>
-
-<!-- Topbar -->
-<div class="topbar d-flex justify-content-between align-items-center">
-  <h5 class="m-0 fw-bold">My Courses</h5>
-  <span>Lecturer Panel</span>
-</div>
-
-<!-- Main Content -->
-<div class="main-content">
-    <!-- Page Header -->
-    <div class="page-header text-center py-4" style="background: linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%); border-bottom: 2px solid #0ea5e9; margin-bottom: 30px;">
-        <div class="d-flex align-items-center justify-content-center">
-            <img src="RP_Logo.jpeg" alt="Rwanda Polytechnic Logo" style="height: 60px; width: auto; margin-right: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" onerror="this.style.display='none'">
-            <h1 style="background: var(--primary-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin: 0; font-weight: 700;">
-                My Courses
-            </h1>
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Topbar -->
+        <div class="topbar">
+            <div>
+                <h1 class="page-title">My Courses</h1>
+                <div class="system-title">Rwanda Polytechnic Attendance System</div>
+                <div class="user-info mt-1">
+                    <small class="text-muted">
+                        <i class="fas fa-user me-1"></i><?php echo htmlspecialchars($lecturer_name); ?> |
+                        <i class="fas fa-building me-1"></i><?php echo htmlspecialchars($lecturer_info['department_name'] ?? 'Not Assigned'); ?>
+                    </small>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-success">Live System</span>
+                <button class="btn btn-outline-primary btn-sm" onclick="refreshCourses()">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                </button>
+            </div>
         </div>
-    </div>
 
     <!-- Statistics Overview -->
     <div class="row g-4 mb-4">
@@ -520,7 +825,7 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
 
         <div class="filter-buttons">
             <button class="filter-btn active" data-filter="all">
-                <i class="fas fa-th-large me-1"></i>All Courses (<?= count($courses) ?>)
+                <i class="fas fa-th-large me-1"></i>All Courses (<?= $total_courses ?>)
             </button>
             <button class="filter-btn" data-filter="assigned">
                 <i class="fas fa-user-check me-1"></i>Assigned to Me
@@ -542,17 +847,17 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
 
     <!-- Courses Grid -->
     <div class="row g-4" id="courseContainer">
-        <?php if ($courses): ?>
+        <?php if (!empty($courses) && is_array($courses)): ?>
             <?php foreach ($courses as $index => $course): ?>
-                <div class="col-lg-6 col-xl-4 course-card fade-in" data-course-id="<?= $course['course_id'] ?>"
-                     data-attendance-rate="<?= $course['avg_attendance_rate'] ?>"
-                     data-today-sessions="<?= $course['today_sessions'] ?>"
-                     data-created-at="<?= strtotime($course['created_at']) ?>"
-                     style="animation-delay: <?= $index * 0.1 ?>s">
+                <div class="col-lg-6 col-xl-4 course-card fade-in" data-course-id="<?= htmlspecialchars($course['course_id']) ?>"
+                      data-attendance-rate="<?= htmlspecialchars($course['avg_attendance_rate']) ?>"
+                      data-today-sessions="<?= htmlspecialchars($course['today_sessions']) ?>"
+                      data-created-at="<?= htmlspecialchars(strtotime($course['created_at'])) ?>"
+                      style="animation-delay: <?= $index * 0.1 ?>s">
                     <div class="course-card">
                         <div class="course-header">
                             <div class="course-status bg-success">
-                                <?= $course['assignment_status'] === 'assigned' ? 'Assigned' : 'Department' ?>
+                                Department
                             </div>
                             <h5 class="course-title mb-1">
                                 <?= htmlspecialchars($course['course_name']) ?>
@@ -563,7 +868,7 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
                         </div>
 
                         <div class="course-body">
-                            <?php if ($course['description']): ?>
+                            <?php if (!empty($course['description'])): ?>
                                 <p class="text-muted small mb-3">
                                     <?= htmlspecialchars(substr($course['description'], 0, 100)) ?>
                                     <?= strlen($course['description']) > 100 ? '...' : '' ?>
@@ -611,13 +916,13 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
 
                             <!-- Action Buttons -->
                             <div class="action-buttons">
-                                <a href="attendance-session.php?course_id=<?= $course['course_id'] ?>" class="btn btn-primary btn-action">
+                                <a href="attendance-session.php?course_id=<?= htmlspecialchars($course['course_id']) ?>" class="btn btn-primary btn-action">
                                     <i class="fas fa-video me-1"></i> Start Session
                                 </a>
-                                <a href="attendance-reports.php?course_id=<?= $course['course_id'] ?>" class="btn btn-outline-secondary btn-action">
+                                <a href="lecturer-attendance-reports.php?course_id=<?= htmlspecialchars($course['course_id']) ?>" class="btn btn-outline-secondary btn-action">
                                     <i class="fas fa-chart-bar me-1"></i> Reports
                                 </a>
-                                <button class="btn btn-outline-info btn-action" onclick="viewCourseDetails(<?= $course['course_id'] ?>)">
+                                <button class="btn btn-outline-info btn-action" onclick="viewCourseDetails(<?= htmlspecialchars($course['course_id']) ?>)">
                                     <i class="fas fa-info-circle me-1"></i> Details
                                 </button>
                             </div>
@@ -629,10 +934,10 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
             <div class="col-12">
                 <div class="empty-state">
                     <i class="fas fa-book text-muted"></i>
-                    <h4>No Courses Assigned</h4>
-                    <p>You haven't been assigned any courses yet. Please contact your department head or administrator.</p>
-                    <button class="btn btn-primary" onclick="location.reload()">
-                        <i class="fas fa-sync-alt me-1"></i>Refresh Page
+                    <h4>No Courses Available</h4>
+                    <p>No courses are currently assigned to your department. Please contact your department head or administrator.</p>
+                    <button class="btn btn-primary" onclick="refreshCourses()">
+                        <i class="fas fa-sync-alt me-1"></i>Refresh Data
                     </button>
                 </div>
             </div>
@@ -640,288 +945,334 @@ $today_sessions = array_sum(array_column($courses, 'today_sessions'));
     </div>
 </div>
 
-<!-- Footer -->
-<div class="footer">
-  &copy; 2025 Rwanda Polytechnic | Lecturer Panel
-</div>
+    <!-- Footer -->
+    <div class="footer">
+        &copy; 2025 Rwanda Polytechnic | Lecturer Panel - Live System
+    </div>
 
-<!-- Bootstrap JS -->
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-<!-- Enhanced JavaScript -->
-<script>
-// Global variables
-let allCourses = [];
-let filteredCourses = [];
+    <!-- Enhanced JavaScript for Live System -->
+    <script>
+    // Global variables
+    let allCourses = [];
+    let filteredCourses = [];
 
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', function() {
-    initializeCourses();
-    setupEventListeners();
-});
-
-// Initialize courses data
-function initializeCourses() {
-    const courseCards = document.querySelectorAll('.course-card');
-    allCourses = Array.from(courseCards);
-    filteredCourses = [...allCourses];
-}
-
-// Setup event listeners
-function setupEventListeners() {
-    // Sidebar toggle
-    const sidebarToggle = document.querySelector('.mobile-menu-toggle');
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', toggleSidebar);
-    }
-
-    // Search functionality
-    const searchInput = document.getElementById('courseSearch');
-    if (searchInput) {
-        searchInput.addEventListener('input', handleSearch);
-    }
-
-    // Filter buttons
-    const filterButtons = document.querySelectorAll('.filter-btn');
-    filterButtons.forEach(button => {
-        button.addEventListener('click', handleFilter);
-    });
-}
-
-// Sidebar toggle functionality
-function toggleSidebar() {
-    const sidebar = document.querySelector('.sidebar');
-    if (sidebar) {
-        sidebar.classList.toggle('mobile-open');
-    }
-}
-
-// Enhanced search functionality
-function handleSearch() {
-    const query = this.value.toLowerCase().trim();
-    const filterType = document.querySelector('.filter-btn.active').dataset.filter;
-
-    filteredCourses = allCourses.filter(card => {
-        const title = card.querySelector('.course-title').textContent.toLowerCase();
-        const code = card.querySelector('.course-code').textContent.toLowerCase();
-        const description = card.querySelector('p') ? card.querySelector('p').textContent.toLowerCase() : '';
-
-        const matchesSearch = !query ||
-            title.includes(query) ||
-            code.includes(query) ||
-            description.includes(query);
-
-        const matchesFilter = checkFilterMatch(card, filterType);
-
-        return matchesSearch && matchesFilter;
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeCourses();
+        setupEventListeners();
+        showWelcomeMessage();
+        setupAutoRefresh();
     });
 
-    updateCourseDisplay();
-}
-
-// Filter functionality
-function handleFilter() {
-    // Update active filter button
-    document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-    this.classList.add('active');
-
-    const filterType = this.dataset.filter;
-    const searchQuery = document.getElementById('courseSearch').value.toLowerCase().trim();
-
-    filteredCourses = allCourses.filter(card => {
-        const matchesSearch = !searchQuery ||
-            card.querySelector('.course-title').textContent.toLowerCase().includes(searchQuery) ||
-            card.querySelector('.course-code').textContent.toLowerCase().includes(searchQuery);
-
-        const matchesFilter = checkFilterMatch(card, filterType);
-
-        return matchesSearch && matchesFilter;
-    });
-
-    updateCourseDisplay();
-}
-
-// Check if course matches filter criteria
-function checkFilterMatch(card, filterType) {
-    switch (filterType) {
-        case 'all':
-            return true;
-        case 'assigned':
-            return card.querySelector('.course-status').textContent.trim() === 'Assigned';
-        case 'department':
-            return card.querySelector('.course-status').textContent.trim() === 'Department';
-        case 'high-attendance':
-            const attendanceRate = parseFloat(card.dataset.attendanceRate) || 0;
-            return attendanceRate > 80;
-        case 'today-sessions':
-            const todaySessions = parseInt(card.dataset.todaySessions) || 0;
-            return todaySessions > 0;
-        case 'recent':
-            const createdAt = parseInt(card.dataset.createdAt) || 0;
-            const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-            return createdAt > thirtyDaysAgo;
-        default:
-            return true;
-    }
-}
-
-// Update course display with animations
-function updateCourseDisplay() {
-    const container = document.getElementById('courseContainer');
-
-    // Hide all cards first
-    allCourses.forEach(card => {
-        card.style.display = 'none';
-        card.classList.remove('fade-in');
-    });
-
-    // Show filtered cards with staggered animation
-    filteredCourses.forEach((card, index) => {
+    // Show welcome message
+    function showWelcomeMessage() {
         setTimeout(() => {
-            card.style.display = 'block';
-            card.classList.add('fade-in');
-        }, index * 50);
-    });
+            showNotification('Welcome to your Course Dashboard! Real-time data from RP Attendance System.', 'success');
+        }, 1000);
+    }
 
-    // Update filter button counts
-    updateFilterCounts();
-}
+    // Initialize courses data
+    function initializeCourses() {
+        const courseCards = document.querySelectorAll('.course-card');
+        allCourses = Array.from(courseCards);
+        filteredCourses = [...allCourses];
+        updateFilterCounts();
+    }
 
-// Update filter button counts
-function updateFilterCounts() {
-    const filters = {
-        'all': allCourses.length,
-        'assigned': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Assigned').length,
-        'department': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Department').length,
-        'high-attendance': allCourses.filter(card => (parseFloat(card.dataset.attendanceRate) || 0) > 80).length,
-        'today-sessions': allCourses.filter(card => (parseInt(card.dataset.todaySessions) || 0) > 0).length,
-        'recent': allCourses.filter(card => {
-            const createdAt = parseInt(card.dataset.createdAt) || 0;
-            const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-            return createdAt > thirtyDaysAgo;
-        }).length
-    };
-
-    document.querySelectorAll('.filter-btn').forEach(button => {
-        const filterType = button.dataset.filter;
-        const count = filters[filterType] || 0;
-        const icon = button.querySelector('i').outerHTML;
-        const text = button.textContent.replace(/\(\d+\)$/, '').trim();
-        button.innerHTML = `${icon} ${text} (${count})`;
-    });
-}
-
-// View course details (placeholder for future implementation)
-function viewCourseDetails(courseId) {
-    // Show loading state
-    const button = event.target.closest('button');
-    const originalText = button.innerHTML;
-    button.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
-    button.disabled = true;
-
-    // Simulate API call
-    setTimeout(() => {
-        button.innerHTML = originalText;
-        button.disabled = false;
-
-        // Show notification
-        showNotification('Course details feature coming soon!', 'info');
-    }, 1000);
-}
-
-// Enhanced notification system
-function showNotification(message, type = 'info') {
-    const alertClass = type === 'success' ? 'alert-success' :
-                      type === 'error' ? 'alert-danger' :
-                      type === 'warning' ? 'alert-warning' : 'alert-info';
-
-    const icon = type === 'success' ? 'fas fa-check-circle' :
-                 type === 'error' ? 'fas fa-exclamation-triangle' :
-                 type === 'warning' ? 'fas fa-exclamation-circle' : 'fas fa-info-circle';
-
-    const alert = document.createElement('div');
-    alert.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
-    alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 350px; max-width: 500px;';
-    alert.innerHTML = `
-        <div class="d-flex align-items-start">
-            <i class="${icon} me-2 mt-1"></i>
-            <div class="flex-grow-1">
-                <div class="fw-bold">${type.toUpperCase()}</div>
-                <div>${message}</div>
-            </div>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-    `;
-
-    document.body.appendChild(alert);
-
-    // Add animation class
-    setTimeout(() => alert.classList.add('show'), 10);
-
-    // Auto remove after 4 seconds
-    setTimeout(() => {
-        if (alert.parentNode) {
-            alert.classList.remove('show');
-            setTimeout(() => alert.remove(), 300);
-        }
-    }, 4000);
-}
-
-// Keyboard shortcuts
-document.addEventListener('keydown', function(e) {
-    // Ctrl + F to focus search
-    if (e.ctrlKey && e.key === 'f') {
-        e.preventDefault();
+    // Setup event listeners
+    function setupEventListeners() {
+        // Search functionality
         const searchInput = document.getElementById('courseSearch');
         if (searchInput) {
-            searchInput.focus();
-            searchInput.select();
+            searchInput.addEventListener('input', debounce(handleSearch, 300));
+        }
+
+        // Filter buttons
+        const filterButtons = document.querySelectorAll('.filter-btn');
+        filterButtons.forEach(button => {
+            button.addEventListener('click', handleFilter);
+        });
+    }
+
+    // Setup auto-refresh functionality
+    function setupAutoRefresh() {
+        // Auto-refresh every 5 minutes
+        setInterval(refreshCourses, 300000);
+
+        // Handle visibility change
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                refreshCourses();
+            }
+        });
+    }
+
+    // Refresh courses data from server
+    function refreshCourses() {
+        const refreshBtn = document.querySelector('button[onclick="refreshCourses()"]');
+        if (refreshBtn) {
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Refreshing...';
+        }
+
+        fetch('lecturer-my-courses.php?ajax=1', {
+            method: 'GET',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // Update statistics
+                updateStatistics(data.data);
+
+                // Update course cards if needed
+                if (data.data.courses) {
+                    updateCourseCards(data.data.courses);
+                }
+
+                showNotification('Course data refreshed successfully!', 'success');
+            } else {
+                showNotification('Failed to refresh course data.', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Refresh error:', error);
+            showNotification('Error refreshing course data.', 'error');
+        })
+        .finally(() => {
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Refresh';
+            }
+        });
+    }
+
+    // Update statistics display
+    function updateStatistics(data) {
+        const statElements = {
+            'totalCourses': data.total_courses,
+            'totalStudents': data.total_students,
+            'avgAttendance': data.avg_attendance + '%',
+            'todaySessions': data.today_sessions
+        };
+
+        Object.keys(statElements).forEach(key => {
+            const element = document.getElementById(key);
+            if (element) {
+                element.textContent = statElements[key];
+            }
+        });
+    }
+
+    // Update course cards (for future dynamic updates)
+    function updateCourseCards(courses) {
+        // This could be enhanced to dynamically update course cards
+        // For now, just refresh the page data
+        initializeCourses();
+    }
+
+    // Enhanced search functionality with debouncing
+    function handleSearch() {
+        const query = this.value.toLowerCase().trim();
+        const filterType = document.querySelector('.filter-btn.active').dataset.filter;
+
+        filteredCourses = allCourses.filter(card => {
+            const title = card.querySelector('.course-title').textContent.toLowerCase();
+            const code = card.querySelector('.course-code').textContent.toLowerCase();
+            const description = card.querySelector('p') ? card.querySelector('p').textContent.toLowerCase() : '';
+
+            const matchesSearch = !query ||
+                title.includes(query) ||
+                code.includes(query) ||
+                description.includes(query);
+
+            const matchesFilter = checkFilterMatch(card, filterType);
+
+            return matchesSearch && matchesFilter;
+        });
+
+        updateCourseDisplay();
+    }
+
+    // Filter functionality
+    function handleFilter() {
+        // Update active filter button
+        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+        this.classList.add('active');
+
+        const filterType = this.dataset.filter;
+        const searchQuery = document.getElementById('courseSearch').value.toLowerCase().trim();
+
+        filteredCourses = allCourses.filter(card => {
+            const matchesSearch = !searchQuery ||
+                card.querySelector('.course-title').textContent.toLowerCase().includes(searchQuery) ||
+                card.querySelector('.course-code').textContent.toLowerCase().includes(searchQuery);
+
+            const matchesFilter = checkFilterMatch(card, filterType);
+
+            return matchesSearch && matchesFilter;
+        });
+
+        updateCourseDisplay();
+    }
+
+    // Check if course matches filter criteria
+    function checkFilterMatch(card, filterType) {
+        switch (filterType) {
+            case 'all':
+                return true;
+            case 'assigned':
+                return card.querySelector('.course-status').textContent.trim() === 'Assigned';
+            case 'department':
+                return card.querySelector('.course-status').textContent.trim() === 'Department';
+            case 'high-attendance':
+                const attendanceRate = parseFloat(card.dataset.attendanceRate) || 0;
+                return attendanceRate > 80;
+            case 'today-sessions':
+                const todaySessions = parseInt(card.dataset.todaySessions) || 0;
+                return todaySessions > 0;
+            case 'recent':
+                const createdAt = parseInt(card.dataset.createdAt) || 0;
+                const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+                return createdAt > thirtyDaysAgo;
+            default:
+                return true;
         }
     }
 
-    // Escape to clear search
-    if (e.key === 'Escape') {
-        const searchInput = document.getElementById('courseSearch');
-        if (searchInput && document.activeElement === searchInput) {
-            searchInput.value = '';
-            searchInput.blur();
-            handleSearch.call(searchInput);
+    // Update course display with animations
+    function updateCourseDisplay() {
+        const container = document.getElementById('courseContainer');
+
+        // Hide all cards first
+        allCourses.forEach(card => {
+            card.style.display = 'none';
+            card.classList.remove('fade-in');
+        });
+
+        // Show filtered cards with staggered animation
+        filteredCourses.forEach((card, index) => {
+            setTimeout(() => {
+                card.style.display = 'block';
+                card.classList.add('fade-in');
+            }, index * 50);
+        });
+
+        // Update filter counts after filtering
+        updateFilterCounts();
+    }
+
+    // Update filter button counts
+    function updateFilterCounts() {
+        const filters = {
+            'all': allCourses.length,
+            'assigned': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Assigned').length,
+            'department': allCourses.filter(card => card.querySelector('.course-status').textContent.trim() === 'Department').length,
+            'high-attendance': allCourses.filter(card => (parseFloat(card.dataset.attendanceRate) || 0) > 80).length,
+            'today-sessions': allCourses.filter(card => (parseInt(card.dataset.todaySessions) || 0) > 0).length,
+            'recent': allCourses.filter(card => {
+                const createdAt = parseInt(card.dataset.createdAt) || 0;
+                const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+                return createdAt > thirtyDaysAgo;
+            }).length
+        };
+
+        document.querySelectorAll('.filter-btn').forEach(button => {
+            const filterType = button.dataset.filter;
+            const count = filters[filterType] || 0;
+            const icon = button.querySelector('i').outerHTML;
+            const text = button.textContent.replace(/\(\d+\)$/, '').trim();
+            button.innerHTML = `${icon} ${text} (${count})`;
+        });
+    }
+
+    // View course details
+    function viewCourseDetails(courseId) {
+        showNotification(`Loading detailed information for course ${courseId}...`, 'info');
+        // Could implement modal or redirect to course details page
+    }
+
+    // Enhanced notification system
+    function showNotification(message, type = 'info') {
+        const alertClass = type === 'success' ? 'alert-success' :
+                            type === 'error' ? 'alert-danger' :
+                            type === 'warning' ? 'alert-warning' : 'alert-info';
+
+        const icon = type === 'success' ? 'fas fa-check-circle' :
+                      type === 'error' ? 'fas fa-exclamation-triangle' :
+                      type === 'warning' ? 'fas fa-exclamation-circle' : 'fas fa-info-circle';
+
+        const alert = document.createElement('div');
+        alert.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
+        alert.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 350px; max-width: 500px;';
+        alert.innerHTML = `
+            <div class="d-flex align-items-start">
+                <i class="${icon} me-2 mt-1"></i>
+                <div class="flex-grow-1">
+                    <div class="fw-bold">${type.toUpperCase()}</div>
+                    <div>${message}</div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        `;
+
+        document.body.appendChild(alert);
+
+        // Auto remove after 4 seconds
+        setTimeout(() => {
+            if (alert.parentNode) {
+                alert.classList.remove('show');
+                setTimeout(() => alert.remove(), 300);
+            }
+        }, 4000);
+    }
+
+    // Debounce utility function
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func.apply(this, args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        // Ctrl + F to focus search
+        if (e.ctrlKey && e.key === 'f') {
+            e.preventDefault();
+            const searchInput = document.getElementById('courseSearch');
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
         }
-    }
-});
 
-// Auto-refresh functionality (optional)
-let autoRefreshInterval = null;
-
-function startAutoRefresh() {
-    if (autoRefreshInterval) clearInterval(autoRefreshInterval);
-    autoRefreshInterval = setInterval(() => {
-        // Only refresh if page is visible and no active interactions
-        if (!document.hidden && !document.querySelector(':focus')) {
-            updateFilterCounts();
+        // Escape to clear search
+        if (e.key === 'Escape') {
+            const searchInput = document.getElementById('courseSearch');
+            if (searchInput && document.activeElement === searchInput) {
+                searchInput.value = '';
+                searchInput.blur();
+                handleSearch.call(searchInput);
+            }
         }
-    }, 30000); // Refresh every 30 seconds
-}
+    });
 
-function stopAutoRefresh() {
-    if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
-    }
-}
-
-// Start auto-refresh when page becomes visible
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        stopAutoRefresh();
-    } else {
-        startAutoRefresh();
-    }
-});
-
-// Initialize auto-refresh
-startAutoRefresh();
-</script>
+    console.log('🎓 Lecturer Courses Live System loaded successfully!');
+    console.log('💡 Real-time data from RP Attendance Database');
+    console.log('🔍 Use Ctrl+F to quickly focus the search bar');
+    console.log('🔄 Auto-refresh enabled - data updates every 5 minutes');
+    </script>
 
 </body>
 </html>
