@@ -1379,11 +1379,18 @@ class StudentRegistration {
         // Preview functionality
         this.on('#previewBtn', 'click', this.showPreview.bind(this));
 
-        // Real-time validation
-        const requiredInputs = this.$$('input[required]');
+        // Real-time validation for all required fields
+        const requiredInputs = this.$$('input[required], select[required]');
         requiredInputs.forEach(input => {
             this.on(input, 'blur', this.validateField.bind(this));
-            this.on(input, 'input', this.debounce(this.updateProgress.bind(this), 200));
+            this.on(input, 'input', this.debounce(() => {
+                this.validateField({ target: input });
+                this.updateProgress();
+            }, 200));
+            this.on(input, 'change', this.debounce(() => {
+                this.validateField({ target: input });
+                this.updateProgress();
+            }, 200));
         });
 
         // Update preview when form changes
@@ -1650,14 +1657,30 @@ class StudentRegistration {
         if (field) {
             this.addClass(field, 'is-invalid');
             this.removeClass(field, 'is-valid');
+            
+            // Remove existing feedback
             const existingFeedback = field.parentNode.querySelector('.invalid-feedback');
             if (existingFeedback) {
                 existingFeedback.remove();
             }
+            
+            // Create feedback element
             const feedbackDiv = document.createElement('div');
-            feedbackDiv.className = 'invalid-feedback';
+            feedbackDiv.className = 'invalid-feedback d-block';
             feedbackDiv.textContent = message;
-            field.parentNode.insertBefore(feedbackDiv, field.nextSibling);
+            
+            // Better insertion logic for complex layouts
+            const parent = field.parentNode;
+            if (parent.classList.contains('input-group')) {
+                // For input groups, insert after the entire group
+                parent.parentNode.insertBefore(feedbackDiv, parent.nextSibling);
+            } else if (field.nextSibling) {
+                // Insert after the field if there's a next sibling
+                parent.insertBefore(feedbackDiv, field.nextSibling);
+            } else {
+                // Append to parent if no next sibling
+                parent.appendChild(feedbackDiv);
+            }
         }
     }
 
@@ -1668,9 +1691,20 @@ class StudentRegistration {
         if (field) {
             this.removeClass(field, 'is-invalid');
             this.addClass(field, 'is-valid');
-            const existingFeedback = field.parentNode.querySelector('.invalid-feedback');
+            
+            // Remove feedback from multiple possible locations
+            const parent = field.parentNode;
+            let existingFeedback = parent.querySelector('.invalid-feedback');
             if (existingFeedback) {
                 existingFeedback.remove();
+            }
+            
+            // Also check parent's parent for input-group layouts
+            if (parent.classList.contains('input-group')) {
+                existingFeedback = parent.parentNode.querySelector('.invalid-feedback');
+                if (existingFeedback) {
+                    existingFeedback.remove();
+                }
             }
         }
     }
@@ -1800,27 +1834,79 @@ class StudentRegistration {
     validateField(e) {
         const field = e.target;
         const value = field.value.trim();
+        const fieldName = field.name || field.id;
 
-        if (!value) return;
-
-        const fieldName = field.name;
-
-        switch (fieldName) {
-            case 'email':
-                if (!this.isValidEmail(value)) {
-                    this.showFieldError(field, 'Please enter a valid email address');
-                } else {
-                    this.clearFieldError(field);
-                }
-                break;
-            case 'telephone':
-                if (!this.isValidPhone(value)) {
-                    this.showFieldError(field, 'Please enter a valid 10-digit phone number (e.g., 0781234567)');
-                } else {
-                    this.clearFieldError(field);
-                }
-                break;
+        // Handle required fields
+        if (field.hasAttribute('required')) {
+            if (!value) {
+                const fieldLabel = this.getFieldLabel(field);
+                this.showFieldError(field, `${fieldLabel} is required`);
+                return;
+            } else {
+                // Clear error if field is filled and no other validation issues
+                this.clearFieldError(field);
+            }
         }
+
+        // Handle specific field validations
+        if (value) {
+            switch (fieldName) {
+                case 'email':
+                    if (!this.isValidEmail(value)) {
+                        this.showFieldError(field, 'Please enter a valid email address');
+                    } else {
+                        this.clearFieldError(field);
+                    }
+                    break;
+                case 'telephone':
+                case 'parent_contact':
+                    if (!this.isValidPhone(value)) {
+                        const label = fieldName === 'telephone' ? 'Phone number' : 'Parent phone number';
+                        this.showFieldError(field, `${label} must be exactly 10 digits starting with 0 (e.g., 0781234567)`);
+                    } else {
+                        this.clearFieldError(field);
+                    }
+                    break;
+                case 'reg_no':
+                    if (!this.isValidRegistrationNumber(value)) {
+                        this.showFieldError(field, 'Registration number must be 5-20 characters, alphanumeric only');
+                    } else {
+                        this.clearFieldError(field);
+                    }
+                    break;
+            }
+        }
+    }
+
+    getFieldLabel(field) {
+        // Get field label from various sources
+        const fieldId = field.id;
+        const fieldName = field.name;
+        
+        // Try to find label by for attribute
+        const label = document.querySelector(`label[for="${fieldId}"]`);
+        if (label) {
+            return label.textContent.replace('*', '').trim();
+        }
+        
+        // Fallback to common field names
+        const fieldLabels = {
+            'firstName': 'First Name',
+            'lastName': 'Last Name',
+            'email': 'Email Address',
+            'telephone': 'Phone Number',
+            'reg_no': 'Registration Number',
+            'department': 'Department',
+            'option': 'Program',
+            'year_level': 'Year Level',
+            'sex': 'Gender',
+            'dob': 'Date of Birth',
+            'parent_first_name': 'Parent First Name',
+            'parent_last_name': 'Parent Last Name',
+            'parent_contact': 'Parent Contact'
+        };
+        
+        return fieldLabels[fieldId] || fieldLabels[fieldName] || 'Field';
     }
 
     updateProgress() {
@@ -2466,14 +2552,14 @@ class StudentRegistration {
        const feedbackElements = this.$$('.invalid-feedback');
        feedbackElements.forEach(el => el.remove());
 
-       // Check face images requirement
+       // Face images are optional - just check if any are provided, they should be valid
        const faceImagesCount = this.$$('#faceImagesPreview .face-image-item').length;
-       if (faceImagesCount < 2) {
-           this.showAlert('Please select at least 2 face images for face recognition.', 'error');
-           this.addClass('#faceImagesUploadArea', 'border-danger');
-           isValid = false;
+       if (faceImagesCount > 0 && faceImagesCount < 2) {
+           this.showAlert('If providing face images, please select at least 2 images for better face recognition accuracy.', 'warning');
+           this.addClass('#faceImagesUploadArea', 'border-warning');
+           // Don't set isValid = false since face images are optional
        } else {
-           this.removeClass('#faceImagesUploadArea', 'border-danger');
+           this.removeClass('#faceImagesUploadArea', 'border-danger border-warning');
        }
 
        // Required field validation with specific messages
@@ -2491,10 +2577,15 @@ class StudentRegistration {
 
        requiredFields.forEach(field => {
            const fieldElement = this.$(`#${field.id}`);
-           if (!this.val(fieldElement).trim()) {
+           const fieldValue = this.val(fieldElement).trim();
+           
+           if (!fieldValue) {
                this.showFieldError(fieldElement, `${field.name} is required`);
                isValid = false;
                errors.push(`${field.name} is required`);
+           } else {
+               // Clear error if field is filled
+               this.clearFieldError(fieldElement);
            }
        });
 
@@ -2506,6 +2597,10 @@ class StudentRegistration {
            this.showFieldError($option, 'Please select a program for the chosen department');
            isValid = false;
            errors.push('Program selection is required');
+       } else if (departmentId && optionId) {
+           // Clear error if both department and program are selected
+           const $option = this.$('#option');
+           this.clearFieldError($option);
        }
 
        // Validate that the selected option belongs to the selected department
@@ -2530,6 +2625,9 @@ class StudentRegistration {
            this.showFieldError('#email', 'Please enter a valid email address');
            isValid = false;
            errors.push('Invalid email format');
+       } else if (email) {
+           // Clear error if email is valid
+           this.clearFieldError('#email');
        }
 
        // Phone number validation
@@ -2538,6 +2636,9 @@ class StudentRegistration {
            this.showFieldError('#telephone', 'Phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
            isValid = false;
            errors.push('Invalid phone number format');
+       } else if (phone) {
+           // Clear error if phone is valid
+           this.clearFieldError('#telephone');
        }
 
        // Parent contact validation if provided
@@ -2546,6 +2647,9 @@ class StudentRegistration {
            this.showFieldError('#parent_contact', 'Parent phone number must be exactly 10 digits starting with 0 (e.g., 0781234567) - no letters allowed');
            isValid = false;
            errors.push('Invalid parent phone number format');
+       } else if (parentContact) {
+           // Clear error if parent contact is valid
+           this.clearFieldError('#parent_contact');
        }
 
        // Date of birth validation
@@ -2563,6 +2667,9 @@ class StudentRegistration {
                this.showFieldError('#dob', 'Please enter a valid date of birth');
                isValid = false;
                errors.push('Invalid date of birth');
+           } else {
+               // Clear error if date of birth is valid
+               this.clearFieldError('#dob');
            }
        }
 
@@ -2572,6 +2679,9 @@ class StudentRegistration {
            this.showFieldError('#reg_no', 'Registration number must be 5-20 characters, alphanumeric only');
            isValid = false;
            errors.push('Invalid registration number format');
+       } else if (regNo) {
+           // Clear error if registration number is valid
+           this.clearFieldError('#reg_no');
        }
 
        // Fingerprint is optional - no validation required
