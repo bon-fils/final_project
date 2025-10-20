@@ -1481,7 +1481,9 @@ class StudentRegistration {
                 }
             });
 
+            console.log('API Response:', response);
             if (response.success) {
+                console.log('Processing successful response with', response.data?.length, 'options');
                 if (response.data && response.data.length > 0) {
                     const options = response.data.map(opt =>
                         `<option value="${opt.id}" data-department="${deptId}">${this.escapeHtml(opt.name)}</option>`
@@ -1504,6 +1506,7 @@ class StudentRegistration {
                     this.addClass(programHelpIcon, 'fa-check-circle text-success');
                     this.html('#programHelp small', '<strong class="text-success">Programs loaded successfully!</strong> Choose your desired program from the dropdown above');
 
+                    console.log(`Programs loaded successfully: ${response.data.length} program${response.data.length !== 1 ? 's' : ''}`);
                     this.showAlert(`🎉 ${response.data.length} program${response.data.length !== 1 ? 's' : ''} loaded successfully!`, 'success');
                 } else {
                     this.html($option, '<option value="">No programs available</option>');
@@ -1515,6 +1518,7 @@ class StudentRegistration {
                     this.showAlert('⚠️ No programs found for this department', 'warning');
                 }
             } else {
+                console.log('API returned success=false:', response);
                 throw new Error(response.message || 'Failed to load options');
             }
         } catch (error) {

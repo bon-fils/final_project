@@ -88,6 +88,7 @@ function handleGetOptions() {
         // For registration page (unauthenticated), return empty result for connectivity check
         if (!isset($_SESSION['role'])) {
             echo json_encode([
+                'success' => true,
                 'status' => 'success',
                 'data' => [],
                 'count' => 0,
@@ -110,6 +111,7 @@ function handleGetOptions() {
             $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             echo json_encode([
+                'success' => true,
                 'status' => 'success',
                 'data' => $options,
                 'count' => count($options),
@@ -163,6 +165,7 @@ function handleGetOptions() {
         // Check if any options exist
         if (empty($options)) {
             echo json_encode([
+                'success' => true,
                 'status' => 'success',
                 'data' => [],
                 'count' => 0,
@@ -172,6 +175,7 @@ function handleGetOptions() {
         }
 
         echo json_encode([
+            'success' => true,
             'status' => 'success',
             'data' => $options,
             'count' => count($options),
