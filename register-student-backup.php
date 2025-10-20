@@ -16,7 +16,7 @@ if (!isset($_SESSION['csrf_token'])) {
 $csrf_token = $_SESSION['csrf_token'];
 
 // Initialize data arrays with error handling
-$departments = [];<?php
+$departments = [];
 /**
  * Enhanced Student Registration Form
  * Clean, modern, and accessible student registration system

@@ -308,7 +308,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         }
 
                         // Create or update user account for HOD
-                        $username = strtolowe r($lecturer['first_name'] . '.' . $lecturer['last_name']);
+                        $username = strtolower($lecturer['first_name'] . '.' . $lecturer['last_name']);
                         $default_password = password_hash('Welcome123!', PASSWORD_DEFAULT);
 
                         $stmt = $pdo->prepare("

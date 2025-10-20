@@ -380,12 +380,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                             <button type="button" class="btn btn-secondary" id="resetFormBtn">
                                 <i class="fas fa-undo me-2"></i>Reset Form
                             </button>
-                            <button type="button" class="btn btn-info" id="previewBtn" onclick="showAssignmentPreview()">
-                                <i class="fas fa-eye me-2"></i>Preview Assignment
-                            </button>
-                            <button type="button" class="btn btn-outline-success" onclick="enableBulkMode()" id="bulkModeBtn">
-                                <i class="fas fa-layer-group me-2"></i>Bulk Mode
-                            </button>
+                           
+                            
                         </div>
                     </form>
                 </div>

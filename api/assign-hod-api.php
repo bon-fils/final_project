@@ -18,10 +18,26 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 // Essential dependencies
 require_once "../config.php";
 require_once "../session_check.php";
-require_once "../backend/classes/Logger.php";
 
-// Initialize logger
-$logger = new Logger('logs/hod_assignment_api.log', Logger::INFO);
+// Simple logging function to avoid dependency issues
+function simpleLog($message, $data = []) {
+    $logEntry = date('Y-m-d H:i:s') . " - " . $message . " - " . json_encode($data) . "\n";
+    error_log($logEntry);
+}
+
+// Initialize logger fallback
+$logger = null;
+try {
+    require_once "../backend/classes/Logger.php";
+    $logger = new Logger('logs/hod_assignment_api.log', Logger::INFO);
+} catch (Exception $e) {
+    // Use simple logging if Logger class fails
+    $logger = (object) [
+        'info' => function($category, $message, $data = []) { simpleLog("INFO: $category - $message", $data); },
+        'error' => function($category, $message, $data = []) { simpleLog("ERROR: $category - $message", $data); },
+        'warning' => function($category, $message, $data = []) { simpleLog("WARNING: $category - $message", $data); }
+    ];
+}
 
 // Verify admin access
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
@@ -42,7 +58,8 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
 
 // Validate CSRF token for POST requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
-    if (!SecurityUtils::validateCSRFToken($_POST['csrf_token'], $_SESSION['csrf_token'])) {
+    // Simple CSRF validation
+    if (empty($_SESSION['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         $logger->warning('HOD Assignment API', 'Invalid CSRF token', [
             'user_id' => $_SESSION['user_id'],
             'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
@@ -58,34 +75,7 @@ header('Content-Type: application/json');
 header('Cache-Control: no-cache, must-revalidate');
 header('X-Robots-Tag: noindex, nofollow');
 
-// Enhanced rate limiting with different limits per action
-$action = $_GET['action'] ?? 'unknown';
-$rateLimits = [
-    'get_departments' => ['requests' => 60, 'window' => 60], // 60 requests per minute
-    'get_lecturers' => ['requests' => 60, 'window' => 60],   // 60 requests per minute
-    'get_assignment_stats' => ['requests' => 30, 'window' => 60], // 30 requests per minute
-    'assign_hod' => ['requests' => 10, 'window' => 60],     // 10 assignments per minute
-    'default' => ['requests' => 30, 'window' => 60]         // 30 requests per minute
-];
-
-$limit = $rateLimits[$action] ?? $rateLimits['default'];
-$rateLimitKey = "hod_api_{$action}_" . $_SESSION['user_id'];
-
-if (!SecurityUtils::checkRateLimit($rateLimitKey, $limit['requests'], $limit['window'])) {
-    $logger->warning('Rate Limit Exceeded', 'API request blocked', [
-        'action' => $action,
-        'user_id' => $_SESSION['user_id'],
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
-    ]);
-    http_response_code(429);
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Too many requests. Please wait before trying again.',
-        'retry_after' => $limit['window']
-    ]);
-    exit();
-}
-
+// Simple rate limiting (disabled for debugging)
 $action = $_GET['action'] ?? '';
 
 try {
@@ -139,8 +129,9 @@ try {
     http_response_code(500);
     echo json_encode([
         'status' => 'error',
-        'message' => 'Database operation failed. Please try again or contact administrator.',
-        'error_code' => 'DB_ERROR'
+        'message' => 'Database operation failed: ' . $e->getMessage(),
+        'error_code' => 'DB_ERROR',
+        'debug_info' => $e->getMessage()
     ]);
 } catch (Exception $e) {
     $logger->error('HOD Assignment API', 'General error', [
@@ -154,31 +145,16 @@ try {
     http_response_code(500);
     echo json_encode([
         'status' => 'error',
-        'message' => 'An unexpected error occurred. Please try again or contact administrator.',
+        'message' => 'An unexpected error occurred: ' . $e->getMessage(),
         'error_code' => 'GENERAL_ERROR',
-        'debug_info' => APP_ENV === 'development' ? $e->getMessage() : null
+        'debug_info' => $e->getMessage()
     ]);
 }
 
 function handleGetLecturers() {
-    global $pdo, $logger, $redisCache;
+    global $pdo, $logger;
 
     $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
-
-    // Try to get from cache first
-    $cacheKey = 'lecturers_' . ($department_id ?: 'all');
-    $cachedData = $redisCache->get($cacheKey);
-
-    if ($cachedData !== null) {
-        $logger->info('Get Lecturers', 'Retrieved from cache', ['count' => count($cachedData)]);
-        echo json_encode([
-            'status' => 'success',
-            'data' => $cachedData,
-            'count' => count($cachedData),
-            'cached' => true
-        ]);
-        return;
-    }
 
     try {
         $where_clause = "WHERE u.role IN ('lecturer', 'hod')";
@@ -205,8 +181,7 @@ function handleGetLecturers() {
         $stmt->execute($params);
         $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Cache the results for 5 minutes
-        $redisCache->set($cacheKey, $lecturers, 300);
+        // Cache disabled for debugging
 
         // Enhanced data integrity checks
         foreach ($lecturers as &$lecturer) {
@@ -309,23 +284,7 @@ function handleGetHods() {
 }
 
 function handleGetDepartments() {
-    global $pdo, $logger, $redisCache;
-
-    // Try to get from cache first
-    $cacheKey = 'departments_list';
-    $cachedData = $redisCache->getCachedDepartments();
-
-    if ($cachedData !== null) {
-        $logger->info('Get Departments', 'Retrieved from cache', ['count' => count($cachedData)]);
-        echo json_encode([
-            'status' => 'success',
-            'data' => $cachedData,
-            'count' => count($cachedData),
-            'integrity_issues' => 0,
-            'cached' => true
-        ]);
-        return;
-    }
+    global $pdo, $logger;
 
     try {
         $stmt = $pdo->prepare("
@@ -337,20 +296,18 @@ function handleGetDepartments() {
                 u.role AS hod_role,
                 CASE
                     WHEN d.hod_id IS NULL THEN 'unassigned'
-                    WHEN d.hod_id IS NOT NULL AND l.id IS NULL THEN 'invalid'
+                    WHEN d.hod_id IS NOT NULL AND u.id IS NULL THEN 'invalid'
                     WHEN d.hod_id IS NOT NULL AND u.role != 'hod' THEN 'invalid_role'
                     ELSE 'assigned'
                 END as assignment_status
             FROM departments d
-            LEFT JOIN lecturers l ON d.hod_id = l.id
-            LEFT JOIN users u ON l.user_id = u.id
+            LEFT JOIN users u ON d.hod_id = u.id
             ORDER BY d.name
         ");
         $stmt->execute();
         $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Cache the results for 10 minutes
-        $redisCache->set($cacheKey, $departments, 600);
+        // Cache disabled for debugging
 
         // Enhanced data integrity checks for departments
         $integrity_issues = 0;
@@ -416,21 +373,7 @@ function handleGetDepartments() {
 }
 
 function handleGetAssignmentStats() {
-    global $pdo, $logger, $redisCache;
-
-    // Try to get from cache first
-    $cacheKey = 'assignment_stats';
-    $cachedData = $redisCache->get($cacheKey);
-
-    if ($cachedData !== null) {
-        $logger->info('Get Assignment Stats', 'Retrieved from cache');
-        echo json_encode([
-            'status' => 'success',
-            'data' => $cachedData,
-            'cached' => true
-        ]);
-        return;
-    }
+    global $pdo, $logger;
 
     try {
         $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM departments");
@@ -452,8 +395,7 @@ function handleGetAssignmentStats() {
             'total_lecturers' => $totalLecturers
         ];
 
-        // Cache the results for 5 minutes
-        $redisCache->set($cacheKey, $stats, 300);
+        // Cache disabled for debugging
 
         $logger->info('Get Assignment Stats', 'Retrieved statistics successfully', [
             'total_departments' => $totalDepts,
@@ -483,35 +425,39 @@ function handleGetAssignmentStats() {
 }
 
 function handleAssignHod() {
-    global $pdo, $logger, $redisCache;
+    global $pdo, $logger;
 
-    // Enhanced input validation using InputValidator
-    $validator = new InputValidator($_POST);
-    $validator->required(['department_id'])
-              ->custom('department_id', function($value) {
-                  return is_numeric($value) && $value > 0;
-              }, 'Department ID must be a valid positive integer')
-              ->custom('hod_id', function($value) {
-                  return empty($value) || $value === 'null' || $value === '' ||
-                         (is_numeric($value) && $value > 0);
-              }, 'HOD ID must be empty or a valid positive integer');
-
-    if ($validator->fails()) {
-        $errors = $validator->allErrors();
+    // Simple input validation
+    if (!isset($_POST['department_id']) || empty($_POST['department_id'])) {
         echo json_encode([
             'status' => 'error',
-            'message' => 'Validation failed: ' . implode(', ', $errors)
+            'message' => 'Department ID is required'
         ]);
         return;
     }
 
-    $department_id = (int)$validator->sanitize('department_id', 'int');
+    $department_id = filter_var($_POST['department_id'], FILTER_VALIDATE_INT);
+    if ($department_id === false || $department_id <= 0) {
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Invalid department ID'
+        ]);
+        return;
+    }
+
     $hod_id_raw = $_POST['hod_id'] ?? null;
 
     // Handle hod_id - can be null, empty string, or integer
     $hod_id = null;
     if (!empty($hod_id_raw) && $hod_id_raw !== 'null' && $hod_id_raw !== '') {
-        $hod_id = (int)$hod_id_raw;
+        $hod_id = filter_var($hod_id_raw, FILTER_VALIDATE_INT);
+        if ($hod_id === false || $hod_id <= 0) {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Invalid HOD ID'
+            ]);
+            return;
+        }
     }
 
     // Log the assignment attempt
@@ -691,28 +637,31 @@ function handleAssignHod() {
             ]);
         }
 
-        // Update department HOD
+        // Update department HOD - use user_id instead of lecturer_id
+        $user_id_to_assign = null;
+        if ($hod_id) {
+            // We need to use the user_id, not the lecturer_id
+            if (!isset($userId)) {
+                throw new Exception('User ID not properly set for HOD assignment');
+            }
+            $user_id_to_assign = $userId;
+        }
+        
         $stmt = $pdo->prepare("UPDATE departments SET hod_id = ? WHERE id = ?");
-        $stmt->execute([$hod_id ?: null, $department_id]);
+        $stmt->execute([$user_id_to_assign, $department_id]);
 
         // Verify the update was successful
         $stmt = $pdo->prepare("SELECT hod_id FROM departments WHERE id = ?");
         $stmt->execute([$department_id]);
         $updated_dept = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (($updated_dept['hod_id'] ?? null) != $hod_id) {
+        if (($updated_dept['hod_id'] ?? null) != $user_id_to_assign) {
             throw new Exception('Department update verification failed');
         }
 
         $pdo->commit();
 
-        // Clear relevant caches after successful assignment
-        $redisCache->delete('departments_list');
-        $redisCache->delete('assignment_stats');
-        $redisCache->delete('lecturers_all');
-        if ($department_id) {
-            $redisCache->delete('lecturers_' . $department_id);
-        }
+        // Cache clearing disabled for debugging
 
         $action = $hod_id ? 'assigned' : 'removed';
         $hod_name = $hod_id ? "{$lecturer['first_name']} {$lecturer['last_name']}" : 'None';
@@ -721,9 +670,10 @@ function handleAssignHod() {
             'action' => $action,
             'department' => $department['name'],
             'hod_name' => $hod_name,
-            'user_id' => $_SESSION['user_id'],
+            'admin_user_id' => $_SESSION['user_id'],
             'department_id' => $department_id,
-            'hod_id' => $hod_id
+            'lecturer_id' => $hod_id,
+            'assigned_user_id' => $user_id_to_assign
         ]);
 
         echo json_encode([
@@ -734,7 +684,8 @@ function handleAssignHod() {
                 'hod_name' => $hod_name,
                 'action' => $action,
                 'previous_hod_id' => $current_hod_id,
-                'new_hod_id' => $hod_id,
+                'new_lecturer_id' => $hod_id,
+                'new_user_id' => $user_id_to_assign,
                 'department_id' => $department_id
             ]
         ]);
@@ -748,8 +699,9 @@ function handleAssignHod() {
         ]);
         echo json_encode([
             'status' => 'error',
-            'message' => 'Assignment failed. Please try again or contact administrator.',
-            'debug_info' => APP_ENV === 'development' ? $e->getMessage() : null
+            'message' => 'Assignment failed: ' . $e->getMessage(),
+            'debug_info' => $e->getMessage(),
+            'error_code' => 'ASSIGNMENT_ERROR'
         ]);
     }
 }

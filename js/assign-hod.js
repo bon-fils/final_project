@@ -575,7 +575,8 @@
 
             // Load lecturers for the selected department
             if (selectedDeptId) {
-                loadLecturers(selectedDeptId).then(() => {
+                console.log('Loading lecturers for department:', selectedDeptId);
+                loadLecturersForDepartment(selectedDeptId).then(() => {
                     console.log('Lecturers loaded for department:', selectedDeptId);
                 }).catch(error => {
                     console.error('Failed to load lecturers for department:', error);
@@ -678,7 +679,7 @@
                     // After loading data, refresh lecturers for currently selected department if any
                     const selectedDeptId = $('#departmentSelect').val();
                     if (selectedDeptId) {
-                        loadLecturers(selectedDeptId).catch(error => {
+                        loadLecturersForDepartment(selectedDeptId).catch(error => {
                             console.error('Failed to refresh lecturers after assignment:', error);
                         });
                     }
@@ -989,7 +990,7 @@
     function loadData() {
         UI.showLoading('Loading HOD Assignment System');
 
-        Promise.all([
+        return Promise.all([
             loadDepartments(),
             loadLecturers(),
             loadStatistics(),
@@ -1004,6 +1005,7 @@
             UI.hideLoading();
             console.error('Error loading data:', error);
             UI.showAlert('danger', 'Failed to load data: ' + error.message);
+            throw error; // Re-throw to maintain Promise chain
         });
     }
 
@@ -1293,5 +1295,43 @@
     window.filterAssignments = function() {
         UI.renderDepartments(AppState.departments);
     };
+
+    // Add the missing function for department-specific lecturer loading
+    function loadLecturersForDepartment(departmentId) {
+        return new Promise((resolve, reject) => {
+            const url = `${CONFIG.apiBaseUrl}?action=get_lecturers&ajax=1&department_id=${departmentId}`;
+            
+            $.ajax({
+                url: url,
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-Token': window.csrfToken
+                },
+                timeout: 30000,
+                success: function(response) {
+                    if (response.status === 'success') {
+                        AppState.setLecturers(response.data);
+                        console.log(`Loaded ${response.data.length} lecturers for department ${departmentId}`);
+                        resolve(response.data);
+                    } else {
+                        reject(new Error(response.message || 'Failed to load lecturers'));
+                    }
+                },
+                error: function(xhr, status, error) {
+                    let errorMessage = 'Network error occurred';
+                    if (xhr.status === 429) {
+                        errorMessage = 'Too many requests. Please wait and try again.';
+                    } else if (xhr.status === 403) {
+                        errorMessage = 'Access denied. Please refresh the page.';
+                    } else if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMessage = xhr.responseJSON.message;
+                    }
+                    console.error('Load Lecturers Error:', xhr.responseText);
+                    reject(new Error(errorMessage));
+                }
+            });
+        });
+    }
 
 })(window, document, jQuery);
