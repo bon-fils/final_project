@@ -404,17 +404,44 @@
                     $(this).closest('.department-card').addClass('selected');
 
                     $('#departmentSelect').val(deptId);
-                    $('#lecturerSelect').val(hodId);
-
-                    if (hodId && hodName && !isInvalid) {
-                        $('#currentAssignmentInfo').show();
-                        $('#currentHodName').text(hodName);
-                    } else if (isInvalid) {
+                    
+                    // Load lecturers for the selected department
+                    console.log('Loading lecturers for selected department:', deptId);
+                    loadLecturersForDepartment(deptId).then(() => {
+                        // After lecturers are loaded, set the current HOD if valid
+                        if (hodId && hodName && !isInvalid) {
+                            // Find the lecturer that corresponds to this HOD
+                            const matchingLecturer = AppState.lecturers.find(lecturer => 
+                                lecturer.full_name === hodName || 
+                                `${lecturer.first_name} ${lecturer.last_name}` === hodName
+                            );
+                            
+                            if (matchingLecturer) {
+                                $('#lecturerSelect').val(matchingLecturer.id);
+                                $('#currentAssignmentInfo').show();
+                                $('#currentHodName').text(hodName);
+                            } else {
+                                $('#lecturerSelect').val('');
+                                $('#currentAssignmentInfo').hide();
+                                console.warn('Could not find matching lecturer for HOD:', hodName);
+                            }
+                        } else {
+                            $('#lecturerSelect').val('');
+                            if (isInvalid) {
+                                $('#currentAssignmentInfo').hide();
+                                UI.showAlert('warning', `Department <strong>${deptName}</strong> has an invalid HOD assignment that needs to be fixed.`);
+                            } else {
+                                $('#currentAssignmentInfo').hide();
+                            }
+                        }
+                        
+                        Validation.validateForm();
+                    }).catch(error => {
+                        console.error('Failed to load lecturers for department:', error);
+                        $('#lecturerSelect').val('');
                         $('#currentAssignmentInfo').hide();
-                        UI.showAlert('warning', `Department <strong>${deptName}</strong> has an invalid HOD assignment that needs to be fixed.`);
-                    } else {
-                        $('#currentAssignmentInfo').hide();
-                    }
+                        UI.showAlert('warning', 'Failed to load lecturers for selected department');
+                    });
 
                     $('#assignHodForm')[0].scrollIntoView({
                         behavior: 'smooth',
@@ -426,7 +453,6 @@
                     const alertMessage = isInvalid ? `Selected department with invalid assignment: <strong>${deptName}</strong>` : `Selected department: <strong>${deptName}</strong>`;
 
                     UI.showAlert(alertType, alertMessage);
-                    Validation.validateForm();
                 }
             });
 
