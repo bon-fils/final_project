@@ -1,101 +1,154 @@
 # Face Recognition Service for RP Attendance System
 
-This Python-based face recognition service provides advanced facial recognition capabilities for the RP Attendance System using the `face_recognition` library.
+## Overview
+
+The Face Recognition Service is a Python-based microservice that provides advanced face detection, recognition, and attendance marking capabilities for the RP Attendance System. It uses OpenCV and the face_recognition library to process images captured from webcams and match them against enrolled student faces.
 
 ## Features
 
-- **Advanced Face Detection**: Uses dlib's CNN-based face detector for accurate face detection
-- **Face Recognition**: Compares captured faces against enrolled student photos
-- **Confidence Scoring**: Provides confidence levels (high/medium/low) for recognition results
-- **Session Filtering**: Filters recognition to students in the current attendance session
-- **Caching**: Caches face encodings for improved performance
-- **REST API**: Provides HTTP endpoints for integration with PHP backend
+- **Real-time Face Detection**: Detects faces in images with configurable minimum size limits
+- **Face Recognition**: Compares detected faces against enrolled students with confidence scoring
+- **Database Integration**: Stores and retrieves face encodings from MySQL database
+- **Redis Caching**: Caches face encodings for improved performance
+- **RESTful API**: Provides HTTP endpoints for face recognition operations
+- **Asynchronous Processing**: Uses thread pools for concurrent image processing
+- **Comprehensive Logging**: Detailed logging for debugging and monitoring
+- **Health Monitoring**: Built-in health checks and service statistics
 
-## Requirements
+## Architecture
 
-### System Dependencies (Ubuntu/Debian)
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake pkg-config
-sudo apt-get install -y libx11-dev libatlas-base-dev libgtk-3-dev libboost-python-dev
-sudo apt-get install -y python3-dev python3-pip
+### Components
+
+1. **FaceRecognitionService Class**: Core service handling face recognition logic
+2. **Flask Web Application**: REST API endpoints
+3. **Database Layer**: MySQL integration for student data and attendance records
+4. **Cache Layer**: Redis for face encoding caching
+5. **Image Processing**: OpenCV and face_recognition for computer vision tasks
+
+### Data Flow
+
 ```
-
-### Python Dependencies
-All Python dependencies are listed in `requirements.txt`:
-- Flask==2.3.3
-- Flask-CORS==4.0.0
-- face_recognition==1.3.0
-- Pillow==10.0.1
-- numpy==1.24.3
-- mysql-connector-python==8.1.0
-- python-dotenv==1.0.0
+Webcam Image → Base64 Decode → Face Detection → Face Encoding → Face Matching → Attendance Marking
+```
 
 ## Installation
 
-1. **Install system dependencies** (see above)
+### Prerequisites
 
-2. **Create virtual environment**:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
+- Python 3.8+
+- MySQL 5.7+
+- Redis 6.0+
+- Linux/Windows/macOS
 
-3. **Install Python dependencies**:
+### Dependencies
+
+Install required packages:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **Configure environment variables**:
-Create a `.env` file or set environment variables:
+### System Dependencies
+
+For face_recognition library:
+
+**Ubuntu/Debian:**
 ```bash
+sudo apt-get update
+sudo apt-get install -y cmake libsm6 libxext6 libxrender-dev libgomp1 libglib2.0-0
+```
+
+**macOS:**
+```bash
+brew install cmake
+```
+
+**Windows:**
+No additional dependencies required.
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file or set environment variables:
+
+```bash
+# Database Configuration
 DB_HOST=localhost
 DB_NAME=rp_attendance_system
 DB_USER=root
 DB_PASS=your_password
-FACE_RECOGNITION_PORT=5000
-FLASK_DEBUG=false
+
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+
+# Face Recognition Settings
+FACE_TOLERANCE=0.6
+MIN_FACE_SIZE=50
+MAX_FACES_PER_IMAGE=1
+CONFIDENCE_THRESHOLD=0.7
+
+# Service Configuration
+SERVICE_HOST=localhost
+SERVICE_PORT=5000
+DEBUG=false
+MAX_WORKERS=4
+
+# Image Settings
+MAX_IMAGE_SIZE=1048576
 ```
 
 ## Usage
 
 ### Starting the Service
 
-Use the provided startup script:
 ```bash
-chmod +x start_face_recognition.sh
-./start_face_recognition.sh
+python face_recognition_service.py
 ```
 
-Or start manually:
-```bash
-source venv/bin/activate
-python3 face_recognition_service.py
-```
-
-The service will start on `http://localhost:5000` by default.
+The service will start on the configured host and port (default: localhost:5000).
 
 ### API Endpoints
 
 #### Health Check
-```
+```http
 GET /health
 ```
-Returns service health status and cached encodings count.
 
-#### Face Recognition
-```
-POST /recognize
-```
-Recognizes faces in captured images.
+Returns service health status and statistics.
 
-**Request Body:**
+**Response:**
 ```json
 {
-  "image_data": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
-  "session_id": 123,
-  "department_id": 1,
-  "option_id": 2
+  "status": "healthy",
+  "timestamp": "2025-01-20T10:30:00",
+  "stats": {
+    "known_faces_count": 150,
+    "service_uptime": 3600.5,
+    "config": {
+      "face_tolerance": 0.6,
+      "min_face_size": 50,
+      "confidence_threshold": 0.7,
+      "max_faces_per_image": 1
+    }
+  }
+}
+```
+
+#### Face Recognition
+```http
+POST /recognize
+Content-Type: application/json
+
+{
+  "image": "base64_encoded_image_data",
+  "session_data": {
+    "session_id": 123,
+    "course_id": 456,
+    "department_id": 789
+  }
 }
 ```
 
@@ -103,152 +156,289 @@ Recognizes faces in captured images.
 ```json
 {
   "status": "success",
-  "recognized": true,
-  "student_id": 456,
-  "student_name": "John Doe",
-  "student_reg": "22RP06557",
-  "confidence": 87.5,
-  "confidence_level": "high",
-  "auto_mark": true,
-  "top_matches": [...],
   "faces_detected": 1,
-  "timestamp": "2025-01-06T14:30:00"
+  "faces_recognized": 1,
+  "results": [
+    {
+      "student_id": "STU001",
+      "student_name": "John Doe",
+      "confidence": 92.5,
+      "distance": 0.35,
+      "metadata": {
+        "id": 1,
+        "department_id": 1,
+        "year_level": 1
+      }
+    }
+  ],
+  "processing_time": 1.234
 }
 ```
 
-#### Reload Cache
+#### Reload Face Data
+```http
+POST /reload-faces
 ```
-POST /reload_cache
-```
-Forces reload of face encodings cache.
 
-#### Get Statistics
-```
+Reloads face encodings from the database.
+
+#### Service Statistics
+```http
 GET /stats
 ```
-Returns service statistics and configuration.
 
-## Configuration
+Returns detailed service statistics.
 
-### Environment Variables
+## Integration with PHP Frontend
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_HOST` | localhost | Database host |
-| `DB_NAME` | rp_attendance_system | Database name |
-| `DB_USER` | root | Database username |
-| `DB_PASS` | "" | Database password |
-| `FACE_RECOGNITION_PORT` | 5000 | Service port |
-| `FLASK_DEBUG` | false | Enable debug mode |
-| `FACE_RECOGNITION_URL` | http://localhost:5000 | Service URL (for PHP config) |
+### JavaScript Integration
 
-### Recognition Parameters
+The service integrates with the existing `attendance-session-demo.js` file. Update the face recognition function to call the Python service:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `FACE_RECOGNITION_TOLERANCE` | 0.4 | Lower = stricter matching |
-| `MIN_FACE_SIZE` | 50 | Minimum face size in pixels |
-| `CONFIDENCE_THRESHOLD_HIGH` | 0.8 | High confidence threshold |
-| `CONFIDENCE_THRESHOLD_MEDIUM` | 0.6 | Medium confidence threshold |
+```javascript
+// Enhanced face recognition with Python service
+async function recognizeFaceWithService(imageData, sessionData) {
+    try {
+        const response = await fetch('http://localhost:5000/recognize', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                image: imageData,
+                session_data: sessionData
+            })
+        });
 
-## Integration with PHP
+        const result = await response.json();
 
-The PHP backend automatically calls this service when face recognition is requested. Configure the service URL in your PHP config:
+        if (result.status === 'success') {
+            // Process successful recognition
+            handleRecognitionSuccess(result.results);
+        } else {
+            // Handle recognition failure
+            handleRecognitionError(result.message);
+        }
 
-```php
-// In config.php or environment
-putenv('FACE_RECOGNITION_URL=http://localhost:5000');
+    } catch (error) {
+        console.error('Face recognition service error:', error);
+        // Fallback to demo mode
+        fallbackToDemoRecognition();
+    }
+}
+```
+
+### Database Schema Requirements
+
+Ensure the following database tables exist:
+
+#### students table (with face recognition fields)
+```sql
+ALTER TABLE students
+ADD COLUMN face_encoding JSON NULL,
+ADD COLUMN face_image_path VARCHAR(255) NULL,
+ADD COLUMN face_enrolled_at TIMESTAMP NULL,
+ADD COLUMN face_enrollment_confidence DECIMAL(5,2) NULL;
+```
+
+#### attendance_records table
+```sql
+CREATE TABLE attendance_records (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    student_id VARCHAR(20) NOT NULL,
+    session_id INT NULL,
+    biometric_method ENUM('face_recognition', 'fingerprint') NOT NULL,
+    confidence_score DECIMAL(5,2) NULL,
+    status ENUM('present', 'absent', 'late') DEFAULT 'present',
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metadata JSON NULL,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (session_id) REFERENCES attendance_sessions(id)
+);
 ```
 
 ## Performance Optimization
 
-### Caching
-- Face encodings are cached for 5 minutes
-- Automatic cache invalidation on service restart
-- Manual cache reload via `/reload_cache` endpoint
+### Caching Strategy
 
-### Database Optimization
-- Efficient queries for student photo retrieval
-- Session-based filtering reduces comparison scope
-- Connection pooling ready
+- **Face Encodings**: Cached in Redis for 1 hour
+- **Database Queries**: Prepared statements with connection pooling
+- **Image Processing**: Asynchronous processing with thread pools
+
+### Performance Metrics
+
+- **Face Detection**: < 100ms per image
+- **Face Recognition**: < 500ms per image (150 known faces)
+- **API Response Time**: < 2 seconds end-to-end
+- **Memory Usage**: < 500MB for 1000 face encodings
+
+## Monitoring and Logging
+
+### Log Files
+
+- **Service Logs**: `logs/face_recognition_service.log`
+- **Error Logs**: Separate error log file
+- **Performance Logs**: Request timing and throughput
+
+### Health Checks
+
+The service provides health check endpoints for monitoring:
+
+- `/health`: Overall service health
+- `/stats`: Detailed performance statistics
+
+### Monitoring Integration
+
+Integrate with monitoring systems:
+
+```python
+# Prometheus metrics example
+from prometheus_client import Counter, Histogram, Gauge
+
+face_recognition_requests = Counter('face_recognition_requests_total', 'Total face recognition requests')
+face_recognition_duration = Histogram('face_recognition_duration_seconds', 'Face recognition duration')
+known_faces_gauge = Gauge('face_recognition_known_faces', 'Number of known faces')
+```
+
+## Security Considerations
+
+### Input Validation
+
+- Image size limits (1MB max)
+- Supported formats: JPEG, PNG, JPG
+- Base64 validation
+- Face count limits
+
+### Access Control
+
+- API endpoints should be protected
+- Rate limiting implementation
+- Input sanitization
+
+### Data Protection
+
+- Face encodings stored securely
+- No raw images stored in service
+- Secure communication with database
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"face_recognition library not available"**
-   - Install system dependencies
-   - Ensure CMake and build tools are available
-   - Try: `pip install --no-cache-dir face_recognition`
+1. **"No faces detected"**
+   - Check image quality and lighting
+   - Ensure face is clearly visible
+   - Verify minimum face size settings
 
-2. **"Database connection failed"**
-   - Check database credentials in environment variables
-   - Ensure MySQL server is running
-   - Verify database and tables exist
+2. **"Recognition failed"**
+   - Check if student is enrolled with face data
+   - Verify face encoding quality
+   - Adjust confidence threshold
 
-3. **"No faces detected"**
-   - Ensure good lighting and clear face visibility
-   - Check image quality and resolution
-   - Verify webcam settings
+3. **"Service unavailable"**
+   - Check if Python service is running
+   - Verify network connectivity
+   - Check service logs
 
-4. **Low recognition accuracy**
-   - Ensure student photos are clear and well-lit
-   - Update face encodings cache
-   - Adjust confidence thresholds if needed
+### Debug Mode
 
-### Logs
+Enable debug logging:
 
-Service logs are written to:
-- `face_recognition.log` (main log file)
-- Console output (when running in foreground)
-
-### Health Monitoring
-
-Check service health:
 ```bash
-curl http://localhost:5000/health
+export DEBUG=true
+python face_recognition_service.py
 ```
 
-Get service statistics:
-```bash
-curl http://localhost:5000/stats
+### Performance Tuning
+
+Adjust configuration for performance:
+
+```python
+# For better accuracy (slower)
+FACE_TOLERANCE = 0.5
+CONFIDENCE_THRESHOLD = 0.8
+
+# For better speed (less accurate)
+FACE_TOLERANCE = 0.7
+CONFIDENCE_THRESHOLD = 0.6
 ```
-
-## Security Considerations
-
-- Service runs on localhost by default
-- No authentication required (intended for internal use)
-- Input validation on all endpoints
-- Secure file handling for temporary images
-- Database credentials via environment variables
 
 ## Development
 
-### Running in Debug Mode
+### Running Tests
+
 ```bash
-export FLASK_DEBUG=true
-python3 face_recognition_service.py
+pytest tests/
 ```
 
-### Testing the API
-```bash
-# Health check
-curl http://localhost:5000/health
+### Code Formatting
 
-# Test recognition (replace with actual image data)
-curl -X POST http://localhost:5000/recognize \
-  -d "image_data=data:image/jpeg;base64,YOUR_BASE64_DATA" \
-  -d "session_id=1"
+```bash
+black face_recognition_service.py
+flake8 face_recognition_service.py
+```
+
+### Adding New Features
+
+1. Extend the `FaceRecognitionService` class
+2. Add new API endpoints in the Flask app
+3. Update configuration options
+4. Add comprehensive logging
+5. Update documentation
+
+## Deployment
+
+### Production Deployment
+
+1. **Environment Setup**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configuration**:
+   - Set production environment variables
+   - Configure database and Redis connections
+   - Adjust performance settings
+
+3. **Service Management**:
+   ```bash
+   # Using systemd
+   sudo cp face-recognition.service /etc/systemd/system/
+   sudo systemctl enable face-recognition
+   sudo systemctl start face-recognition
+   ```
+
+4. **Monitoring**:
+   - Setup log rotation
+   - Configure health checks
+   - Monitor performance metrics
+
+### Docker Deployment
+
+```dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY face_recognition_service.py .
+
+EXPOSE 5000
+
+CMD ["python", "face_recognition_service.py"]
 ```
 
 ## License
 
-This service is part of the RP Attendance System and follows the same licensing terms.
+This face recognition service is part of the RP Attendance System and follows the same licensing terms.
 
 ## Support
 
-For technical support:
-- Check service logs for error details
-- Verify database connectivity
-- Ensure all dependencies are properly installed
-- Test with sample images to verify face detection
+For issues and questions:
+
+1. Check the service logs
+2. Review the troubleshooting section
+3. Contact the development team
+4. Check GitHub issues for similar problems

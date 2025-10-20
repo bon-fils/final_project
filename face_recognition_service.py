@@ -1,398 +1,484 @@
 #!/usr/bin/env python3
 """
 Face Recognition Service for RP Attendance System
-Uses face_recognition library for accurate face detection and comparison
+Advanced image processing service using OpenCV and face_recognition library
+Handles real-time face detection, recognition, and attendance marking
 """
 
-import sys
-import os
-import json
-import base64
-import tempfile
-import logging
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import cv2
 import face_recognition
 import numpy as np
-from PIL import Image
+import json
+import base64
 import io
-import time
+from PIL import Image
+import os
+import sys
+import logging
 from datetime import datetime
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('face_recognition.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
-CORS(app)  # Enable CORS for PHP requests
+import mysql.connector
+from mysql.connector import Error
+import redis
+import hashlib
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+import signal
+import atexit
 
 # Configuration
 class Config:
-    UPLOAD_FOLDER = 'uploads/students/'
-    MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
-    FACE_RECOGNITION_TOLERANCE = 0.35  # Lower = more strict matching (tightened from 0.4)
-    MIN_FACE_SIZE = 80  # Minimum face size in pixels (increased for better quality)
-    CONFIDENCE_THRESHOLD_HIGH = 0.85  # Increased from 0.8 for stricter matching
-    CONFIDENCE_THRESHOLD_MEDIUM = 0.65  # Increased from 0.6
-    MIN_FACE_RATIO = 0.05  # Minimum face size as percentage of image (5%)
-    CENTER_TOLERANCE = 0.3  # Maximum allowed face offset from center (30%)
-    CONFIDENCE_MARGIN = 0.15  # Minimum confidence difference from second best match (15%)
-    NUM_JITTERS = 3  # Number of times to jitter image for better encoding
-    UPSAMPLE_FACTOR = 1  # How many times to upsample image for face detection
+    # Database settings
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_NAME = os.getenv('DB_NAME', 'rp_attendance_system')
+    DB_USER = os.getenv('DB_USER', 'root')
+    DB_PASS = os.getenv('DB_PASS', '')
 
-config = Config()
+    # Redis settings
+    REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+    REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+    REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
-# Global face encodings cache
-face_encodings_cache = {}
-cache_timestamp = 0
-CACHE_DURATION = 300  # 5 minutes
+    # Face recognition settings
+    FACE_TOLERANCE = float(os.getenv('FACE_TOLERANCE', 0.6))
+    MIN_FACE_SIZE = int(os.getenv('MIN_FACE_SIZE', 50))
+    MAX_FACES_PER_IMAGE = int(os.getenv('MAX_FACES_PER_IMAGE', 1))
+    CONFIDENCE_THRESHOLD = float(os.getenv('CONFIDENCE_THRESHOLD', 0.7))
 
-def load_student_faces():
-    """
-    Load and cache face encodings for all students with photos
-    Supports multiple images per student from student_images table
-    """
-    global face_encodings_cache, cache_timestamp
+    # Service settings
+    HOST = os.getenv('SERVICE_HOST', 'localhost')
+    PORT = int(os.getenv('SERVICE_PORT', 5000))
+    DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+    MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
 
-    # Check if cache is still valid
-    if time.time() - cache_timestamp < CACHE_DURATION and face_encodings_cache:
-        return face_encodings_cache
+    # Image settings
+    MAX_IMAGE_SIZE = int(os.getenv('MAX_IMAGE_SIZE', 1024 * 1024))  # 1MB
+    SUPPORTED_FORMATS = ['JPEG', 'PNG', 'JPG']
 
-    logger.info("Loading student face encodings...")
-    encodings = {}
+class FaceRecognitionService:
+    def __init__(self):
+        self.config = Config()
+        self.setup_logging()
+        self.db_connection = None
+        self.redis_client = None
+        self.known_face_encodings = {}
+        self.known_face_metadata = {}
+        self.executor = ThreadPoolExecutor(max_workers=self.config.MAX_WORKERS)
+        self.is_running = False
 
-    try:
-        # Connect to database to get student photos
-        import mysql.connector
-        from mysql.connector import Error
+        # Setup signal handlers
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+        atexit.register(self.cleanup)
 
-        # Database connection (configure these)
-        db_config = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'database': os.getenv('DB_NAME', 'rp_attendance_system'),
-            'user': os.getenv('DB_USER', 'root'),
-            'password': os.getenv('DB_PASS', ''),
-            'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci'
-        }
+    def setup_logging(self):
+        """Setup comprehensive logging"""
+        logging.basicConfig(
+            level=logging.INFO if not self.config.DEBUG else logging.DEBUG,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('logs/face_recognition_service.log'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger('FaceRecognitionService')
 
-        conn = mysql.connector.connect(**db_config)
-        cursor = conn.cursor(dictionary=True)
+    def connect_database(self):
+        """Establish database connection"""
+        try:
+            self.db_connection = mysql.connector.connect(
+                host=self.config.DB_HOST,
+                database=self.config.DB_NAME,
+                user=self.config.DB_USER,
+                password=self.config.DB_PASS
+            )
+            self.logger.info("Database connection established")
+            return True
+        except Error as e:
+            self.logger.error(f"Database connection failed: {e}")
+            return False
 
-        # Get students with photos from students table (including JSON biometric data)
-        query = """
-        SELECT DISTINCT s.id, s.reg_no, s.first_name, s.last_name, s.student_photos
-        FROM students s
-        WHERE s.student_photos IS NOT NULL AND s.student_photos != ''
-        AND s.status = 'active'
-        """
-        cursor.execute(query)
-        students = cursor.fetchall()
+    def connect_redis(self):
+        """Establish Redis connection"""
+        try:
+            self.redis_client = redis.Redis(
+                host=self.config.REDIS_HOST,
+                port=self.config.REDIS_PORT,
+                db=self.config.REDIS_DB,
+                decode_responses=True
+            )
+            self.redis_client.ping()
+            self.logger.info("Redis connection established")
+            return True
+        except redis.ConnectionError as e:
+            self.logger.error(f"Redis connection failed: {e}")
+            return False
 
-        logger.info(f"Found {len(students)} students with biometric data")
+    def load_known_faces(self):
+        """Load known face encodings from database"""
+        try:
+            cursor = self.db_connection.cursor(dictionary=True)
 
-        for student in students:
-            try:
-                student_id = student['id']
-                student_encodings = []
+            # Query students with biometric data
+            query = """
+                SELECT s.id, s.first_name, s.last_name, s.student_id,
+                       s.face_encoding, s.face_image_path, s.department_id, s.year_level
+                FROM students s
+                WHERE s.face_encoding IS NOT NULL
+                AND s.status = 'active'
+            """
 
-                # Parse biometric data from JSON
-                biometric_data = student.get('student_photos')
-                if biometric_data:
-                    try:
-                        bio_json = json.loads(biometric_data) if isinstance(biometric_data, str) else biometric_data
-                        face_images = bio_json.get('biometric_data', {}).get('face_images', [])
+            cursor.execute(query)
+            students = cursor.fetchall()
 
-                        for face_img in face_images:
-                            image_path = face_img.get('image_path')
-                            if image_path:
-                                # Handle both relative and absolute paths
-                                if not os.path.isabs(image_path):
-                                    full_path = os.path.join(os.getcwd(), image_path)
-                                else:
-                                    full_path = image_path
+            self.known_face_encodings = {}
+            self.known_face_metadata = {}
 
-                                if os.path.exists(full_path):
-                                    try:
-                                        # Load and encode face
-                                        image = face_recognition.load_image_file(full_path)
-                                        face_encodings = face_recognition.face_encodings(image)
+            for student in students:
+                try:
+                    # Decode face encoding from database
+                    encoding_data = json.loads(student['face_encoding'])
+                    face_encoding = np.array(encoding_data)
 
-                                        if face_encodings:
-                                            student_encodings.append(face_encodings[0])
-                                            logger.info(f"Loaded face encoding for student {student['reg_no']} from {full_path}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to process image {full_path} for student {student['reg_no']}: {str(e)}")
-                                        continue
-                                else:
-                                    logger.warning(f"Image file not found: {full_path} for student {student['reg_no']}")
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Invalid JSON in student_photos for student {student['reg_no']}: {str(e)}")
-                        continue
-
-                # If we have encodings for this student, store them
-                if student_encodings:
-                    # Use the first encoding as primary, but store all for potential future use
-                    encodings[student_id] = {
-                        'encoding': student_encodings[0].tolist(),  # Convert numpy array to list
-                        'all_encodings': [enc.tolist() for enc in student_encodings],  # Store all encodings
-                        'student_id': student_id,
-                        'reg_no': student['reg_no'],
+                    student_key = f"student_{student['id']}"
+                    self.known_face_encodings[student_key] = face_encoding
+                    self.known_face_metadata[student_key] = {
+                        'id': student['id'],
+                        'student_id': student['student_id'],
                         'name': f"{student['first_name']} {student['last_name']}",
-                        'photo_count': len(student_encodings)
+                        'department_id': student['department_id'],
+                        'year_level': student['year_level'],
+                        'face_image_path': student['face_image_path']
                     }
-                    logger.info(f"Loaded {len(student_encodings)} face encodings for student {student['reg_no']}")
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.logger.warning(f"Invalid face encoding for student {student['id']}: {e}")
+                    continue
+
+            cursor.close()
+            self.logger.info(f"Loaded {len(self.known_face_encodings)} known face encodings")
+
+            # Cache the encodings in Redis
+            self.cache_face_encodings()
+
+        except Error as e:
+            self.logger.error(f"Failed to load known faces: {e}")
+
+    def cache_face_encodings(self):
+        """Cache face encodings in Redis for faster access"""
+        try:
+            cache_key = "face_encodings_cache"
+            cache_data = {
+                'encodings': {k: v.tolist() for k, v in self.known_face_encodings.items()},
+                'metadata': self.known_face_metadata,
+                'timestamp': datetime.now().isoformat()
+            }
+
+            self.redis_client.setex(
+                cache_key,
+                3600,  # 1 hour TTL
+                json.dumps(cache_data)
+            )
+
+            self.logger.info("Face encodings cached in Redis")
+
+        except Exception as e:
+            self.logger.error(f"Failed to cache face encodings: {e}")
+
+    def load_cached_encodings(self):
+        """Load face encodings from Redis cache"""
+        try:
+            cache_key = "face_encodings_cache"
+            cached_data = self.redis_client.get(cache_key)
+
+            if cached_data:
+                data = json.loads(cached_data)
+                self.known_face_encodings = {k: np.array(v) for k, v in data['encodings'].items()}
+                self.known_face_metadata = data['metadata']
+                self.logger.info(f"Loaded {len(self.known_face_encodings)} face encodings from cache")
+                return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to load cached encodings: {e}")
+
+        return False
+
+    def decode_image(self, image_data):
+        """Decode base64 image data to numpy array"""
+        try:
+            # Remove data URL prefix if present
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+
+            # Decode base64
+            image_bytes = base64.b64decode(image_data)
+
+            # Convert to PIL Image
+            image = Image.open(io.BytesIO(image_bytes))
+
+            # Validate image format
+            if image.format not in self.config.SUPPORTED_FORMATS:
+                raise ValueError(f"Unsupported image format: {image.format}")
+
+            # Validate image size
+            image_size = len(image_bytes)
+            if image_size > self.config.MAX_IMAGE_SIZE:
+                raise ValueError(f"Image too large: {image_size} bytes")
+
+            # Convert to RGB if necessary
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            # Convert to numpy array
+            image_array = np.array(image)
+
+            return image_array
+
+        except Exception as e:
+            self.logger.error(f"Image decoding failed: {e}")
+            raise ValueError(f"Invalid image data: {str(e)}")
+
+    def detect_faces(self, image_array):
+        """Detect faces in image using face_recognition"""
+        try:
+            # Find face locations
+            face_locations = face_recognition.face_locations(image_array)
+
+            # Filter faces by minimum size
+            valid_faces = []
+            for face_location in face_locations:
+                top, right, bottom, left = face_location
+                face_height = bottom - top
+                face_width = right - left
+
+                if face_height >= self.config.MIN_FACE_SIZE and face_width >= self.config.MIN_FACE_SIZE:
+                    valid_faces.append(face_location)
+
+            # Limit number of faces processed
+            if len(valid_faces) > self.config.MAX_FACES_PER_IMAGE:
+                self.logger.warning(f"Too many faces detected ({len(valid_faces)}), limiting to {self.config.MAX_FACES_PER_IMAGE}")
+                valid_faces = valid_faces[:self.config.MAX_FACES_PER_IMAGE]
+
+            return valid_faces
+
+        except Exception as e:
+            self.logger.error(f"Face detection failed: {e}")
+            return []
+
+    def extract_face_encodings(self, image_array, face_locations):
+        """Extract face encodings from detected faces"""
+        try:
+            face_encodings = face_recognition.face_encodings(image_array, face_locations)
+            return face_encodings
+
+        except Exception as e:
+            self.logger.error(f"Face encoding extraction failed: {e}")
+            return []
+
+    def recognize_faces(self, face_encodings):
+        """Compare face encodings against known faces"""
+        results = []
+
+        if not self.known_face_encodings:
+            self.logger.warning("No known face encodings available for comparison")
+            return results
+
+        known_encodings = list(self.known_face_encodings.values())
+        known_keys = list(self.known_face_encodings.keys())
+
+        for face_encoding in face_encodings:
+            try:
+                # Compare against all known faces
+                distances = face_recognition.face_distance(known_encodings, face_encoding)
+
+                # Find best match
+                min_distance_idx = np.argmin(distances)
+                min_distance = distances[min_distance_idx]
+
+                # Calculate confidence (inverse of distance, normalized)
+                confidence = max(0, min(1, 1 - min_distance / self.config.FACE_TOLERANCE))
+
+                if confidence >= self.config.CONFIDENCE_THRESHOLD:
+                    matched_key = known_keys[min_distance_idx]
+                    student_info = self.known_face_metadata[matched_key]
+
+                    results.append({
+                        'student_id': student_info['student_id'],
+                        'student_name': student_info['name'],
+                        'confidence': round(confidence * 100, 2),
+                        'distance': round(min_distance, 4),
+                        'metadata': student_info
+                    })
+                else:
+                    results.append({
+                        'status': 'unknown_face',
+                        'confidence': round(confidence * 100, 2),
+                        'distance': round(min_distance, 4)
+                    })
 
             except Exception as e:
-                logger.error(f"Error loading faces for student {student['reg_no']}: {str(e)}")
-                continue
-
-        cursor.close()
-        conn.close()
-
-    except Error as e:
-        logger.error(f"Database error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error loading student faces: {str(e)}")
-
-    face_encodings_cache = encodings
-    cache_timestamp = time.time()
-
-    logger.info(f"Loaded face encodings for {len(encodings)} students")
-    return encodings
-
-def process_image_data(image_data):
-    """
-    Process base64 image data and return PIL Image
-    """
-    try:
-        # Remove data URL prefix if present
-        if image_data.startswith('data:image'):
-            image_data = image_data.split(',')[1]
-
-        # Decode base64
-        image_bytes = base64.b64decode(image_data)
-
-        # Convert to PIL Image
-        image = Image.open(io.BytesIO(image_bytes))
-
-        # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-
-        return image
-
-    except Exception as e:
-        logger.error(f"Error processing image data: {str(e)}")
-        raise
-
-def preprocess_image(image):
-    """
-    Preprocess image for better face recognition
-    """
-    try:
-        # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-
-        # Enhance contrast and brightness for better recognition
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(1.2)  # Increase contrast by 20%
-
-        enhancer = ImageEnhance.Brightness(image)
-        image = enhancer.enhance(1.1)  # Increase brightness by 10%
-
-        return image
-    except Exception as e:
-        logger.warning(f"Image preprocessing failed: {str(e)}")
-        return image
-
-def recognize_face(captured_image, student_encodings, session_filter=None):
-    """
-    Enhanced face recognition with improved accuracy and multiple validation checks
-    """
-    try:
-        # Preprocess the captured image
-        captured_image = preprocess_image(captured_image)
-
-        # Convert PIL to numpy array
-        captured_array = np.array(captured_image)
-
-        # Find faces in captured image using CNN model for better accuracy
-        face_locations = face_recognition.face_locations(captured_array, model="cnn", number_of_times_to_upsample=config.UPSAMPLE_FACTOR)
-        face_encodings = face_recognition.face_encodings(captured_array, face_locations, num_jitters=config.NUM_JITTERS)
-
-        if not face_encodings:
-            return {
-                'recognized': False,
-                'message': 'No faces detected in captured image. Please ensure good lighting and face visibility.',
-                'faces_detected': 0
-            }
-
-        if len(face_encodings) > 1:
-            return {
-                'recognized': False,
-                'message': 'Multiple faces detected. Please ensure only one person is in frame.',
-                'faces_detected': len(face_encodings)
-            }
-
-        captured_encoding = face_encodings[0]
-        best_match = None
-        best_distance = float('inf')
-        all_matches = []
-        second_best_distance = float('inf')
-
-        # Compare with student encodings using multiple validation checks
-        for student_id, student_data in student_encodings.items():
-            # Skip if session filter is provided and student not in session
-            if session_filter and student_id not in session_filter:
-                continue
-
-            try:
-                # Use all encodings for this student for better recognition
-                student_all_encodings = student_data.get('all_encodings', [student_data['encoding']])
-
-                # Find the best match among all encodings for this student
-                student_best_distance = float('inf')
-                student_best_encoding = None
-
-                for encoding_data in student_all_encodings:
-                    stored_encoding = np.array(encoding_data)
-                    distance = face_recognition.face_distance([stored_encoding], captured_encoding)[0]
-
-                    if distance < student_best_distance:
-                        student_best_distance = distance
-                        student_best_encoding = encoding_data
-
-                # Use the best distance for this student
-                distance = student_best_distance
-
-                confidence = 1 - distance
-
-                all_matches.append({
-                    'student_id': student_id,
-                    'name': student_data['name'],
-                    'reg_no': student_data['reg_no'],
-                    'distance': float(distance),
-                    'confidence': confidence,
-                    'photo_count': student_data.get('photo_count', 1)
+                self.logger.error(f"Face recognition comparison failed: {e}")
+                results.append({
+                    'status': 'recognition_error',
+                    'error': str(e)
                 })
 
-                # Track best and second best matches for validation
-                if distance < best_distance:
-                    second_best_distance = best_distance
-                    best_distance = distance
-                    best_match = student_data
-                elif distance < second_best_distance:
-                    second_best_distance = distance
+        return results
 
-            except Exception as e:
-                logger.error(f"Error comparing with student {student_id}: {str(e)}")
-                continue
+    def process_attendance_image(self, image_data, session_data=None):
+        """Main method to process attendance image"""
+        start_time = time.time()
 
-        # Sort matches by confidence
-        all_matches.sort(key=lambda x: x['confidence'], reverse=True)
+        try:
+            # Decode image
+            image_array = self.decode_image(image_data)
 
-        if not best_match:
-            return {
-                'recognized': False,
-                'message': 'No matching faces found in database. Student may not be registered.',
-                'faces_detected': len(face_encodings)
-            }
+            # Detect faces
+            face_locations = self.detect_faces(image_array)
 
-        confidence = 1 - best_distance
-
-        # Enhanced validation: Check if match is significantly better than second best
-        if second_best_distance < float('inf'):
-            second_best_confidence = 1 - second_best_distance
-            confidence_difference = confidence - second_best_confidence
-
-            if confidence_difference < config.CONFIDENCE_MARGIN:
-                logger.warning(f"Low confidence margin: {confidence_difference:.3f} (required: {config.CONFIDENCE_MARGIN})")
+            if not face_locations:
                 return {
-                    'recognized': False,
-                    'message': f'Face match uncertain. Please try again with better lighting. Confidence: {confidence:.1%}',
-                    'faces_detected': len(face_encodings),
-                    'confidence': round(confidence * 100, 1),
-                    'confidence_level': 'uncertain'
+                    'status': 'no_faces_detected',
+                    'message': 'No faces detected in the image',
+                    'processing_time': time.time() - start_time
                 }
 
-        # Determine confidence level with stricter thresholds
-        if confidence >= config.CONFIDENCE_THRESHOLD_HIGH:
-            confidence_level = 'high'
-            auto_mark = True
-        elif confidence >= config.CONFIDENCE_THRESHOLD_MEDIUM:
-            confidence_level = 'medium'
-            auto_mark = True  # Allow auto-mark for medium confidence with validation
-        else:
-            confidence_level = 'low'
-            auto_mark = False
+            if len(face_locations) > self.config.MAX_FACES_PER_IMAGE:
+                return {
+                    'status': 'too_many_faces',
+                    'message': f'Too many faces detected ({len(face_locations)}). Maximum allowed: {self.config.MAX_FACES_PER_IMAGE}',
+                    'processing_time': time.time() - start_time
+                }
 
-        # Additional validation for face quality
-        face_location = face_locations[0]
-        face_width = face_location[2] - face_location[0]
-        face_height = face_location[3] - face_location[1]
-        face_area = face_width * face_height
-        image_area = captured_array.shape[0] * captured_array.shape[1]
+            # Extract face encodings
+            face_encodings = self.extract_face_encodings(image_array, face_locations)
 
-        # Check if face is large enough
-        face_ratio = face_area / image_area
-        if face_ratio < config.MIN_FACE_RATIO:
-            logger.warning(f"Face too small: {face_ratio:.3f} (minimum: {config.MIN_FACE_RATIO})")
+            if not face_encodings:
+                return {
+                    'status': 'encoding_failed',
+                    'message': 'Failed to extract face encodings',
+                    'processing_time': time.time() - start_time
+                }
+
+            # Recognize faces
+            recognition_results = self.recognize_faces(face_encodings)
+
+            # Process results
+            successful_recognitions = [r for r in recognition_results if 'student_id' in r]
+
+            result = {
+                'status': 'success' if successful_recognitions else 'no_matches',
+                'faces_detected': len(face_locations),
+                'faces_recognized': len(successful_recognitions),
+                'results': recognition_results,
+                'processing_time': round(time.time() - start_time, 3)
+            }
+
+            if successful_recognitions:
+                result['message'] = f"Recognized {len(successful_recognitions)} face(s)"
+                # Mark attendance in database
+                self.mark_attendance(successful_recognitions, session_data)
+            else:
+                result['message'] = "No faces matched known students"
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Image processing failed: {e}")
             return {
-                'recognized': False,
-                'message': 'Face too small or too far from camera. Please move closer.',
-                'faces_detected': len(face_encodings),
-                'face_ratio': round(face_ratio * 100, 1)
+                'status': 'error',
+                'message': f'Image processing failed: {str(e)}',
+                'processing_time': time.time() - start_time
             }
 
-        # Check face position (should be reasonably centered)
-        face_center_x = (face_location[0] + face_location[2]) / 2
-        face_center_y = (face_location[1] + face_location[3]) / 2
-        image_center_x = captured_array.shape[1] / 2
-        image_center_y = captured_array.shape[0] / 2
+    def mark_attendance(self, recognition_results, session_data=None):
+        """Mark attendance in database"""
+        try:
+            cursor = self.db_connection.cursor()
 
-        # Allow some tolerance for face positioning
-        x_offset = abs(face_center_x - image_center_x) / image_center_x
-        y_offset = abs(face_center_y - image_center_y) / image_center_y
+            for result in recognition_results:
+                if 'student_id' in result:
+                    # Insert attendance record
+                    query = """
+                        INSERT INTO attendance_records
+                        (student_id, session_id, biometric_method, confidence_score,
+                         status, recorded_at, metadata)
+                        VALUES (%s, %s, 'face_recognition', %s, 'present', NOW(), %s)
+                        ON DUPLICATE KEY UPDATE
+                        confidence_score = GREATEST(confidence_score, VALUES(confidence_score)),
+                        recorded_at = NOW()
+                    """
 
-        if x_offset > config.CENTER_TOLERANCE or y_offset > config.CENTER_TOLERANCE:
-            logger.warning(f"Face not centered: x_offset={x_offset:.2f}, y_offset={y_offset:.2f}")
+                    metadata = json.dumps({
+                        'confidence': result['confidence'],
+                        'distance': result.get('distance'),
+                        'processing_time': result.get('processing_time'),
+                        'session_data': session_data
+                    })
 
+                    cursor.execute(query, (
+                        result['student_id'],
+                        session_data.get('session_id') if session_data else None,
+                        result['confidence'],
+                        metadata
+                    ))
+
+            self.db_connection.commit()
+            cursor.close()
+
+            self.logger.info(f"Marked attendance for {len(recognition_results)} students")
+
+        except Error as e:
+            self.logger.error(f"Failed to mark attendance: {e}")
+            if self.db_connection:
+                self.db_connection.rollback()
+
+    def get_service_stats(self):
+        """Get service statistics"""
         return {
-            'recognized': confidence >= config.CONFIDENCE_THRESHOLD_MEDIUM,
-            'student_id': best_match['student_id'],
-            'student_name': best_match['name'],
-            'student_reg': best_match['reg_no'],
-            'confidence': round(confidence * 100, 1),
-            'confidence_level': confidence_level,
-            'auto_mark': auto_mark,
-            'distance': float(best_distance),
-            'faces_detected': len(face_encodings),
-            'face_ratio': round(face_ratio * 100, 1),
-            'top_matches': all_matches[:3],  # Return top 3 matches
-            'validation': {
-                'face_size_ok': face_ratio >= config.MIN_FACE_RATIO,
-                'confidence_margin_ok': confidence_difference >= config.CONFIDENCE_MARGIN if 'confidence_difference' in locals() else True,
-                'face_centered': x_offset <= config.CENTER_TOLERANCE and y_offset <= config.CENTER_TOLERANCE
+            'known_faces_count': len(self.known_face_encodings),
+            'service_uptime': time.time() - getattr(self, 'start_time', time.time()),
+            'config': {
+                'face_tolerance': self.config.FACE_TOLERANCE,
+                'min_face_size': self.config.MIN_FACE_SIZE,
+                'confidence_threshold': self.config.CONFIDENCE_THRESHOLD,
+                'max_faces_per_image': self.config.MAX_FACES_PER_IMAGE
             }
         }
 
-    except Exception as e:
-        logger.error(f"Error in face recognition: {str(e)}")
-        return {
-            'recognized': False,
-            'message': f'Face recognition error: {str(e)}',
-            'faces_detected': 0
-        }
+    def reload_face_data(self):
+        """Reload face encodings from database"""
+        self.logger.info("Reloading face data...")
+        self.load_known_faces()
+        return {'status': 'success', 'message': f'Reloaded {len(self.known_face_encodings)} face encodings'}
+
+    def shutdown(self, signum=None, frame=None):
+        """Graceful shutdown"""
+        self.logger.info("Shutting down face recognition service...")
+        self.is_running = False
+        self.cleanup()
+
+    def cleanup(self):
+        """Cleanup resources"""
+        if self.executor:
+            self.executor.shutdown(wait=True)
+
+        if self.db_connection:
+            self.db_connection.close()
+
+        if self.redis_client:
+            self.redis_client.close()
+
+        self.logger.info("Face recognition service shut down")
+
+# Flask Application
+app = Flask(__name__)
+CORS(app)
+
+# Global service instance
+service = FaceRecognitionService()
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -400,145 +486,103 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'cached_encodings': len(face_encodings_cache)
+        'stats': service.get_service_stats()
     })
 
 @app.route('/recognize', methods=['POST'])
-def recognize():
-    """Main face recognition endpoint"""
+def recognize_face():
+    """Face recognition endpoint"""
     try:
-        # Get request data
-        image_data = request.form.get('image_data')
-        session_id = request.form.get('session_id')
-        department_id = request.form.get('department_id')
-        option_id = request.form.get('option_id')
+        data = request.get_json()
 
-        if not image_data:
+        if not data or 'image' not in data:
             return jsonify({
                 'status': 'error',
-                'message': 'No image data provided',
-                'recognized': False
+                'message': 'Missing image data'
             }), 400
 
-        logger.info(f"Processing face recognition request for session {session_id}")
+        image_data = data['image']
+        session_data = data.get('session_data', {})
 
-        # Load student faces
-        student_encodings = load_student_faces()
-
-        if not student_encodings:
-            return jsonify({
-                'status': 'error',
-                'message': 'No student face data available',
-                'recognized': False
-            }), 503
-
-        # Process captured image
-        captured_image = process_image_data(image_data)
-
-        # Filter students by session if provided
-        session_filter = None
-        if session_id:
-            try:
-                # Get students for this session from database
-                import mysql.connector
-                conn = mysql.connector.connect(
-                    host=os.getenv('DB_HOST', 'localhost'),
-                    database=os.getenv('DB_NAME', 'rp_attendance_system'),
-                    user=os.getenv('DB_USER', 'root'),
-                    password=os.getenv('DB_PASS', '')
-                )
-                cursor = conn.cursor()
-
-                query = """
-                SELECT DISTINCT s.id
-                FROM students s
-                INNER JOIN attendance_sessions sess ON (
-                    (sess.department_id = s.department_id) OR
-                    (sess.option_id = s.option_id)
-                )
-                WHERE sess.id = %s
-                """
-                cursor.execute(query, (session_id,))
-                session_students = [row[0] for row in cursor.fetchall()]
-                cursor.close()
-                conn.close()
-
-                if session_students:
-                    session_filter = session_students
-                    logger.info(f"Filtered to {len(session_filter)} students for session {session_id}")
-
-            except Exception as e:
-                logger.warning(f"Could not filter by session: {str(e)}")
-
-        # Perform face recognition
-        result = recognize_face(captured_image, student_encodings, session_filter)
-
-        # Add metadata
-        result.update({
-            'status': 'success',
-            'timestamp': datetime.now().isoformat(),
-            'session_id': session_id,
-            'total_students': len(student_encodings)
-        })
-
-        logger.info(f"Face recognition result: {result['recognized']} (confidence: {result.get('confidence', 0)}%)")
+        # Process image asynchronously
+        future = service.executor.submit(service.process_attendance_image, image_data, session_data)
+        result = future.result(timeout=30)  # 30 second timeout
 
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Face recognition request failed: {str(e)}")
+        service.logger.error(f"Recognition endpoint error: {e}")
         return jsonify({
             'status': 'error',
-            'message': str(e),
-            'recognized': False,
-            'timestamp': datetime.now().isoformat()
+            'message': 'Face recognition failed',
+            'error': str(e)
         }), 500
 
-@app.route('/reload_cache', methods=['POST'])
-def reload_cache():
-    """Force reload of face encodings cache"""
-    global face_encodings_cache, cache_timestamp
-    face_encodings_cache = {}
-    cache_timestamp = 0
+@app.route('/reload-faces', methods=['POST'])
+def reload_faces():
+    """Reload face encodings endpoint"""
+    try:
+        result = service.reload_face_data()
+        return jsonify(result)
 
-    load_student_faces()
-
-    return jsonify({
-        'status': 'success',
-        'message': 'Face encodings cache reloaded',
-        'cached_encodings': len(face_encodings_cache),
-        'timestamp': datetime.now().isoformat()
-    })
+    except Exception as e:
+        service.logger.error(f"Reload faces endpoint error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Failed to reload face data',
+            'error': str(e)
+        }), 500
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
     """Get service statistics"""
-    return jsonify({
-        'status': 'success',
-        'cached_encodings': len(face_encodings_cache),
-        'cache_age': time.time() - cache_timestamp,
-        'cache_duration': CACHE_DURATION,
-        'config': {
-            'tolerance': config.FACE_RECOGNITION_TOLERANCE,
-            'min_face_size': config.MIN_FACE_SIZE,
-            'confidence_high': config.CONFIDENCE_THRESHOLD_HIGH,
-            'confidence_medium': config.CONFIDENCE_THRESHOLD_MEDIUM,
-            'min_face_ratio': config.MIN_FACE_RATIO,
-            'center_tolerance': config.CENTER_TOLERANCE,
-            'confidence_margin': config.CONFIDENCE_MARGIN,
-            'num_jitters': config.NUM_JITTERS,
-            'upsample_factor': config.UPSAMPLE_FACTOR
-        },
-        'timestamp': datetime.now().isoformat()
-    })
+    try:
+        stats = service.get_service_stats()
+        return jsonify({
+            'status': 'success',
+            'stats': stats
+        })
+
+    except Exception as e:
+        service.logger.error(f"Stats endpoint error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Failed to get statistics',
+            'error': str(e)
+        }), 500
+
+def main():
+    """Main application entry point"""
+    service.start_time = time.time()
+
+    # Initialize connections
+    if not service.connect_database():
+        service.logger.error("Failed to connect to database. Exiting.")
+        sys.exit(1)
+
+    if not service.connect_redis():
+        service.logger.warning("Failed to connect to Redis. Continuing without cache.")
+
+    # Load face encodings
+    if not service.load_cached_encodings():
+        service.load_known_faces()
+
+    service.is_running = True
+    service.logger.info(f"Face Recognition Service starting on {service.config.HOST}:{service.config.PORT}")
+
+    try:
+        app.run(
+            host=service.config.HOST,
+            port=service.config.PORT,
+            debug=service.config.DEBUG,
+            threaded=True
+        )
+    except KeyboardInterrupt:
+        service.logger.info("Service interrupted by user")
+    except Exception as e:
+        service.logger.error(f"Service error: {e}")
+    finally:
+        service.cleanup()
 
 if __name__ == '__main__':
-    # Load initial face encodings
-    load_student_faces()
-
-    # Start Flask app
-    port = int(os.getenv('FACE_RECOGNITION_PORT', 5000))
-    debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-
-    logger.info(f"Starting Face Recognition Service on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True)
+    main()

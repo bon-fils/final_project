@@ -1,26 +1,35 @@
 <?php
 /**
- * Attendance Session Management - Frontend Only
- * Complete frontend implementation with real face recognition
- * No backend dependencies - works as standalone demo
+ * Attendance Session Management - Clean Implementation
+ * Complete system with database integration, face recognition, and session management
+ * Integrated with RP Attendance System backend
  */
 
-// Get user session data
+// Get user session data and initialize backend
 session_start();
 require_once "config.php";
 require_once "session_check.php";
 require_role(['admin', 'lecturer', 'hod']);
+
+// Initialize backend classes
+require_once "backend/classes/Logger.php";
+require_once "backend/classes/InputValidator.php";
+require_once "backend/classes/DataSanitizer.php";
 
 $user_id = $_SESSION['user_id'] ?? null;
 $userRole = $_SESSION['role'] ?? 'lecturer';
 $lecturer_id = $_SESSION['lecturer_id'] ?? null;
 $department_id = $_SESSION['department_id'] ?? null;
 
-// Get user information
+// Initialize logger for attendance sessions
+$logger = new Logger('logs/attendance_session.log', Logger::INFO);
+
+// Get user information and department assignment with enhanced validation
 try {
     $stmt = $pdo->prepare("
         SELECT u.username, u.email, u.first_name, u.last_name,
-               l.department_id, d.name as department_name
+               l.department_id, d.name as department_name,
+               l.id as lecturer_id, u.status as user_status
         FROM users u
         LEFT JOIN lecturers l ON u.id = l.user_id
         LEFT JOIN departments d ON l.department_id = d.id
@@ -30,20 +39,56 @@ try {
     $user_info = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$user_info) {
+        $logger->warning('Attendance Session', 'User not found', ['user_id' => $user_id]);
         header("Location: login.php?error=user_not_found");
         exit;
     }
 
+    // Validate user status
+    if ($user_info['user_status'] !== 'active') {
+        $logger->warning('Attendance Session', 'Inactive user attempted access', [
+            'user_id' => $user_id,
+            'status' => $user_info['user_status']
+        ]);
+        header("Location: login.php?error=account_inactive");
+        exit;
+    }
+
+    // Check if lecturer has department assignment
+    if (!$user_info['department_id']) {
+        $logger->warning('Attendance Session', 'User without department assignment', [
+            'user_id' => $user_id,
+            'username' => $user_info['username']
+        ]);
+        header("Location: attendance-session.php?error=no_department");
+        exit;
+    }
+
+    $logger->info('Attendance Session', 'User authenticated successfully', [
+        'user_id' => $user_id,
+        'department_id' => $user_info['department_id'],
+        'department_name' => $user_info['department_name']
+    ]);
+
 } catch (PDOException $e) {
-    error_log("User info error: " . $e->getMessage());
+    $logger->error('Attendance Session', 'Database error during user validation', [
+        'user_id' => $user_id,
+        'error' => $e->getMessage()
+    ]);
     header("Location: login.php?error=database");
     exit;
 }
 
+// Set department variables for auto-selection
+$assigned_department_id = $user_info['department_id'];
+$assigned_department_name = $user_info['department_name'];
+$lecturer_id = $user_info['lecturer_id'];
+
 // Page metadata
-$pageTitle = "Attendance Session | " . ucfirst($userRole) . " | RP Attendance System";
+$pageTitle = "Attendance Session - " . htmlspecialchars($assigned_department_name) . " | " . ucfirst($userRole) . " | RP Attendance System";
 $pageDescription = "Manage attendance sessions with face recognition and fingerprint scanning";
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -187,126 +232,69 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             margin: 0;
             font-weight: 600;
             font-size: 24px;
-            color: #2c3e50;
+            color: #2d3748;
         }
 
-        .topbar .system-title {
-            color: #7f8c8d;
-            font-weight: 500;
-            font-size: 14px;
-        }
-
-        .session-status {
+        .topbar .user-info {
             display: flex;
             align-items: center;
             gap: 15px;
         }
 
-        .session-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: 500;
-            font-size: 14px;
-        }
-
-        .session-badge.active {
-            background: var(--success-gradient);
-            color: white;
-        }
-
-        .session-timer {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            color: #666;
-            font-weight: 500;
-            font-size: 14px;
-        }
-
-        /* Session Cards */
-        .session-card {
-            background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--box-shadow);
-            padding: 25px;
-            margin-bottom: 20px;
-            transition: var(--transition);
-        }
-
-        .session-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 15px rgba(0,0,0,0.1);
-        }
-
-        .session-card .card-title {
-            font-weight: 600;
-            font-size: 20px;
-            color: #2c3e50;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .session-card .card-title i {
-            color: #667eea;
+        .topbar .user-info .badge {
+            font-size: 12px;
         }
 
         /* Form Styles */
         .form-section {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
+            background: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            padding: 30px;
+            margin-bottom: 30px;
         }
 
         .form-section .section-title {
+            color: #2d3748;
             font-weight: 600;
-            color: #495057;
-            margin-bottom: 15px;
-            font-size: 16px;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e2e8f0;
         }
 
-        .form-select, .form-control {
-            border-radius: 6px;
-            border: 1px solid #dee2e6;
-            padding: 10px 15px;
-            font-size: 14px;
+        .form-group {
+            margin-bottom: 20px;
         }
 
-        .form-select:focus, .form-control:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
-        }
-
-        .btn {
-            border-radius: 6px;
+        .form-label {
             font-weight: 500;
-            padding: 10px 20px;
+            color: #4a5568;
+            margin-bottom: 8px;
+        }
+
+        .form-control, .form-select {
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
             transition: var(--transition);
         }
 
-        .btn-success {
-            background: var(--success-gradient);
-            border: none;
+        .form-control:focus, .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
-        .btn-success:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(76, 175, 80, 0.3);
+        .form-text {
+            font-size: 12px;
+            margin-top: 6px;
         }
 
-        .btn-danger {
-            background: var(--danger-gradient);
-            border: none;
-        }
-
-        .btn-danger:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(244, 67, 54, 0.3);
+        .btn {
+            border-radius: 8px;
+            padding: 12px 24px;
+            font-weight: 500;
+            transition: var(--transition);
         }
 
         .btn-primary {
@@ -314,37 +302,102 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             border: none;
         }
 
-        .btn-info {
-            background: var(--info-gradient);
-            border: none;
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        /* Session Status */
+        .session-status {
+            background: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .session-status .status-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .session-status .status-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .session-status .status-text {
+            color: #718096;
+            margin-bottom: 20px;
+        }
+
+        /* Biometric Section */
+        .biometric-section {
+            background: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            padding: 30px;
+            margin-bottom: 30px;
+            display: none;
+        }
+
+        .biometric-section.active {
+            display: block;
+        }
+
+        .biometric-card {
+            text-align: center;
+            padding: 30px;
+            border: 2px dashed #e2e8f0;
+            border-radius: var(--border-radius);
+            transition: var(--transition);
+        }
+
+        .biometric-card:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+
+        .biometric-icon {
+            font-size: 64px;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .biometric-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .biometric-text {
+            color: #718096;
+            margin-bottom: 20px;
         }
 
         /* Webcam Container */
         .webcam-container {
-            border: 3px solid #007bff;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            min-height: 350px;
+            position: relative;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .webcam-placeholder {
+            background: #f7fafc;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #f8f9fa;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
+            height: 300px;
+            color: #a0aec0;
+            font-size: 16px;
         }
 
-        .webcam-container.active {
-            border-color: #28a745;
-            background: linear-gradient(135deg, #e8f5e8 0%, #f8f9fa 100%);
-        }
-
-        .webcam-container video {
-            max-width: 100%;
-            max-height: 300px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        #webcam-preview {
+            width: 100%;
+            height: 300px;
             object-fit: cover;
         }
 
@@ -352,28 +405,15 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             position: absolute;
             top: 10px;
             right: 10px;
-            background: rgba(0,0,0,0.7);
+            background: rgba(72, 187, 120, 0.9);
             color: white;
             padding: 5px 10px;
             border-radius: 20px;
             font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
+            display: none;
         }
 
         .webcam-status.active {
-            background: rgba(40, 167, 69, 0.9);
-        }
-
-        .webcam-placeholder {
-            text-align: center;
-            color: #6c757d;
-        }
-
-        .webcam-placeholder i {
-            font-size: 3rem;
-            margin-bottom: 15px;
             display: block;
         }
 
@@ -382,116 +422,69 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
         }
 
-        .stats-card {
-            background: var(--primary-gradient);
-            color: white;
+        .stat-card {
+            background: white;
             border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
             padding: 25px;
             text-align: center;
             transition: var(--transition);
         }
 
-        .stats-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 15px rgba(102, 126, 234, 0.3);
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
 
-        .stats-card i {
-            font-size: 2.5rem;
+        .stat-icon {
+            font-size: 32px;
             margin-bottom: 15px;
-            opacity: 0.9;
         }
 
-        .stats-card h4 {
-            font-size: 2rem;
+        .stat-value {
+            font-size: 28px;
             font-weight: 700;
             margin-bottom: 5px;
         }
 
-        .stats-card small {
+        .stat-label {
+            color: #718096;
             font-size: 14px;
-            opacity: 0.9;
+            font-weight: 500;
         }
 
-        /* Table Styles */
-        .table {
-            border-radius: 8px;
-            overflow: hidden;
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-content {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: var(--border-radius);
             box-shadow: var(--box-shadow);
         }
 
-        .table thead th {
-            background: #f8f9fa;
-            border-bottom: 2px solid #dee2e6;
-            font-weight: 600;
-            color: #495057;
-            padding: 15px;
-        }
-
-        .table tbody td {
-            padding: 12px 15px;
-            vertical-align: middle;
-        }
-
-        .badge {
-            font-size: 12px;
-            padding: 6px 12px;
-            border-radius: 20px;
-        }
-
-        /* Status Indicators */
-        .status-processing {
-            background: var(--warning-gradient);
-            color: white;
-        }
-
-        .status-success {
-            background: var(--success-gradient);
-            color: white;
-        }
-
-        .status-error {
-            background: var(--danger-gradient);
-            color: white;
-        }
-
-        /* Notifications */
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 9999;
-            min-width: 350px;
-            max-width: 500px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-
-        .notification .alert {
-            margin-bottom: 0;
-            border: none;
-            border-radius: 8px;
-        }
-
-        /* Loading States */
         .loading-spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
+            width: 40px;
+            height: 40px;
+            margin-bottom: 20px;
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Responsive Design */
+        /* Mobile Responsive */
         @media (max-width: 768px) {
             .sidebar {
                 transform: translateX(-100%);
@@ -508,391 +501,299 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
 
             .topbar {
                 flex-direction: column;
-                gap: 10px;
+                gap: 15px;
                 text-align: center;
             }
 
             .stats-grid {
                 grid-template-columns: 1fr;
             }
-
-            .session-card {
-                padding: 15px;
-            }
         }
 
-        /* Utility Classes */
-        .text-gradient {
-            background: var(--primary-gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .shadow-hover {
-            transition: var(--transition);
-        }
-
-        .shadow-hover:hover {
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15) !important;
-        }
-
-        /* Animation for new attendance records */
+        /* Animations */
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
-        .fade-in-row {
-            animation: fadeIn 0.5s ease-in;
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
         }
     </style>
 </head>
 
 <body>
-    <!-- System Status Notice -->
-    <div class="alert alert-info alert-dismissible fade show position-fixed" style="top: 20px; right: 20px; z-index: 9999; min-width: 350px;">
-        <i class="fas fa-info-circle me-2"></i><strong>Live System:</strong> Connected to RP Attendance Database.
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    <!-- Demo Notice -->
+    <div class="demo-notice">
+        <i class="fas fa-info-circle"></i>
+        Attendance Session Management System - <?php echo htmlspecialchars($assigned_department_name); ?>
     </div>
 
-    <!-- Include Lecturer Sidebar -->
-    <?php include 'includes/lecturer-sidebar.php'; ?>
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h4><i class="fas fa-graduation-cap me-2"></i>RP System</h4>
+            <div class="subtitle"><?php echo ucfirst($userRole); ?> Panel</div>
+        </div>
+
+        <nav>
+            <a href="admin-dashboard.php"><i class="fas fa-tachometer-alt"></i>Dashboard</a>
+            <a href="manage-departments.php"><i class="fas fa-building"></i>Departments</a>
+            <a href="assign-hod.php"><i class="fas fa-user-tie"></i>Assign HOD</a>
+            <a href="admin-reports.php"><i class="fas fa-chart-bar"></i>Reports</a>
+            <a href="manage-users.php"><i class="fas fa-users"></i>Manage Users</a>
+            <a href="system-logs.php"><i class="fas fa-file-alt"></i>System Logs</a>
+            <a href="logout.php" class="mt-4 text-danger"><i class="fas fa-sign-out-alt"></i>Logout</a>
+        </nav>
+    </div>
+
+    <!-- Mobile Menu Toggle -->
+    <button class="btn btn-primary d-md-none position-fixed" style="top: 80px; right: 20px; z-index: 1001;" onclick="toggleSidebar()">
+        <i class="fas fa-bars"></i>
+    </button>
 
     <!-- Main Content -->
-    <main class="main-content">
+    <div class="main-content">
         <!-- Topbar -->
-        <header class="topbar">
-            <div>
-                <h1 class="page-title">Attendance Session Management</h1>
-                <div class="system-title">Rwanda Polytechnic Attendance System</div>
-            </div>
-
-            <div class="session-status" id="session-status-indicator" style="display: none;">
-                <span class="session-badge active">
-                    <i class="fas fa-play-circle"></i>
-                    <span id="session-status-text">Session Active</span>
-                </span>
-                <div class="session-timer">
-                    <i class="fas fa-clock"></i>
-                    <span id="session-timer">00:00:00</span>
-                </div>
-            </div>
-        </header>
-
-        <!-- Information Panel for No Department Access -->
-        <div id="noDepartmentInfo" class="alert alert-warning alert-dismissible fade show mb-4 d-none" style="border-left: 4px solid #ffc107;" role="alert">
-            <div class="d-flex align-items-start">
-                <i class="fas fa-info-circle fa-2x me-3 mt-1" aria-hidden="true"></i>
-                <div class="flex-grow-1">
-                    <h5 class="alert-heading mb-2">Department Access Required</h5>
-                    <p class="mb-2">You don't have any departments assigned to your account. To use the attendance session feature, you need to:</p>
-                    <ul class="mb-3" style="margin-bottom: 0;">
-                        <li>Contact your system administrator</li>
-                        <li>Request to be assigned to a department</li>
-                        <li>Once assigned, refresh this page to access the attendance features</li>
-                    </ul>
-                    <button type="button" class="btn btn-sm btn-outline-warning me-2" onclick="location.reload()">
-                        <i class="fas fa-sync-alt me-1" aria-hidden="true"></i>Refresh Page
-                    </button>
-                    <button type="button" class="btn btn-sm btn-warning" onclick="showNotification('Please contact your administrator to get department access.', 'warning')">
-                        <i class="fas fa-envelope me-1" aria-hidden="true"></i>Contact Admin
-                    </button>
-                </div>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        <div class="topbar">
+            <h1 class="page-title">
+                <i class="fas fa-clock me-3"></i>
+                Attendance Session - <?php echo htmlspecialchars($assigned_department_name); ?>
+            </h1>
+            <div class="user-info">
+                <span class="badge bg-primary"><?php echo ucfirst($userRole); ?></span>
+                <span class="text-muted"><?php echo htmlspecialchars($user_info['first_name'] . ' ' . $user_info['last_name']); ?></span>
             </div>
         </div>
 
-        <!-- Session Setup Section -->
-        <section class="session-card" id="sessionSetupSection">
-            <h2 class="card-title">
-                <i class="fas fa-cogs"></i>Session Configuration
+        <!-- Session Setup Form -->
+        <div class="form-section" id="sessionSetupSection">
+            <h2 class="section-title">
+                <i class="fas fa-cogs me-2"></i>Session Configuration
             </h2>
 
-            <form id="sessionForm" novalidate>
-                <div class="form-section">
-                    <h3 class="section-title">Course Selection</h3>
-                    <div class="row g-3">
-                        <!-- Department Selection -->
-                        <div class="col-md-3">
-                            <label for="department" class="form-label fw-semibold">
+            <form id="sessionForm">
+                <!-- Department (Auto-selected) -->
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="department" class="form-label">
                                 <i class="fas fa-building me-1"></i>Department
                             </label>
-                            <select id="department" name="department_id" class="form-select" required>
-                                <option value="" disabled selected>Select Department</option>
+                            <select class="form-select" id="department" disabled>
+                                <option value="<?php echo $assigned_department_id; ?>" selected>
+                                    <?php echo htmlspecialchars($assigned_department_name); ?>
+                                </option>
                             </select>
+                            <div class="form-text text-success">
+                                <i class="fas fa-check me-1"></i>Auto-selected based on your assignment
+                            </div>
                         </div>
+                    </div>
 
-                        <!-- Option Selection -->
-                        <div class="col-md-3">
-                            <label for="option" class="form-label fw-semibold">
-                                <i class="fas fa-list me-1"></i>Option
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="option" class="form-label">
+                                <i class="fas fa-graduation-cap me-1"></i>Academic Option
                             </label>
-                            <select id="option" name="option_id" class="form-select" required disabled>
-                                <option value="" disabled selected>Select Option</option>
+                            <select class="form-select" id="option" name="option_id" required disabled>
+                                <option value="" disabled selected>Choose an academic option</option>
                             </select>
+                            <div id="option-feedback" class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>Select the academic option for this session
+                            </div>
                         </div>
+                    </div>
+                </div>
 
-                        <!-- Year Level Selection -->
-                        <div class="col-md-2">
-                            <label for="year_level" class="form-label fw-semibold">
-                                <i class="fas fa-graduation-cap me-1"></i>Year Level
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="course" class="form-label">
+                                <i class="fas fa-book me-1"></i>Course
                             </label>
-                            <select id="year_level" name="year_level" class="form-select" required>
-                                <option value="" disabled selected>Select Year</option>
+                            <select class="form-select" id="course" name="course_id" required disabled>
+                                <option value="" disabled selected>Please select an option first</option>
+                            </select>
+                            <div id="course-feedback" class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>Courses will load after option selection
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="year_level" class="form-label">
+                                <i class="fas fa-calendar me-1"></i>Year Level
+                            </label>
+                            <select class="form-select" id="year_level" name="year_level" required>
+                                <option value="" disabled selected>Select year level</option>
                                 <option value="1">Year 1</option>
                                 <option value="2">Year 2</option>
                                 <option value="3">Year 3</option>
                                 <option value="4">Year 4</option>
                             </select>
-                        </div>
-
-                        <!-- Course Selection -->
-                        <div class="col-md-4">
-                            <label for="course" class="form-label fw-semibold">
-                                <i class="fas fa-book me-1"></i>Course
-                            </label>
-                            <select id="course" name="course_id" class="form-select" required disabled>
-                                <option value="" disabled selected>Select Course</option>
-                            </select>
+                            <div class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>Select the academic year for this session
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="form-section">
-                    <h3 class="section-title">Attendance Method</h3>
-                    <div class="row g-3">
-                        <div class="col-md-4">
-                            <label for="biometric_method" class="form-label fw-semibold">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="biometric_method" class="form-label">
                                 <i class="fas fa-fingerprint me-1"></i>Biometric Method
                             </label>
-                            <select id="biometric_method" name="biometric_method" class="form-select" required>
-                                <option value="" disabled selected>Select Method</option>
+                            <select class="form-select" id="biometric_method" name="biometric_method" required>
+                                <option value="" disabled selected>Choose biometric method</option>
                                 <option value="face">Face Recognition</option>
                                 <option value="finger">Fingerprint</option>
                             </select>
+                            <div class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>Select face recognition or fingerprint scanning
+                            </div>
                         </div>
+                    </div>
 
-                        <!-- Action Buttons -->
-                        <div class="col-md-8 d-flex align-items-end gap-2">
-                            <button type="submit" id="start-session" class="btn btn-success" disabled>
-                                <i class="fas fa-play me-2"></i>Start Session
-                            </button>
-                            <button type="button" id="end-session" class="btn btn-danger" disabled>
-                                <i class="fas fa-stop me-2"></i>End Session
-                            </button>
-                        </div>
+                    <div class="col-md-6 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary w-100" id="start-session" disabled>
+                            <i class="fas fa-play me-2"></i>Start Attendance Session
+                        </button>
                     </div>
                 </div>
             </form>
-        </section>
+        </div>
 
         <!-- Active Session Section -->
         <div id="activeSessionSection" style="display: none;">
-            <!-- Face Recognition Section -->
-            <section class="session-card d-none" id="faceRecognitionSection">
-                <h2 class="card-title">
-                    <i class="fas fa-camera"></i>Face Recognition Attendance
-                </h2>
-
-                <div class="row">
-                    <div class="col-md-8">
-                        <div id="webcam-container" class="webcam-container">
-                            <video id="webcam-preview" autoplay muted playsinline style="width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); object-fit: cover;"></video>
-                            <div id="webcam-placeholder" class="webcam-placeholder">
-                                <i class="fas fa-video fa-3x text-muted mb-3"></i>
-                                <p class="text-muted mb-3">Camera not active</p>
-                                <button type="button" id="startWebcamBtn" class="btn btn-primary btn-lg">
-                                    <i class="fas fa-video me-2"></i>Start Camera
-                                </button>
-                            </div>
-                            <div class="webcam-status d-none" id="webcam-status">
-                                <i class="fas fa-circle text-success"></i>
-                                <span>Camera Active</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="col-md-4">
-                        <div class="d-grid gap-3">
-                            <button type="button" id="markAttendanceBtn" class="btn btn-success btn-lg" disabled>
-                                <i class="fas fa-camera me-2"></i>Mark Attendance
-                            </button>
-
-                            <button type="button" id="endSessionBtn" class="btn btn-danger btn-lg">
-                                <i class="fas fa-stop me-2"></i>End Session
-                            </button>
-
-                            <div class="card border-info">
-                                <div class="card-body">
-                                    <h6 class="card-title text-info">
-                                        <i class="fas fa-info-circle me-2"></i>Instructions
-                                    </h6>
-                                    <ul class="list-unstyled small mb-0">
-                                        <li><i class="fas fa-check text-success me-2"></i>Ensure good lighting</li>
-                                        <li><i class="fas fa-check text-success me-2"></i>Face the camera directly</li>
-                                        <li><i class="fas fa-check text-success me-2"></i>Remove glasses/sunglasses</li>
-                                        <li><i class="fas fa-check text-success me-2"></i>Keep face in frame</li>
-                                    </ul>
-                                </div>
-                            </div>
-
-                            <div id="face-status" class="alert alert-info d-none">
-                                <i class="fas fa-spinner loading-spinner me-2"></i>
-                                <span id="face-message">Ready to scan...</span>
-                            </div>
-                        </div>
-                    </div>
+            <!-- Session Status -->
+            <div class="session-status">
+                <div class="status-icon text-success">
+                    <i class="fas fa-play-circle"></i>
                 </div>
-            </section>
+                <div class="status-title text-success">Session Active</div>
+                <div class="status-text" id="sessionInfo">
+                    Session details will appear here
+                </div>
+                <button class="btn btn-danger" onclick="endSession()">
+                    <i class="fas fa-stop me-2"></i>End Session
+                </button>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon text-primary">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="stat-value" id="total-students">0</div>
+                    <div class="stat-label">Total Students</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon text-success">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-value" id="present-count">0</div>
+                    <div class="stat-label">Present</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon text-warning">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="stat-value" id="absent-count">0</div>
+                    <div class="stat-label">Absent</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon text-info">
+                        <i class="fas fa-percentage"></i>
+                    </div>
+                    <div class="stat-value" id="attendance-rate">0%</div>
+                    <div class="stat-label">Attendance Rate</div>
+                </div>
+            </div>
+
+            <!-- Face Recognition Section -->
+            <div class="biometric-section" id="faceRecognitionSection">
+                <div class="biometric-card">
+                    <div class="biometric-icon">
+                        <i class="fas fa-camera"></i>
+                    </div>
+                    <div class="biometric-title">Face Recognition Active</div>
+                    <div class="biometric-text">
+                        Camera is ready for attendance marking. Click the button below to capture and recognize faces.
+                    </div>
+
+                    <div class="webcam-container mb-3">
+                        <div class="webcam-placeholder" id="webcam-placeholder">
+                            <i class="fas fa-camera fa-3x mb-3"></i>
+                            <div>Initializing camera...</div>
+                        </div>
+                        <video id="webcam-preview" autoplay playsinline style="display: none;"></video>
+                        <div class="webcam-status" id="webcam-status">
+                            <i class="fas fa-circle text-success me-1"></i>Camera Active
+                        </div>
+                    </div>
+
+                    <button class="btn btn-success btn-lg" id="markAttendanceBtn" onclick="markAttendance()" disabled>
+                        <i class="fas fa-user-check me-2"></i>Mark Attendance
+                    </button>
+                </div>
+            </div>
 
             <!-- Fingerprint Section -->
-            <section class="session-card d-none" id="fingerprintSection">
-                <h2 class="card-title">
-                    <i class="fas fa-fingerprint"></i>Fingerprint Attendance
-                </h2>
-
-                <div class="row">
-                    <div class="col-md-6">
-                        <div class="text-center p-4">
-                            <i class="fas fa-fingerprint fa-4x text-info mb-3"></i>
-                            <h5>ESP32 Fingerprint Scanner</h5>
-                            <p class="text-muted">Make sure your ESP32 device is connected and running</p>
-                        </div>
+            <div class="biometric-section" id="fingerprintSection">
+                <div class="biometric-card">
+                    <div class="biometric-icon">
+                        <i class="fas fa-fingerprint"></i>
+                    </div>
+                    <div class="biometric-title">Fingerprint Scanner Ready</div>
+                    <div class="biometric-text">
+                        Fingerprint scanner is connected and ready. Click the button below to scan fingerprints.
                     </div>
 
-                    <div class="col-md-6">
-                        <div class="d-grid gap-3">
-                            <button type="button" id="scanFingerprintBtn" class="btn btn-info btn-lg">
-                                <i class="fas fa-hand-paper me-2"></i>Scan Fingerprint
-                            </button>
-
-                            <button type="button" id="testESP32Btn" class="btn btn-outline-info">
-                                <i class="fas fa-wifi me-2"></i>Test ESP32 Connection
-                            </button>
-
-                            <div id="fingerprint-status" class="alert alert-info d-none">
-                                <i class="fas fa-spinner loading-spinner me-2"></i>
-                                <span id="fingerprint-message">Connecting to ESP32...</span>
-                            </div>
-                        </div>
-                    </div>
+                    <button class="btn btn-primary btn-lg" onclick="scanFingerprint()">
+                        <i class="fas fa-fingerprint me-2"></i>Scan Fingerprint
+                    </button>
                 </div>
-            </section>
-
-            <!-- Session Statistics -->
-                <section class="session-card" id="sessionStatsSection">
-                    <h2 class="card-title">
-                        <i class="fas fa-chart-bar"></i>Live Session Statistics
-                    </h2>
-    
-                    <div class="stats-grid">
-                        <div class="stats-card">
-                            <i class="fas fa-users"></i>
-                            <h4 id="total-students">15</h4>
-                            <small>Total Students</small>
-                        </div>
-    
-                        <div class="stats-card">
-                            <i class="fas fa-check-circle"></i>
-                            <h4 id="present-count">0</h4>
-                            <small>Present</small>
-                        </div>
-    
-                        <div class="stats-card">
-                            <i class="fas fa-times-circle"></i>
-                            <h4 id="absent-count">0</h4>
-                            <small>Absent</small>
-                        </div>
-    
-                        <div class="stats-card">
-                            <i class="fas fa-percentage"></i>
-                            <h4 id="attendance-rate">0%</h4>
-                            <small>Attendance Rate</small>
-                        </div>
-                    </div>
-    
-                    <!-- Sample Students List -->
-                    <div class="mt-4">
-                        <h6 class="text-muted mb-3">
-                            <i class="fas fa-list me-2"></i>Sample Students in This Session
-                        </h6>
-                        <div class="row g-2">
-                            <div class="col-md-6">
-                                <small class="text-muted d-block">
-                                    <strong>Computer Science (Year 1):</strong><br>
-                                    • John Doe (STU001) • Jane Smith (STU002)<br>
-                                    • Henry Davis (STU010) • Maya Patel (STU015)
-                                </small>
-                            </div>
-                            <div class="col-md-6">
-                                <small class="text-muted d-block">
-                                    <strong>Information Technology (Year 2):</strong><br>
-                                    • Bob Johnson (STU003) • Ivy Chen (STU011)<br>
-                                    <strong>Electrical Engineering (Year 3):</strong><br>
-                                    • Charlie Wilson (STU005) • Grace Lee (STU009)
-                                </small>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-            <!-- Attendance Records Table -->
-            <section class="session-card">
-                <div class="d-flex justify-content-between align-items-center mb-4">
-                    <h2 class="card-title mb-0">
-                        <i class="fas fa-list"></i>Live Attendance Records
-                    </h2>
-
-                    <div class="d-flex gap-2">
-                        <button type="button" id="refresh-attendance" class="btn btn-outline-primary">
-                            <i class="fas fa-sync-alt me-1"></i>Refresh
-                        </button>
-                        <button type="button" id="export-attendance" class="btn btn-outline-success">
-                            <i class="fas fa-download me-1"></i>Export CSV
-                        </button>
-                    </div>
-                </div>
-
-                <div id="attendance-loading" class="text-center py-4 d-none">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="mt-2 text-muted">Loading attendance records...</p>
-                </div>
-
-                <div id="attendance-table-container" class="d-none">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th><i class="fas fa-id-card me-1"></i>Student ID</th>
-                                <th><i class="fas fa-user me-1"></i>Name</th>
-                                <th><i class="fas fa-clock me-1"></i>Time</th>
-                                <th><i class="fas fa-info-circle me-1"></i>Status</th>
-                                <th><i class="fas fa-fingerprint me-1"></i>Method</th>
-                                <th><i class="fas fa-cogs me-1"></i>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="attendance-list">
-                            <!-- Dynamic attendance records will be loaded here -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div id="no-attendance" class="text-center py-4">
-                    <i class="fas fa-users fa-3x text-muted mb-3"></i>
-                    <h5 class="text-muted">No Attendance Records</h5>
-                    <p class="text-muted">Start a session to begin recording attendance.</p>
-                </div>
-            </section>
+            </div>
         </div>
-    </main>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner-border loading-spinner text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <h5 id="loadingText">Loading Attendance Session System</h5>
+            <p class="mb-0">Please wait while we initialize the system...</p>
+        </div>
+    </div>
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
             integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 
-    <!-- Application Scripts -->
-    <script src="js/attendance-session-demo.js"></script>
+    <!-- Attendance Session JavaScript -->
+    <script src="js/attendance-session.js"></script>
+
+    <!-- Backend Configuration -->
+    <script>
+        // Backend configuration for JavaScript
+        window.BACKEND_CONFIG = {
+            DEPARTMENT_ID: <?php echo json_encode($assigned_department_id); ?>,
+            DEPARTMENT_NAME: <?php echo json_encode($assigned_department_name); ?>,
+            LECTURER_ID: <?php echo json_encode($lecturer_id); ?>,
+            USER_ROLE: <?php echo json_encode($userRole); ?>,
+            API_BASE_URL: 'api/'
+        };
+
+        console.log('Backend config loaded:', window.BACKEND_CONFIG);
+    </script>
 </body>
 </html>

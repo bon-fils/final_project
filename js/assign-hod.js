@@ -1,362 +1,836 @@
-/**
- * HOD Assignment System - Enhanced JavaScript
- * Separated from main PHP file for better maintainability
- * Version: 2.0.0
- */
+// assign-hod.js - Enhanced HOD Assignment System Frontend
+// Version: 3.0.0
+// Dependencies: jQuery 3.7.1+, Bootstrap 5.3.3+
 
-class HodAssignmentManager {
-    constructor() {
-        this.config = {
-            retryAttempts: 3,
-            retryDelay: 1000,
-            debounceDelay: 300,
-            maxBulkOperations: 10
-        };
+(function(window, document, $) {
+    'use strict';
 
-        this.state = {
-            departments: [],
-            lecturers: [],
-            selectedDepartments: new Set(),
-            isBulkMode: false,
-            isLoading: false,
-            csrfToken: null
-        };
+    // Configuration
+    const CONFIG = {
+        apiBaseUrl: 'api/assign-hod-api.php',
+        cacheTimeout: 5 * 60 * 1000, // 5 minutes
+        debounceDelay: 300,
+        maxRetries: 3,
+        retryDelay: 1000
+    };
 
-        this.selectors = {
-            form: '#assignHodForm',
-            departmentSelect: '#departmentSelect',
-            lecturerSelect: '#lecturerSelect',
-            departmentSearch: '#departmentSearch',
-            lecturerSearch: '#lecturerSearch',
-            assignmentsContainer: '#assignmentsContainer',
-            alertContainer: '#alertContainer',
-            loadingOverlay: '#loadingOverlay',
-            statusFilter: '#statusFilter'
-        };
+    // State management
+    const AppState = {
+        departments: [],
+        lecturers: [],
+        selectedDepartments: new Set(),
+        filters: {
+            search: '',
+            status: 'all'
+        },
+        isBulkMode: false,
+        isLoading: false,
+        cache: new Map(),
 
-        this.init();
-    }
+        // State setters with observers
+        setDepartments: function(depts) {
+            this.departments = depts;
+            this.notify('departmentsChanged', depts);
+        },
 
-    /**
-     * Initialize the application
-     */
-    async init() {
-        try {
-            this.state.csrfToken = window.csrfToken || this.getCsrfToken();
-            this.setupEventListeners();
-            this.setupKeyboardShortcuts();
-            this.setupAccessibility();
-            this.loadInitialData();
-        } catch (error) {
-            console.error('HOD Assignment Manager initialization failed:', error);
-            this.showAlert('error', 'Failed to initialize the application. Please refresh the page.');
+        setLecturers: function(lects) {
+            this.lecturers = lects;
+            this.notify('lecturersChanged', lects);
+        },
+
+        // Observer pattern
+        observers: {},
+        subscribe: function(event, callback) {
+            if (!this.observers[event]) this.observers[event] = [];
+            this.observers[event].push(callback);
+        },
+
+        notify: function(event, data) {
+            if (this.observers[event]) {
+                this.observers[event].forEach(callback => callback(data));
+            }
+        },
+
+        // Cache management
+        setCache: function(key, data, ttl = CONFIG.cacheTimeout) {
+            this.cache.set(key, {
+                data: data,
+                timestamp: Date.now(),
+                ttl: ttl
+            });
+        },
+
+        getCache: function(key) {
+            const cached = this.cache.get(key);
+            if (cached && (Date.now() - cached.timestamp) < cached.ttl) {
+                return cached.data;
+            }
+            this.cache.delete(key);
+            return null;
+        },
+
+        clearCache: function() {
+            this.cache.clear();
         }
-    }
+    };
 
-    /**
-     * Setup all event listeners
-     */
-    setupEventListeners() {
-        // Form submission
-        $(this.selectors.form).on('submit', (e) => this.handleFormSubmit(e));
+    // Utility functions
+    const Utils = {
+        debounce: function(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        },
 
-        // Department and lecturer selection
-        $(this.selectors.departmentSelect).on('change', () => this.handleDepartmentChange());
-        $(this.selectors.lecturerSelect).on('change', () => this.handleLecturerChange());
+        animateValue: function(id, newValue, duration = 600) {
+            const el = document.getElementById(id);
+            if (!el) return;
 
-        // Search functionality with debouncing
-        $(this.selectors.departmentSearch).on('input', this.debounce((e) => {
-            this.filterDepartments($(e.target).val());
-        }, this.config.debounceDelay));
+            const current = parseInt(el.innerText) || 0;
+            const startTime = Date.now();
 
-        $(this.selectors.lecturerSearch).on('input', this.debounce((e) => {
-            this.filterLecturers($(e.target).val());
-        }, this.config.debounceDelay));
+            function update() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const easeOut = 1 - Math.pow(1 - progress, 3);
+                const value = Math.floor(current + (newValue - current) * easeOut);
 
-        // Status filtering
-        $(this.selectors.statusFilter).on('change', () => this.filterAssignments());
+                el.innerText = value;
 
-        // Button actions
-        $('#resetFormBtn').on('click', () => this.resetForm());
-        $('#refreshAssignments').on('click', () => this.loadAssignments());
-        $('#previewBtn').on('click', () => this.showAssignmentPreview());
-        $('#bulkModeBtn').on('click', () => this.toggleBulkMode());
-
-        // Global loading management
-        $(document).on('ajaxStart', () => this.showGlobalLoading());
-        $(document).on('ajaxStop', () => this.hideGlobalLoading());
-    }
-
-    /**
-     * Setup keyboard shortcuts
-     */
-    setupKeyboardShortcuts() {
-        $(document).on('keydown', (e) => {
-            // Ctrl/Cmd + R to refresh
-            if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
-                e.preventDefault();
-                this.loadInitialData();
-            }
-
-            // Ctrl/Cmd + S to submit form
-            if ((e.ctrlKey || e.metaKey) && e.key === 's' && $(this.selectors.departmentSelect).val()) {
-                e.preventDefault();
-                $(this.selectors.form).submit();
-            }
-
-            // Ctrl/Cmd + B to toggle bulk mode
-            if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-                e.preventDefault();
-                this.toggleBulkMode();
-            }
-
-            // Escape to reset form
-            if (e.key === 'Escape') {
-                if (this.state.isBulkMode) {
-                    this.disableBulkMode();
+                if (progress < 1) {
+                    requestAnimationFrame(update);
                 } else {
-                    this.resetForm();
+                    el.innerText = newValue;
                 }
             }
-        });
-    }
 
-    /**
-     * Setup accessibility features
-     */
-    setupAccessibility() {
-        // Add ARIA labels and live regions
-        $(this.selectors.alertContainer).attr('aria-live', 'polite');
-        $(this.selectors.alertContainer).attr('aria-atomic', 'true');
+            requestAnimationFrame(update);
+        },
 
-        // Focus management
-        $(this.selectors.form).find('input, select').on('focus', function() {
-            $(this).attr('aria-describedby', $(this).next('.form-text').attr('id'));
-        });
-    }
+        exportToCSV: function(data, filename) {
+            const headers = Object.keys(data[0]);
+            const csvContent = [
+                headers.join(','),
+                ...data.map(row => headers.map(header => {
+                    const value = row[header];
+                    return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+                }).join(','))
+            ].join('\n');
 
-    /**
-     * Load initial data
-     */
-    async loadInitialData() {
-        try {
-            this.showLoading();
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('hidden', '');
+            a.setAttribute('href', url);
+            a.setAttribute('download', filename);
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        },
 
-            const [departments, lecturers, stats] = await Promise.all([
-                this.apiCall('get_departments'),
-                this.apiCall('get_lecturers'),
-                this.apiCall('get_assignment_stats')
-            ]);
+        showToast: function(type, message, duration = 5000) {
+            const toastId = 'toast-' + Date.now();
+            const toastHtml = `
+                <div id="${toastId}" class="toast align-items-center text-white bg-${type} border-0" role="alert">
+                    <div class="d-flex">
+                        <div class="toast-body">
+                            <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'danger' ? 'exclamation-circle' : 'info-circle'} me-2"></i>
+                            ${message}
+                        </div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
 
-            this.state.departments = departments.data || [];
-            this.state.lecturers = lecturers.data || [];
+            if (!$('#toastContainer').length) {
+                $('body').append('<div id="toastContainer" class="toast-container position-fixed top-0 end-0 p-3"></div>');
+            }
 
-            this.updateStatistics(stats.data);
-            this.renderDepartments();
-            this.renderLecturers();
-            this.renderAssignments();
+            $('#toastContainer').append(toastHtml);
+            const toast = new bootstrap.Toast(document.getElementById(toastId));
+            toast.show();
 
-            this.checkDataIntegrity();
-            this.showAlert('success', 'Data loaded successfully');
+            if (duration > 0) {
+                setTimeout(() => {
+                    toast.hide();
+                    setTimeout(() => $(`#${toastId}`).remove(), 500);
+                }, duration);
+            }
+        },
 
-        } catch (error) {
-            console.error('Failed to load initial data:', error);
-            this.showAlert('error', 'Failed to load data. Please refresh the page.');
-        } finally {
-            this.hideLoading();
+        formatDateTime: function(dateString) {
+            if (!dateString) return 'N/A';
+            return new Date(dateString).toLocaleString();
+        },
+
+        sanitizeHtml: function(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
-    }
+    };
 
-    /**
-     * Handle form submission
-     */
-    async handleFormSubmit(e) {
-        e.preventDefault();
+    // API service
+    const ApiService = {
+        request: function(action, data = {}, method = 'GET') {
+            return new Promise((resolve, reject) => {
+                const url = `${CONFIG.apiBaseUrl}?action=${action}&ajax=1`;
 
-        if (this.state.isBulkMode) {
-            await this.handleBulkAssignment();
-            return;
-        }
+                const ajaxOptions = {
+                    url: url,
+                    method: method,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-Token': window.csrfToken
+                    },
+                    timeout: 30000,
+                    success: function(response) {
+                        if (response.status === 'success') {
+                            resolve(response);
+                        } else {
+                            reject(new Error(response.message || 'API request failed'));
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        let errorMessage = 'Network error occurred';
+                        if (xhr.status === 429) {
+                            errorMessage = 'Too many requests. Please wait and try again.';
+                        } else if (xhr.status === 403) {
+                            errorMessage = 'Access denied. Please refresh the page.';
+                        } else if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMessage = xhr.responseJSON.message;
+                        }
+                        reject(new Error(errorMessage));
+                    }
+                };
 
-        await this.handleSingleAssignment();
-    }
+                if (method === 'POST' && data) {
+                    ajaxOptions.data = data;
+                    ajaxOptions.contentType = 'application/x-www-form-urlencoded';
+                }
 
-    /**
-     * Handle single department assignment
-     */
-    async handleSingleAssignment() {
-        const departmentId = $(this.selectors.departmentSelect).val();
-        const lecturerId = $(this.selectors.lecturerSelect).val();
+                $.ajax(ajaxOptions);
+            });
+        },
 
-        if (!departmentId) {
-            this.showAlert('warning', 'Please select a department');
-            $(this.selectors.departmentSelect).focus();
-            return;
-        }
+        getDepartments: function() {
+            return this.request('get_departments');
+        },
 
-        if (!await this.confirmAssignment(departmentId, lecturerId)) {
-            return;
-        }
+        getLecturers: function(departmentId = null) {
+            const data = departmentId ? { department_id: departmentId } : {};
+            return this.request('get_lecturers', data);
+        },
 
-        try {
-            const response = await this.apiCall('assign_hod', {
+        getStats: function() {
+            return this.request('get_assignment_stats');
+        },
+
+        assignHod: function(departmentId, hodId) {
+            return this.request('assign_hod', {
                 department_id: departmentId,
-                hod_id: lecturerId || null
+                hod_id: hodId,
+                csrf_token: window.csrfToken
+            }, 'POST');
+        }
+    };
+
+    // UI Components
+    const UI = {
+        showLoading: function(message = 'Loading...') {
+            if (!AppState.isLoading) {
+                AppState.isLoading = true;
+                $("#loadingOverlay").fadeIn();
+                $("#loadingOverlay .loading-content h5").text(message);
+            }
+        },
+
+        hideLoading: function() {
+            if (AppState.isLoading) {
+                AppState.isLoading = false;
+                $("#loadingOverlay").fadeOut();
+            }
+        },
+
+        showAlert: function(type, message, duration = 5000) {
+            Utils.showToast(type, message, duration);
+        },
+
+        updateStats: function(stats) {
+            if (stats.cached) {
+                console.log('Stats loaded from cache');
+            }
+
+            Utils.animateValue('totalDepartments', stats.total_departments || 0);
+            Utils.animateValue('assignedDepartments', stats.assigned_departments || 0);
+            Utils.animateValue('totalLecturers', stats.total_lecturers || 0);
+            Utils.animateValue('unassignedDepartments', stats.unassigned_departments || 0);
+        },
+
+        renderDepartments: function(departments) {
+            const container = $('#assignmentsContainer');
+            const filteredDepts = UI.filterDepartments(departments);
+
+            if (!filteredDepts || filteredDepts.length === 0) {
+                container.html(`
+                    <div class="col-12 text-center py-5">
+                        <i class="fas fa-building fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">No Departments Found</h5>
+                        <p class="text-muted">No departments match your current filters.</p>
+                        <button class="btn btn-primary" onclick="loadData()">
+                            <i class="fas fa-sync-alt me-2"></i>Refresh Data
+                        </button>
+                    </div>
+                `);
+                return;
+            }
+
+            let html = '';
+            filteredDepts.forEach(dept => {
+                const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
+                const cardClass = hasInvalidAssignment ? 'assignment-card invalid' : (dept.hod_id ? 'assignment-card assigned' : 'assignment-card unassigned');
+                const statusIcon = hasInvalidAssignment ? 'fas fa-exclamation-circle text-danger' : (dept.hod_id ? 'fas fa-user-check text-success' : 'fas fa-exclamation-triangle text-warning');
+                const statusText = hasInvalidAssignment ? 'Invalid' : (dept.hod_id ? 'Assigned' : 'Unassigned');
+                const statusColor = hasInvalidAssignment ? 'danger' : (dept.hod_id ? 'success' : 'warning');
+                const isSelected = AppState.selectedDepartments.has(dept.id.toString());
+
+                html += `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="card ${cardClass} h-100 department-card ${isSelected ? 'selected' : ''}"
+                             data-department-id="${dept.id}">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <h6 class="card-title text-primary mb-0">${Utils.sanitizeHtml(dept.name)}</h6>
+                                    <span class="badge bg-${statusColor}">
+                                        <i class="${statusIcon} me-1"></i>${statusText}
+                                    </span>
+                                </div>
+
+                                <div class="mb-3">
+                                    <small class="text-muted d-block">Current HOD:</small>
+                                    <div class="${dept.hod_id ? (hasInvalidAssignment ? 'text-danger' : 'text-success') : 'text-warning'} fw-semibold">
+                                        ${hasInvalidAssignment ? 'INVALID ASSIGNMENT' : (Utils.sanitizeHtml(dept.hod_name) || 'Not Assigned')}
+                                    </div>
+                                    ${hasInvalidAssignment ? '<small class="text-danger"><i class="fas fa-exclamation-triangle me-1"></i>HOD ID exists but lecturer not found</small>' : ''}
+                                    ${dept.data_integrity ? `<small class="text-warning"><i class="fas fa-exclamation-triangle me-1"></i>${Utils.sanitizeHtml(dept.data_integrity_message)}</small>` : ''}
+                                </div>
+
+                                <div class="mb-3">
+                                    <div class="progress" style="height: 4px;">
+                                        <div class="progress-bar bg-${statusColor}" role="progressbar"
+                                             style="width: ${hasInvalidAssignment ? '50%' : (dept.hod_id ? '100%' : '0%')}">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button class="btn btn-sm ${hasInvalidAssignment ? 'btn-outline-danger' : 'btn-outline-primary'} w-100 selectDepartment"
+                                        data-id="${dept.id}"
+                                        data-name="${Utils.sanitizeHtml(dept.name)}"
+                                        data-hod="${dept.hod_id || ''}"
+                                        data-hod-name="${Utils.sanitizeHtml(dept.hod_name || '')}"
+                                        data-invalid="${hasInvalidAssignment}">
+                                    <i class="fas fa-${hasInvalidAssignment ? 'exclamation-triangle' : 'mouse-pointer'} me-1"></i>
+                                    ${hasInvalidAssignment ? 'Fix Assignment' : 'Select for Assignment'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
             });
 
-            if (response.status === 'success') {
-                this.showAlert('success', response.message || 'HOD assigned successfully');
-                await this.loadInitialData();
-                this.resetForm();
-            } else {
-                this.showAlert('error', response.message || 'Assignment failed');
+            container.html(html);
+            UI.setupDepartmentCardInteractions();
+        },
+
+        filterDepartments: function(departments) {
+            if (!departments || !Array.isArray(departments)) {
+                console.warn('filterDepartments: Invalid departments data', departments);
+                return [];
             }
-        } catch (error) {
-            this.showAlert('error', 'Assignment failed. Please try again.');
-        }
-    }
 
-    /**
-     * Handle bulk assignment
-     */
-    async handleBulkAssignment() {
-        const lecturerId = $(this.selectors.lecturerSelect).val();
+            const status = AppState.filters.status;
+            const search = AppState.filters.search.toLowerCase();
 
-        if (!lecturerId) {
-            this.showAlert('warning', 'Please select an HOD for bulk assignment');
-            return;
-        }
+            return departments.filter(dept => {
+                if (!dept || typeof dept !== 'object') return false;
 
-        if (this.state.selectedDepartments.size === 0) {
-            this.showAlert('warning', 'Please select at least one department');
-            return;
-        }
+                // Status filter
+                if (status !== 'all') {
+                    const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
+                    const matchesStatus =
+                        (status === 'assigned' && dept.hod_id && !hasInvalidAssignment) ||
+                        (status === 'unassigned' && !dept.hod_id) ||
+                        (status === 'invalid' && hasInvalidAssignment);
 
-        if (!confirm(`Assign HOD to ${this.state.selectedDepartments.size} department(s)?`)) {
-            return;
-        }
-
-        this.showLoading();
-        let successCount = 0;
-        let errorCount = 0;
-
-        for (const deptId of this.state.selectedDepartments) {
-            try {
-                const response = await this.apiCall('assign_hod', {
-                    department_id: deptId,
-                    hod_id: lecturerId
-                });
-
-                if (response.status === 'success') {
-                    successCount++;
-                } else {
-                    errorCount++;
+                    if (!matchesStatus) return false;
                 }
-            } catch (error) {
-                errorCount++;
+
+                // Search filter
+                if (search) {
+                    const searchableText = ((dept.name || '') + ' ' + (dept.hod_name || '')).toLowerCase();
+                    if (!searchableText.includes(search)) return false;
+                }
+
+                return true;
+            });
+        },
+
+        setupDepartmentCardInteractions: function() {
+            $('.selectDepartment').off('click').on('click', function() {
+                const deptId = $(this).data('id');
+                const deptName = $(this).data('name');
+                const hodId = $(this).data('hod');
+                const hodName = $(this).data('hod-name');
+                const isInvalid = $(this).data('invalid');
+
+                if (AppState.isBulkMode) {
+                    if (AppState.selectedDepartments.has(deptId.toString())) {
+                        AppState.selectedDepartments.delete(deptId.toString());
+                        $(this).closest('.department-card').removeClass('selected');
+                    } else {
+                        AppState.selectedDepartments.add(deptId.toString());
+                        $(this).closest('.department-card').addClass('selected');
+                    }
+                    UI.updateBulkModeUI();
+                } else {
+                    $('.department-card').removeClass('selected');
+                    $(this).closest('.department-card').addClass('selected');
+
+                    $('#departmentSelect').val(deptId);
+                    $('#lecturerSelect').val(hodId);
+
+                    if (hodId && hodName && !isInvalid) {
+                        $('#currentAssignmentInfo').show();
+                        $('#currentHodName').text(hodName);
+                    } else if (isInvalid) {
+                        $('#currentAssignmentInfo').hide();
+                        UI.showAlert('warning', `Department <strong>${deptName}</strong> has an invalid HOD assignment that needs to be fixed.`);
+                    } else {
+                        $('#currentAssignmentInfo').hide();
+                    }
+
+                    $('#assignHodForm')[0].scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start',
+                        inline: 'nearest'
+                    });
+
+                    const alertType = isInvalid ? 'warning' : 'info';
+                    const alertMessage = isInvalid ? `Selected department with invalid assignment: <strong>${deptName}</strong>` : `Selected department: <strong>${deptName}</strong>`;
+
+                    UI.showAlert(alertType, alertMessage);
+                    Validation.validateForm();
+                }
+            });
+
+            $('.department-card').hover(
+                function() {
+                    if (!$(this).hasClass('selected')) {
+                        $(this).addClass('shadow');
+                    }
+                },
+                function() {
+                    if (!$(this).hasClass('selected')) {
+                        $(this).removeClass('shadow');
+                    }
+                }
+            );
+        },
+
+        updateBulkModeUI: function() {
+            const selectedCount = AppState.selectedDepartments.size;
+            if (selectedCount > 0) {
+                $('#assignBtn').html(`<i class="fas fa-save me-2"></i>Assign to ${selectedCount} Departments`);
+            } else {
+                $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign to Selected');
+            }
+        }
+    };
+
+    // Form validation
+    const Validation = {
+        validateForm: function() {
+            const departmentId = $('#departmentSelect').val();
+            const lecturerId = $('#lecturerSelect').val();
+            let isValid = true;
+
+            // Validate department selection
+            if (departmentId) {
+                $('#departmentSelect').removeClass('is-invalid').addClass('is-valid');
+                $('#departmentSelectFeedback')
+                    .html('<i class="fas fa-check me-1"></i>Department selected successfully')
+                    .removeClass('text-warning text-danger').addClass('text-success');
+            } else {
+                $('#departmentSelect').removeClass('is-valid').addClass('is-invalid');
+                $('#departmentSelectFeedback')
+                    .html('<i class="fas fa-exclamation-triangle me-1"></i>Please select a department')
+                    .removeClass('text-success text-warning').addClass('text-danger');
+                isValid = false;
+            }
+
+            // Validate lecturer selection (optional)
+            if (lecturerId) {
+                $('#lecturerSelect').removeClass('is-invalid').addClass('is-valid');
+                const selectedLecturer = $('#lecturerSelect option:selected').text();
+                $('#lecturerSelectFeedback')
+                    .html(`<i class="fas fa-check me-1"></i>HOD selected: <strong>${Utils.sanitizeHtml(selectedLecturer)}</strong>`)
+                    .removeClass('text-warning text-danger').addClass('text-success');
+            } else {
+                $('#lecturerSelect').removeClass('is-valid is-invalid');
+                const lecturerCount = $('#lecturerSelect').find('option').length - 1;
+                if (lecturerCount === 0) {
+                    $('#lecturerSelectFeedback')
+                        .html('<i class="fas fa-exclamation-triangle me-1"></i>No lecturers available in database')
+                        .removeClass('text-success text-info').addClass('text-warning');
+                } else {
+                    $('#lecturerSelectFeedback')
+                        .html('<i class="fas fa-info-circle me-1"></i>Optional - leave empty to remove HOD assignment')
+                        .removeClass('text-success text-danger').addClass('text-info');
+                }
+            }
+
+            // Update submit button state
+            const submitBtn = $('#assignBtn');
+            if (isValid) {
+                submitBtn.prop('disabled', false).removeClass('btn-secondary').addClass('btn-primary');
+            } else {
+                submitBtn.prop('disabled', true).removeClass('btn-primary').addClass('btn-secondary');
+            }
+
+            return isValid;
+        },
+
+        resetForm: function() {
+            $('#assignHodForm')[0].reset();
+            $('#currentAssignmentInfo').hide();
+            $('#assignmentPreview').hide();
+            $('#departmentSearch').val('');
+            $('#lecturerSearch').val('');
+            $('.department-card').removeClass('selected');
+            AppState.selectedDepartments.clear();
+
+            if (AppState.isBulkMode) {
+                disableBulkMode();
+            }
+        }
+    };
+
+    // Main application functions
+    function initializeApp() {
+        console.log('Initializing HOD Assignment System...');
+
+        // Subscribe to state changes
+        AppState.subscribe('departmentsChanged', UI.renderDepartments);
+        AppState.subscribe('lecturersChanged', updateLecturerSelect);
+
+        // Add keyboard shortcuts help
+        $(document).on('keydown', handleKeyboardShortcuts);
+    }
+
+    function handleKeyboardShortcuts(e) {
+        // Ctrl/Cmd + R to refresh
+        if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+            e.preventDefault();
+            loadData();
+        }
+
+        // Ctrl/Cmd + S to submit form
+        if ((e.ctrlKey || e.metaKey) && e.key === 's' && $('#departmentSelect').val()) {
+            e.preventDefault();
+            $('#assignHodForm').submit();
+        }
+
+        // Escape to reset form
+        if (e.key === 'Escape') {
+            if (AppState.isBulkMode) {
+                window.disableBulkMode();
+            } else {
+                Validation.resetForm();
             }
         }
 
-        this.hideLoading();
+        // Ctrl/Cmd + B to toggle bulk mode
+        if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+            e.preventDefault();
+            window.toggleBulkMode();
+        }
+    }
 
-        if (errorCount === 0) {
-            this.showAlert('success', `Successfully assigned HOD to ${successCount} department(s)`);
+    function setupEventHandlers() {
+        // Department form submission
+        $('#assignHodForm').on('submit', handleDepartmentSubmit);
+
+        // Department selection change
+        $('#departmentSelect').on('change', function() {
+            const selectedDeptId = $(this).val();
+            updateCurrentAssignmentInfo();
+            Validation.validateForm();
+
+            // Load lecturers for the selected department
+            if (selectedDeptId) {
+                loadLecturers(selectedDeptId).then(() => {
+                    console.log('Lecturers loaded for department:', selectedDeptId);
+                }).catch(error => {
+                    console.error('Failed to load lecturers for department:', error);
+                    UI.showAlert('warning', 'Failed to load lecturers for selected department');
+                });
+            } else {
+                // If no department selected, load all lecturers
+                loadLecturers().then(() => {
+                    console.log('All lecturers loaded');
+                }).catch(error => {
+                    console.error('Failed to load lecturers:', error);
+                });
+            }
+        });
+
+        // Lecturer selection change
+        $('#lecturerSelect').on('change', function() {
+            Validation.validateForm();
+            updateAssignmentPreview();
+        });
+
+        // Search functionality with debouncing
+        const debouncedDepartmentSearch = Utils.debounce((term) => {
+            AppState.filters.search = term;
+            UI.renderDepartments(AppState.departments);
+        }, CONFIG.debounceDelay);
+
+        const debouncedLecturerSearch = Utils.debounce((term) => {
+            filterLecturers(term);
+        }, CONFIG.debounceDelay);
+
+        $('#departmentSearch').on('input', function() {
+            debouncedDepartmentSearch($(this).val());
+        });
+
+        $('#lecturerSearch').on('input', function() {
+            debouncedLecturerSearch($(this).val());
+        });
+
+        // Reset form
+        $('#resetFormBtn').on('click', Validation.resetForm);
+
+        // Refresh assignments
+        $('#refreshAssignments').on('click', loadAssignments);
+
+        // Form validation on change
+        $('#departmentSelect, #lecturerSelect').on('change', Validation.validateForm);
+    }
+
+    function handleDepartmentSubmit(e) {
+        e.preventDefault();
+
+        if (AppState.isBulkMode && AppState.selectedDepartments.size > 0) {
+            handleBulkAssignment();
+            return;
+        }
+
+        const departmentId = $('#departmentSelect').val();
+        const hodId = $('#lecturerSelect').val();
+
+        if (!departmentId) {
+            UI.showAlert('warning', 'Please select a department');
+            $('#departmentSelect').focus();
+            return;
+        }
+
+        const department = AppState.departments.find(dept => dept.id == departmentId);
+        const isInvalidAssignment = department.hod_id && (!department.hod_name || department.hod_name === 'Not Assigned');
+
+        // Confirmation for critical actions
+        if (isInvalidAssignment && !hodId) {
+            if (!confirm('This department has an invalid HOD assignment. Removing the HOD will clear this invalid reference. Continue?')) {
+                return;
+            }
+        }
+
+        submitAssignment(departmentId, hodId);
+    }
+
+    function submitAssignment(departmentId, hodId, isBulk = false) {
+        UI.showLoading();
+        const submitBtn = $('#assignBtn');
+        const originalText = submitBtn.html();
+
+        if (isBulk) {
+            submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Processing Bulk Assignment...');
         } else {
-            this.showAlert('warning', `Assigned to ${successCount} department(s), ${errorCount} failed`);
+            submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Processing...');
         }
 
-        await this.loadInitialData();
-        this.disableBulkMode();
+        submitBtn.prop('disabled', true);
+
+        ApiService.assignHod(departmentId, hodId)
+            .then(response => {
+                const message = isBulk ?
+                    'Bulk assignment completed successfully!' :
+                    response.message || 'HOD assignment updated successfully!';
+                UI.showAlert('success', message);
+                loadData().then(() => {
+                    // After loading data, refresh lecturers for currently selected department if any
+                    const selectedDeptId = $('#departmentSelect').val();
+                    if (selectedDeptId) {
+                        loadLecturers(selectedDeptId).catch(error => {
+                            console.error('Failed to refresh lecturers after assignment:', error);
+                        });
+                    }
+                });
+                if (!isBulk) {
+                    Validation.resetForm();
+                }
+            })
+            .catch(error => {
+                let errorMessage = 'Failed to process HOD assignment. Please try again.';
+                if (error.message) {
+                    errorMessage = error.message;
+                }
+                UI.showAlert('danger', errorMessage);
+            })
+            .finally(() => {
+                UI.hideLoading();
+                submitBtn.html(originalText).prop('disabled', false);
+            });
     }
 
-    /**
-     * Confirm assignment action
-     */
-    async confirmAssignment(departmentId, lecturerId) {
-        const department = this.state.departments.find(d => d.id == departmentId);
-        if (!department) return false;
+    function handleBulkAssignment() {
+        const hodId = $('#lecturerSelect').val();
+        const selectedCount = AppState.selectedDepartments.size;
 
-        const isInvalid = department.hod_id && (!department.hod_name || department.hod_name === 'Not Assigned');
-
-        if (isInvalid && !lecturerId) {
-            return confirm('This department has an invalid HOD assignment. Removing the HOD will clear this invalid reference. Continue?');
+        if (!hodId) {
+            UI.showAlert('warning', 'Please select an HOD for bulk assignment');
+            return;
         }
 
-        return true;
+        if (confirm(`Assign the selected HOD to ${selectedCount} department(s)?`)) {
+            UI.showLoading();
+
+            let processed = 0;
+            let successCount = 0;
+            let errorCount = 0;
+
+            AppState.selectedDepartments.forEach(deptId => {
+                ApiService.assignHod(deptId, hodId)
+                    .then(() => {
+                        successCount++;
+                    })
+                    .catch(() => {
+                        errorCount++;
+                    })
+                    .finally(() => {
+                        processed++;
+                        if (processed === selectedCount) {
+                            UI.hideLoading();
+                            if (errorCount === 0) {
+                                UI.showAlert('success', `Successfully assigned HOD to ${successCount} department(s)!`);
+                            } else {
+                                UI.showAlert('warning', `Assigned HOD to ${successCount} department(s), but ${errorCount} failed.`);
+                            }
+                            loadData();
+                            window.disableBulkMode();
+                        }
+                    });
+            });
+        }
     }
 
-    /**
-     * Handle department selection change
-     */
-    handleDepartmentChange() {
-        const deptId = $(this.selectors.departmentSelect).val();
-        const department = this.state.departments.find(d => d.id == deptId);
+    function updateCurrentAssignmentInfo() {
+        const selectedOption = $('#departmentSelect').find('option:selected');
+        const hodId = selectedOption.data('hod');
+        const hodName = selectedOption.data('hod-name');
 
-        if (department && department.hod_id) {
+        if (hodId && hodName) {
             $('#currentAssignmentInfo').show();
-            $('#currentHodName').text(department.hod_name || 'Invalid Assignment');
-            $(this.selectors.lecturerSelect).val(department.hod_id);
+            $('#currentHodName').text(hodName);
+            $('#lecturerSelect').val(hodId);
         } else {
             $('#currentAssignmentInfo').hide();
-            $(this.selectors.lecturerSelect).val('');
+            $('#lecturerSelect').val('');
         }
-
-        this.updateAssignmentPreview();
-        this.validateForm();
+        updateAssignmentPreview();
     }
 
-    /**
-     * Handle lecturer selection change
-     */
-    handleLecturerChange() {
-        this.updateAssignmentPreview();
-        this.validateForm();
-    }
+    function updateAssignmentPreview() {
+        const departmentId = $('#departmentSelect').val();
+        const lecturerId = $('#lecturerSelect').val();
 
-    /**
-     * Update assignment preview
-     */
-    updateAssignmentPreview() {
-        const deptId = $(this.selectors.departmentSelect).val();
-        const lecturerId = $(this.selectors.lecturerSelect).val();
-
-        if (!deptId) {
+        if (!departmentId) {
             $('#assignmentPreview').hide();
             return;
         }
 
-        const department = this.state.departments.find(d => d.id == deptId);
-        const lecturer = this.state.lecturers.find(l => l.id == lecturerId);
+        const departmentOption = $('#departmentSelect option:selected');
+        const lecturerOption = $('#lecturerSelect option:selected');
+        const isInvalidAssignment = departmentOption.data('invalid') === 'true';
 
-        let previewHtml = `
-            <div class="row">
-                <div class="col-md-6">
-                    <h6><i class="fas fa-building me-2"></i>Department</h6>
-                    <p class="mb-1"><strong>${department?.name || 'Unknown'}</strong></p>
-                </div>
-                <div class="col-md-6">
-                    <h6><i class="fas fa-user-graduate me-2"></i>HOD Assignment</h6>
-                    <p class="mb-1"><strong>${lecturer?.full_name || 'No HOD'}</strong></p>
-                </div>
-            </div>
-        `;
+        const departmentName = departmentOption.text();
+        const lecturerName = lecturerOption.text() || 'No HOD';
+
+        let previewHtml = '<div class="row">';
+        previewHtml += '<div class="col-md-6">';
+        previewHtml += '<h6><i class="fas fa-building me-2"></i>Department</h6>';
+        previewHtml += `<p class="mb-1"><strong>${Utils.sanitizeHtml(departmentName)}</strong></p>`;
+        if (isInvalidAssignment) {
+            previewHtml += '<small class="text-danger"><i class="fas fa-exclamation-triangle me-1"></i>Has invalid current assignment</small>';
+        }
+        previewHtml += '</div>';
+
+        if (lecturerId) {
+            previewHtml += '<div class="col-md-6">';
+            previewHtml += '<h6><i class="fas fa-user-graduate me-2"></i>New HOD</h6>';
+            previewHtml += `<p class="mb-1"><strong>${Utils.sanitizeHtml(lecturerName)}</strong></p>`;
+            previewHtml += '<small class="text-success"><i class="fas fa-check me-1"></i>Will create/update user account</small>';
+            previewHtml += '</div>';
+        } else {
+            previewHtml += '<div class="col-md-6">';
+            previewHtml += '<h6><i class="fas fa-user-times me-2"></i>HOD Assignment</h6>';
+            previewHtml += '<p class="mb-1"><span class="text-warning">Will be removed</span></p>';
+            previewHtml += '<small class="text-muted"><i class="fas fa-info-circle me-1"></i>Department will have no HOD</small>';
+            previewHtml += '</div>';
+        }
+
+        previewHtml += '</div>';
+        previewHtml += '<hr class="my-2">';
+        previewHtml += '<div class="text-center">';
+
+        if (isInvalidAssignment && lecturerId) {
+            previewHtml += `<p class="mb-0"><i class="fas fa-tools me-2"></i><strong>Action:</strong> Fix invalid assignment</p>`;
+            previewHtml += '<small class="text-success">This will resolve the data integrity issue</small>';
+        } else if (isInvalidAssignment && !lecturerId) {
+            previewHtml += `<p class="mb-0"><i class="fas fa-times me-2"></i><strong>Action:</strong> Remove invalid assignment</p>`;
+            previewHtml += '<small class="text-warning">This will clear the invalid HOD reference</small>';
+        } else if (lecturerId) {
+            previewHtml += `<p class="mb-0"><i class="fas fa-arrow-right me-2"></i><strong>Action:</strong> Assign HOD to department</p>`;
+        } else {
+            previewHtml += `<p class="mb-0"><i class="fas fa-times me-2"></i><strong>Action:</strong> Remove HOD from department</p>`;
+        }
+
+        previewHtml += '</div>';
 
         $('#previewText').html(previewHtml);
         $('#assignmentPreview').show();
     }
 
-    /**
-     * Show assignment preview
-     */
-    showAssignmentPreview() {
-        this.updateAssignmentPreview();
+    function showAssignmentPreview() {
+        updateAssignmentPreview();
     }
 
-    /**
-     * Filter departments based on search
-     */
-    filterDepartments(searchTerm) {
-        const options = $(this.selectors.departmentSelect).find('option');
+    function clearCurrentAssignment() {
+        $('#currentAssignmentInfo').hide();
+        $('#lecturerSelect').val('');
+        updateAssignmentPreview();
+    }
+
+    function filterLecturers(searchTerm) {
+        const select = $('#lecturerSelect');
+        const options = select.find('option');
         let visibleCount = 0;
 
         options.each(function() {
@@ -370,42 +844,18 @@ class HodAssignmentManager {
             }
         });
 
-        this.updateSearchFeedback('departmentSelectFeedback', searchTerm, visibleCount, 'department');
+        updateSearchFeedback('lecturerSelectFeedback', searchTerm, visibleCount, 'lecturer');
     }
 
-    /**
-     * Filter lecturers based on search
-     */
-    filterLecturers(searchTerm) {
-        const options = $(this.selectors.lecturerSelect).find('option');
-        let visibleCount = 0;
-
-        options.each(function() {
-            const option = $(this);
-            const text = option.text().toLowerCase();
-            const shouldShow = !searchTerm || text.includes(searchTerm.toLowerCase());
-
-            if (option.val() !== '') {
-                option.toggle(shouldShow);
-                if (shouldShow) visibleCount++;
-            }
-        });
-
-        this.updateSearchFeedback('lecturerSelectFeedback', searchTerm, visibleCount, 'lecturer');
-    }
-
-    /**
-     * Update search feedback
-     */
-    updateSearchFeedback(elementId, searchTerm, visibleCount, type) {
-        const feedback = $(`#${elementId}`);
+    function updateSearchFeedback(elementId, searchTerm, visibleCount, type) {
+        const feedback = $('#' + elementId);
 
         if (searchTerm) {
             if (visibleCount === 0) {
-                feedback.html(`<i class="fas fa-exclamation-triangle me-1"></i>No ${type}s found matching "<strong>${searchTerm}</strong>"`)
+                feedback.html(`<i class="fas fa-exclamation-triangle me-1"></i>No ${type}s found matching "<strong>${Utils.sanitizeHtml(searchTerm)}</strong>"`)
                     .removeClass('text-success').addClass('text-warning');
             } else {
-                feedback.html(`<i class="fas fa-check me-1"></i>Found ${visibleCount} ${type}${visibleCount !== 1 ? 's' : ''} matching "<strong>${searchTerm}</strong>"`)
+                feedback.html(`<i class="fas fa-check me-1"></i>Found ${visibleCount} ${type}${visibleCount !== 1 ? 's' : ''} matching "<strong>${Utils.sanitizeHtml(searchTerm)}</strong>"`)
                     .removeClass('text-warning').addClass('text-success');
             }
         } else {
@@ -413,250 +863,8 @@ class HodAssignmentManager {
         }
     }
 
-    /**
-     * Render departments in select dropdown
-     */
-    renderDepartments() {
-        const select = $(this.selectors.departmentSelect);
-        select.empty().append('<option value="">-- Select Department --</option>');
-
-        if (this.state.departments.length > 0) {
-            this.state.departments.forEach(dept => {
-                const hodInfo = dept.hod_name ? ` (Current HOD: ${dept.hod_name})` : '';
-                const isInvalid = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
-
-                select.append(`
-                    <option value="${dept.id}"
-                            data-hod="${dept.hod_id || ''}"
-                            data-hod-name="${dept.hod_name || ''}"
-                            data-invalid="${isInvalid}">
-                        ${dept.name}${hodInfo}
-                    </option>
-                `);
-            });
-        } else {
-            select.append('<option value="" disabled>No departments available</option>');
-        }
-    }
-
-    /**
-     * Render lecturers in select dropdown
-     */
-    renderLecturers() {
-        const select = $(this.selectors.lecturerSelect);
-        select.empty().append('<option value="">-- Select Lecturer --</option>');
-
-        if (this.state.lecturers.length > 0) {
-            this.state.lecturers.forEach(lecturer => {
-                const displayName = lecturer.full_name || `${lecturer.first_name} ${lecturer.last_name}`;
-                select.append(`<option value="${lecturer.id}">${displayName}</option>`);
-            });
-        } else {
-            select.append('<option value="" disabled>No lecturers available</option>');
-        }
-    }
-
-    /**
-     * Render department assignment cards
-     */
-    renderAssignments() {
-        const container = $(this.selectors.assignmentsContainer);
-        const filteredDepts = this.filterAssignmentsByStatus();
-
-        if (filteredDepts.length === 0) {
-            container.html(`
-                <div class="col-12 text-center py-5">
-                    <i class="fas fa-building fa-3x text-muted mb-3"></i>
-                    <h5 class="text-muted">No Departments Found</h5>
-                    <p class="text-muted">No departments match the current filter.</p>
-                </div>
-            `);
-            return;
-        }
-
-        let html = '';
-        filteredDepts.forEach(dept => {
-            const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
-            const cardClass = hasInvalidAssignment ? 'assignment-card invalid' :
-                            (dept.hod_id ? 'assignment-card assigned' : 'assignment-card unassigned');
-            const statusIcon = hasInvalidAssignment ? 'fas fa-exclamation-circle text-danger' :
-                              (dept.hod_id ? 'fas fa-user-check text-success' : 'fas fa-exclamation-triangle text-warning');
-            const statusText = hasInvalidAssignment ? 'Invalid' : (dept.hod_id ? 'Assigned' : 'Unassigned');
-            const statusColor = hasInvalidAssignment ? 'danger' : (dept.hod_id ? 'success' : 'warning');
-            const isSelected = this.state.selectedDepartments.has(dept.id.toString());
-
-            html += `
-                <div class="col-md-6 col-lg-4">
-                    <div class="card ${cardClass} h-100 department-card ${isSelected ? 'selected' : ''}"
-                         data-department-id="${dept.id}">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between align-items-start mb-3">
-                                <h6 class="card-title text-primary mb-0">${dept.name}</h6>
-                                <span class="badge bg-${statusColor}">
-                                    <i class="${statusIcon} me-1"></i>${statusText}
-                                </span>
-                            </div>
-
-                            <div class="mb-3">
-                                <small class="text-muted d-block">Current HOD:</small>
-                                <div class="${dept.hod_id ? (hasInvalidAssignment ? 'text-danger' : 'text-success') : 'text-warning'} fw-semibold">
-                                    ${hasInvalidAssignment ? 'INVALID ASSIGNMENT' : (dept.hod_name || 'Not Assigned')}
-                                </div>
-                            </div>
-
-                            <button class="btn btn-sm ${hasInvalidAssignment ? 'btn-outline-danger' : 'btn-outline-primary'} w-100 select-department-btn"
-                                    data-id="${dept.id}"
-                                    data-name="${dept.name}"
-                                    data-hod="${dept.hod_id || ''}"
-                                    data-hod-name="${dept.hod_name || ''}"
-                                    data-invalid="${hasInvalidAssignment}">
-                                <i class="fas fa-${hasInvalidAssignment ? 'exclamation-triangle' : 'mouse-pointer'} me-1"></i>
-                                ${hasInvalidAssignment ? 'Fix Assignment' : 'Select for Assignment'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-
-        container.html(html);
-        this.setupAssignmentCardInteractions();
-    }
-
-    /**
-     * Filter assignments by status
-     */
-    filterAssignmentsByStatus() {
-        const status = $(this.selectors.statusFilter).val();
-
-        if (status === 'all') return this.state.departments;
-
-        return this.state.departments.filter(dept => {
-            const hasInvalidAssignment = dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned');
-
-            switch (status) {
-                case 'assigned': return dept.hod_id && !hasInvalidAssignment;
-                case 'unassigned': return !dept.hod_id;
-                case 'invalid': return hasInvalidAssignment;
-                default: return true;
-            }
-        });
-    }
-
-    /**
-     * Filter assignments (called from UI)
-     */
-    filterAssignments() {
-        this.renderAssignments();
-    }
-
-    /**
-     * Setup assignment card interactions
-     */
-    setupAssignmentCardInteractions() {
-        $('.select-department-btn').on('click', (e) => {
-            const btn = $(e.currentTarget);
-            const deptData = {
-                id: btn.data('id'),
-                name: btn.data('name'),
-                hod: btn.data('hod'),
-                hodName: btn.data('hod-name'),
-                invalid: btn.data('invalid')
-            };
-
-            this.handleDepartmentCardClick(deptData, btn);
-        });
-
-        // Hover effects
-        $('.department-card').hover(
-            function() {
-                if (!$(this).hasClass('selected')) {
-                    $(this).addClass('shadow');
-                }
-            },
-            function() {
-                if (!$(this).hasClass('selected')) {
-                    $(this).removeClass('shadow');
-                }
-            }
-        );
-    }
-
-    /**
-     * Handle department card click
-     */
-    handleDepartmentCardClick(deptData, btn) {
-        if (this.state.isBulkMode) {
-            // Toggle selection in bulk mode
-            const deptId = deptData.id.toString();
-            if (this.state.selectedDepartments.has(deptId)) {
-                this.state.selectedDepartments.delete(deptId);
-                btn.closest('.department-card').removeClass('selected');
-            } else {
-                this.state.selectedDepartments.add(deptId);
-                btn.closest('.department-card').addClass('selected');
-            }
-            this.updateBulkModeUI();
-        } else {
-            // Single selection mode
-            $('.department-card').removeClass('selected');
-            btn.closest('.department-card').addClass('selected');
-
-            $(this.selectors.departmentSelect).val(deptData.id);
-            $(this.selectors.lecturerSelect).val(deptData.hod || '');
-
-            if (deptData.hod && deptData.hodName && !deptData.invalid) {
-                $('#currentAssignmentInfo').show();
-                $('#currentHodName').text(deptData.hodName);
-            } else if (deptData.invalid) {
-                $('#currentAssignmentInfo').hide();
-                this.showAlert('warning', `Department <strong>${deptData.name}</strong> has an invalid HOD assignment that needs to be fixed.`);
-            } else {
-                $('#currentAssignmentInfo').hide();
-            }
-
-            // Scroll to form
-            $('html, body').animate({
-                scrollTop: $(this.selectors.form).offset().top - 100
-            }, 500);
-
-            this.validateForm();
-        }
-    }
-
-    /**
-     * Update statistics display
-     */
-    updateStatistics(stats) {
-        if (!stats) return;
-
-        this.animateValue('totalDepartments', stats.total_departments || 0);
-        this.animateValue('assignedDepartments', stats.assigned_departments || 0);
-        this.animateValue('totalLecturers', stats.total_lecturers || 0);
-        this.animateValue('unassignedDepartments', stats.unassigned_departments || 0);
-    }
-
-    /**
-     * Load assignments data
-     */
-    async loadAssignments() {
-        try {
-            const response = await this.apiCall('get_departments');
-            if (response.status === 'success') {
-                this.state.departments = response.data || [];
-                this.renderAssignments();
-                this.checkDataIntegrity();
-            }
-        } catch (error) {
-            this.showAlert('error', 'Failed to load assignments');
-        }
-    }
-
-    /**
-     * Check data integrity
-     */
-    checkDataIntegrity() {
-        const invalidAssignments = this.state.departments.filter(dept =>
+    function checkDataIntegrity() {
+        const invalidAssignments = AppState.departments.filter(dept =>
             dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
         );
 
@@ -666,267 +874,424 @@ class HodAssignmentManager {
                 <div class="alert alert-warning alert-dismissible fade show">
                     <i class="fas fa-exclamation-triangle me-2"></i>
                     <strong>Data Integrity Issue:</strong> Found ${invalidAssignments.length} department(s) with invalid HOD assignments.
-                    <br><small class="text-muted">Affected departments: ${departmentNames}</small>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    <br><small class="text-muted">Affected departments: ${Utils.sanitizeHtml(departmentNames)}</small>
+                    <br><small class="text-muted">These departments have hod_id values pointing to non-HOD users or missing records.</small>
+                    <button type="button class="btn-close" data-bs-dismiss="alert"></button>
                 </div>
             `;
-            $(this.selectors.alertContainer).append(alertHtml);
+            $('#alertContainer').append(alertHtml);
             $('#fixInvalidBtn').show();
         } else {
             $('#fixInvalidBtn').hide();
         }
     }
 
-    /**
-     * Validate form
-     */
-    validateForm() {
-        const departmentId = $(this.selectors.departmentSelect).val();
-        const lecturerId = $(this.selectors.lecturerSelect).val();
-        let isValid = true;
+    function fixInvalidAssignments() {
+        const invalidDepts = AppState.departments.filter(dept =>
+            dept.hod_id && (!dept.hod_name || dept.hod_name === 'Not Assigned')
+        );
 
-        // Validate department selection
-        if (departmentId) {
-            $(this.selectors.departmentSelect).removeClass('is-invalid').addClass('is-valid');
-            $('#departmentSelectFeedback')
-                .html('<i class="fas fa-check me-1"></i>Department selected successfully')
-                .removeClass('text-warning text-danger').addClass('text-success');
-        } else {
-            $(this.selectors.departmentSelect).removeClass('is-valid').addClass('is-invalid');
-            $('#departmentSelectFeedback')
-                .html('<i class="fas fa-exclamation-triangle me-1"></i>Please select a department')
-                .removeClass('text-success text-warning').addClass('text-danger');
-            isValid = false;
+        if (invalidDepts.length === 0) {
+            UI.showAlert('info', 'No invalid assignments found.');
+            return;
         }
 
-        // Update submit button state
-        const submitBtn = $('#assignBtn');
-        if (isValid) {
-            submitBtn.prop('disabled', false).removeClass('btn-secondary').addClass('btn-primary');
-        } else {
-            submitBtn.prop('disabled', true).removeClass('btn-primary').addClass('btn-secondary');
-        }
+        if (confirm(`Found ${invalidDepts.length} department(s) with invalid HOD assignments.\n\nThese departments have hod_id values pointing to users who are not HODs or missing lecturer records.\n\nFix them by clearing the invalid HOD assignments?`)) {
+            UI.showLoading();
 
-        return isValid;
-    }
+            let fixedCount = 0;
+            let errorCount = 0;
 
-    /**
-     * Reset form
-     */
-    resetForm() {
-        $(this.selectors.form)[0].reset();
-        $('#currentAssignmentInfo').hide();
-        $('#assignmentPreview').hide();
-        $(this.selectors.departmentSearch).val('');
-        $(this.selectors.lecturerSearch).val('');
-        $('.department-card').removeClass('selected');
-        this.filterDepartments('');
-        this.filterLecturers('');
-        this.state.selectedDepartments.clear();
+            const fixNext = (index) => {
+                if (index >= invalidDepts.length) {
+                    UI.hideLoading();
+                    if (errorCount === 0) {
+                        UI.showAlert('success', `Successfully fixed ${fixedCount} invalid HOD assignment(s)!`);
+                    } else {
+                        UI.showAlert('warning', `Fixed ${fixedCount} assignment(s), but ${errorCount} failed. Please check the console for details.`);
+                    }
+                    loadData();
+                    return;
+                }
 
-        if (this.state.isBulkMode) {
-            this.disableBulkMode();
+                const dept = invalidDepts[index];
+                console.log(`Fixing department: ${dept.name} (ID: ${dept.id})`);
+
+                ApiService.assignHod(dept.id, null)
+                    .then(() => {
+                        console.log(`✅ Fixed: ${dept.name}`);
+                        fixedCount++;
+                    })
+                    .catch(error => {
+                        console.error(`❌ Failed to fix ${dept.name}:`, error);
+                        errorCount++;
+                    })
+                    .finally(() => {
+                        fixNext(index + 1);
+                    });
+            };
+
+            fixNext(0);
         }
     }
 
-    /**
-     * Toggle bulk mode
-     */
-    toggleBulkMode() {
-        if (this.state.isBulkMode) {
-            this.disableBulkMode();
+    function setupFullscreenHandling() {
+        function isFullscreen() {
+            return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+                    document.mozFullScreenElement || document.msFullscreenElement);
+        }
+
+        function adjustForFullscreen() {
+            const fullscreen = isFullscreen();
+            const windowWidth = $(window).width();
+
+            if (fullscreen) {
+                $('html, body').css({
+                    'overflow-x': 'hidden',
+                    'width': '100vw',
+                    'height': '100vh'
+                });
+
+                if (windowWidth > 768) {
+                    $('.sidebar').css({
+                        'width': '280px',
+                        'height': '100vh',
+                        'position': 'fixed'
+                    });
+                    $('.main-content').css({
+                        'margin-left': '280px',
+                        'width': 'calc(100vw - 280px)',
+                        'height': '100vh'
+                    });
+                }
+            } else {
+                const heightUnit = windowWidth <= 768 ? '100dvh' : '100vh';
+                $('.sidebar').css({
+                    'height': heightUnit
+                });
+                $('.main-content').css({
+                    'min-height': heightUnit
+                });
+            }
+        }
+
+        $(document).on('fullscreenchange webkitfullscreenchange mozfullscreenchange MSFullscreenChange', function() {
+            setTimeout(adjustForFullscreen, 100);
+        });
+
+        $(window).on('orientationchange', function() {
+            setTimeout(adjustForFullscreen, 200);
+        });
+
+        setTimeout(adjustForFullscreen, 500);
+    }
+
+    function loadData() {
+        UI.showLoading('Loading HOD Assignment System');
+
+        Promise.all([
+            loadDepartments(),
+            loadLecturers(),
+            loadStatistics(),
+            loadAssignments()
+        ])
+        .then(() => {
+            UI.hideLoading();
+            checkDataIntegrity();
+            console.log('All data loaded successfully');
+        })
+        .catch(error => {
+            UI.hideLoading();
+            console.error('Error loading data:', error);
+            UI.showAlert('danger', 'Failed to load data: ' + error.message);
+        });
+    }
+
+    function loadDepartments() {
+        return ApiService.getDepartments()
+            .then(response => {
+                AppState.setDepartments(response.data);
+                populateDepartmentSelect(response.data);
+                if (response.cached) {
+                    console.log('Departments loaded from cache');
+                }
+                return response.data;
+            });
+    }
+
+    function loadLecturers(departmentId = null) {
+        return ApiService.getLecturers(departmentId)
+            .then(response => {
+                AppState.setLecturers(response.data);
+                if (response.cached) {
+                    console.log('Lecturers loaded from cache');
+                }
+                return response.data;
+            });
+    }
+
+    function loadStatistics() {
+        return ApiService.getStats()
+            .then(response => {
+                UI.updateStats(response.data);
+                return response.data;
+            });
+    }
+
+    function loadAssignments() {
+        // This is the same as loadDepartments for now
+        return loadDepartments();
+    }
+
+    function populateDepartmentSelect(departments) {
+        const select = $('#departmentSelect');
+        select.empty().append('<option value="">-- Select Department --</option>');
+
+        if (departments && departments.length > 0) {
+            departments.forEach(dept => {
+                const hodName = dept.hod_first_name && dept.hod_last_name ?
+                    `${dept.hod_first_name} ${dept.hod_last_name}` : '';
+                const selected = hodName ? ` (Current HOD: ${hodName})` : '';
+
+                select.append(`<option value="${dept.id}"
+                    data-hod="${dept.hod_id || ''}"
+                    data-hod-name="${hodName}">
+                    ${Utils.sanitizeHtml(dept.name)}${selected}
+                </option>`);
+            });
         } else {
-            this.enableBulkMode();
+            select.append('<option value="" disabled>No departments available</option>');
         }
     }
 
-    /**
-     * Enable bulk mode
-     */
-    enableBulkMode() {
-        this.state.isBulkMode = true;
+    function updateLecturerSelect() {
+        const lecturers = AppState.lecturers;
+        console.log('Updating lecturer select with:', lecturers);
+
+        const select = $('#lecturerSelect');
+        select.empty().append('<option value="">-- Select Lecturer --</option>');
+
+        if (lecturers && lecturers.length > 0) {
+            lecturers.forEach(lecturer => {
+                const displayName = lecturer.full_name ||
+                                   `${lecturer.first_name} ${lecturer.last_name}`;
+
+                // Add HOD department info if applicable
+                const hodInfo = lecturer.role === 'hod' && lecturer.hod_department_name ?
+                    ` (HOD of ${lecturer.hod_department_name})` : '';
+
+                select.append(`<option value="${lecturer.id}">${Utils.sanitizeHtml(displayName)}${hodInfo}</option>`);
+            });
+            console.log(`Loaded ${lecturers.length} lecturers into dropdown`);
+        } else {
+            select.append('<option value="" disabled>No lecturers available</option>');
+            console.warn('No lecturers available for dropdown');
+        }
+
+        select.trigger('change');
+    }
+
+    // Additional utility functions
+    function globalSearch() {
+        const searchTerm = $('#globalSearch').val().trim();
+        AppState.filters.search = searchTerm;
+        UI.renderDepartments(AppState.departments);
+        updateResultCount();
+    }
+
+    function updateResultCount() {
+        const filteredCount = UI.filterDepartments(AppState.departments).length;
+        const totalCount = AppState.departments.length;
+
+        if (AppState.filters.search || AppState.filters.status !== 'all') {
+            $('#resultCountText').text(filteredCount);
+            $('#resultCount').show();
+        } else {
+            $('#resultCount').hide();
+        }
+    }
+
+    function showQuickStats() {
+        const stats = {
+            total: AppState.departments.length,
+            assigned: AppState.departments.filter(d => d.hod_id).length,
+            unassigned: AppState.departments.filter(d => !d.hod_id).length,
+            invalid: AppState.departments.filter(d => d.hod_id && (!d.hod_name || d.hod_name === 'Not Assigned')).length
+        };
+
+        const statsHtml = `
+            <div class="modal fade" id="quickStatsModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header bg-primary text-white">
+                            <h5 class="modal-title">
+                                <i class="fas fa-chart-bar me-2"></i>Quick Statistics
+                            </h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="row g-3">
+                                <div class="col-6">
+                                    <div class="text-center">
+                                        <div class="h3 text-primary">${stats.total}</div>
+                                        <small class="text-muted">Total Departments</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="text-center">
+                                        <div class="h3 text-success">${stats.assigned}</div>
+                                        <small class="text-muted">Assigned HODs</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="text-center">
+                                        <div class="h3 text-warning">${stats.unassigned}</div>
+                                        <small class="text-muted">Unassigned</small>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="text-center">
+                                        <div class="h3 text-danger">${stats.invalid}</div>
+                                        <small class="text-muted">Invalid Assignments</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        $('#quickStatsModal').remove();
+        $('body').append(statsHtml);
+        const modal = new bootstrap.Modal(document.getElementById('quickStatsModal'));
+        modal.show();
+    }
+
+    // Make functions globally available
+    window.globalSearch = globalSearch;
+    window.showQuickStats = showQuickStats;
+
+    // DOM Ready
+    $(document).ready(function() {
+        initializeApp();
+        setupEventHandlers();
+        setupFullscreenHandling();
+        loadData();
+    });
+
+    // Global exports
+    window.loadData = loadData;
+    window.exportAssignments = function() {
+        const assignments = AppState.departments.map(dept => ({
+            'Department ID': dept.id,
+            'Department Name': dept.name,
+            'HOD Name': dept.hod_name || 'Not Assigned',
+            'HOD Email': dept.hod_email || '',
+            'Status': dept.hod_id ? 'Assigned' : 'Unassigned',
+            'Last Updated': dept.updated_at || 'N/A'
+        }));
+
+        Utils.exportToCSV(assignments, `hod-assignments-${new Date().toISOString().split('T')[0]}.csv`);
+        UI.showAlert('success', 'Assignments exported successfully!');
+    };
+    window.showHelp = function() {
+        const helpHtml = `
+            <div class="modal fade" id="helpModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header bg-primary text-white">
+                            <h5 class="modal-title fw-bold">
+                                <i class="fas fa-question-circle me-2"></i>Help & Shortcuts
+                            </h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-keyboard me-2"></i>Keyboard Shortcuts</h6>
+                            <ul class="list-unstyled">
+                                <li><kbd>Ctrl+R</kbd> <span class="text-muted">Refresh all data</span></li>
+                                <li><kbd>Ctrl+S</kbd> <span class="text-muted">Submit assignment form</span></li>
+                                <li><kbd>Ctrl+B</kbd> <span class="text-muted">Toggle bulk mode</span></li>
+                                <li><kbd>Esc</kbd> <span class="text-muted">Reset form / Exit bulk mode</span></li>
+                            </ul>
+
+                            <h6><i class="fas fa-search me-2"></i>Search Features</h6>
+                            <ul class="list-unstyled">
+                                <li><i class="fas fa-check text-success me-2"></i>Real-time filtering</li>
+                                <li><i class="fas fa-eye me-2"></i>Live assignment preview</li>
+                                <li><i class="fas fa-chart-bar me-2"></i>Statistics dashboard</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-info-circle me-2"></i>How to Use</h6>
+                            <ol class="small">
+                                <li>Search or select a department from the cards below</li>
+                                <li>Choose a lecturer to assign as HOD (optional)</li>
+                                <li>Review the assignment preview</li>
+                                <li>Click "Assign HOD" to save changes</li>
+                            </ol>
+
+                            <h6><i class="fas fa-cogs me-2"></i>Features</h6>
+                            <ul class="list-unstyled small">
+                                <li><i class="fas fa-user-plus text-success me-2"></i>Auto-creates user accounts</li>
+                                <li><i class="fas fa-shield-alt text-info me-2"></i>CSRF protection</li>
+                                <li><i class="fas fa-sync-alt text-warning me-2"></i>Real-time updates</li>
+                                <li><i class="fas fa-mobile-alt text-primary me-2"></i>Mobile responsive</li>
+                            </ul>
+
+                            <h6><i class="fas fa-exclamation-triangle me-2"></i>Data Integrity</h6>
+                            <ul class="list-unstyled small">
+                                <li><i class="fas fa-times text-danger me-2"></i>Detects invalid assignments</li>
+                                <li><i class="fas fa-tools text-warning me-2"></i>Provides fix options</li>
+                                <li><i class="fas fa-chart-line text-info me-2"></i>Shows data health status</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it!</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+        $('#helpModal').remove();
+        $('body').append(helpHtml);
+
+        const modal = new bootstrap.Modal(document.getElementById('helpModal'));
+        modal.show();
+    };
+    window.toggleSidebar = function() {
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('show');
+    };
+    window.enableBulkMode = function() {
+        AppState.isBulkMode = true;
         $('#bulkModeBtn').removeClass('btn-outline-success').addClass('btn-success')
             .html('<i class="fas fa-layer-group me-2"></i>Bulk Mode Active');
         $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign to Selected');
-        this.showAlert('info', 'Bulk mode activated. Select multiple departments and choose an HOD to assign to all selected departments.', 0);
-    }
-
-    /**
-     * Disable bulk mode
-     */
-    disableBulkMode() {
-        this.state.isBulkMode = false;
-        this.state.selectedDepartments.clear();
+        UI.showAlert('info', 'Bulk mode activated. Select multiple departments and choose an HOD to assign to all selected departments.', 0);
+    };
+    window.disableBulkMode = function() {
+        AppState.isBulkMode = false;
+        AppState.selectedDepartments.clear();
         $('#bulkModeBtn').removeClass('btn-success').addClass('btn-outline-success')
             .html('<i class="fas fa-layer-group me-2"></i>Bulk Mode');
         $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign HOD');
         $('.department-card').removeClass('selected');
-        this.showAlert('info', 'Bulk mode disabled.');
-    }
-
-    /**
-     * Update bulk mode UI
-     */
-    updateBulkModeUI() {
-        const selectedCount = this.state.selectedDepartments.size;
-        if (selectedCount > 0) {
-            $('#assignBtn').html(`<i class="fas fa-save me-2"></i>Assign to ${selectedCount} Departments`);
+        UI.showAlert('info', 'Bulk mode disabled.');
+    };
+    window.toggleBulkMode = function() {
+        if (AppState.isBulkMode) {
+            window.disableBulkMode();
         } else {
-            $('#assignBtn').html('<i class="fas fa-save me-2"></i>Assign to Selected');
+            window.enableBulkMode();
         }
-    }
+    };
+    window.filterAssignments = function() {
+        UI.renderDepartments(AppState.departments);
+    };
 
-    /**
-     * API call wrapper with error handling and retries
-     */
-    async apiCall(action, data = {}) {
-        const url = `assign-hod.php?ajax=1&action=${action}`;
-
-        for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
-            try {
-                const response = await $.ajax({
-                    url: url,
-                    method: 'POST',
-                    data: { ...data, csrf_token: this.state.csrfToken },
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                });
-
-                if (response.status === 'error' && response.error_code === 'DB_ERROR') {
-                    throw new Error('Database error occurred');
-                }
-
-                return response;
-            } catch (error) {
-                console.error(`API call attempt ${attempt} failed:`, error);
-
-                if (attempt === this.config.retryAttempts) {
-                    throw error;
-                }
-
-                // Wait before retry
-                await new Promise(resolve => setTimeout(resolve, this.config.retryDelay * attempt));
-            }
-        }
-    }
-
-    /**
-     * Show alert message
-     */
-    showAlert(type, message, duration = 5000) {
-        const icon = type === 'success' ? 'check-circle' :
-                     type === 'error' ? 'exclamation-triangle' :
-                     type === 'warning' ? 'exclamation-circle' : 'info-circle';
-
-        const alertHtml = `
-            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
-                <i class="fas fa-${icon} me-2"></i>${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        `;
-
-        $(this.selectors.alertContainer).html(alertHtml);
-
-        if (duration > 0) {
-            setTimeout(() => $('.alert').alert('close'), duration);
-        }
-    }
-
-    /**
-     * Show loading overlay
-     */
-    showLoading() {
-        this.state.isLoading = true;
-        $(this.selectors.loadingOverlay).fadeIn();
-    }
-
-    /**
-     * Hide loading overlay
-     */
-    hideLoading() {
-        this.state.isLoading = false;
-        $(this.selectors.loadingOverlay).fadeOut();
-    }
-
-    /**
-     * Show global loading indicator
-     */
-    showGlobalLoading() {
-        if (!this.state.isLoading) {
-            $('#loadingOverlay').fadeIn();
-        }
-    }
-
-    /**
-     * Hide global loading indicator
-     */
-    hideGlobalLoading() {
-        if (!this.state.isLoading) {
-            $('#loadingOverlay').fadeOut();
-        }
-    }
-
-    /**
-     * Animate value change
-     */
-    animateValue(id, newValue, duration = 600) {
-        const el = document.getElementById(id);
-        if (!el) return;
-
-        const current = parseInt(el.innerText) || 0;
-        const startTime = Date.now();
-
-        const update = () => {
-            const elapsed = Date.now() - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            const easeOut = 1 - Math.pow(1 - progress, 3);
-            const value = Math.floor(current + (newValue - current) * easeOut);
-
-            el.innerText = value;
-
-            if (progress < 1) {
-                requestAnimationFrame(update);
-            } else {
-                el.innerText = newValue;
-            }
-        };
-
-        requestAnimationFrame(update);
-    }
-
-    /**
-     * Debounce function
-     */
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    /**
-     * Get CSRF token
-     */
-    getCsrfToken() {
-        return $('input[name="csrf_token"]').val() || '';
-    }
-}
-
-// Initialize when DOM is ready
-$(document).ready(() => {
-    window.hodManager = new HodAssignmentManager();
-});
-
-// Export functions for global access
-window.loadData = () => window.hodManager?.loadInitialData();
-window.fixInvalidAssignments = () => window.hodManager?.fixInvalidAssignments();
-window.exportAssignments = () => window.hodManager?.exportAssignments();
-window.showHelp = () => window.hodManager?.showHelp();
-window.toggleSidebar = () => window.hodManager?.toggleSidebar();
-window.enableBulkMode = () => window.hodManager?.enableBulkMode();
-window.toggleBulkMode = () => window.hodManager?.toggleBulkMode();
-window.filterAssignments = () => window.hodManager?.filterAssignments();
+})(window, document, jQuery);

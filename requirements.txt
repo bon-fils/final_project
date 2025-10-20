@@ -1,7 +1,30 @@
+# Face Recognition Service Requirements
+# Python dependencies for the face recognition service
+
+# Core face recognition libraries
+face-recognition==1.3.0
+opencv-python==4.8.1.78
+Pillow==10.1.0
+numpy==1.24.3
+
+# Web framework
 Flask==2.3.3
 Flask-CORS==4.0.0
-face_recognition==1.3.0
-Pillow==10.0.1
-numpy==1.24.3
+
+# Database connectivity
 mysql-connector-python==8.1.0
+
+# Caching
+redis==4.6.0
+
+# Image processing
+scikit-image==0.21.0
+
+# Additional utilities
 python-dotenv==1.0.0
+requests==2.31.0
+
+# Development and testing
+pytest==7.4.2
+black==23.9.1
+flake8==6.0.0

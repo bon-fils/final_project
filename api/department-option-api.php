@@ -38,9 +38,8 @@ try {
     // Handle connectivity check (no action specified)
     if (empty($action)) {
         echo json_encode([
-            'success' => true,
-            'message' => 'API connectivity check successful',
-            'timestamp' => date('Y-m-d H:i:s')
+            'status' => 'success',
+            'message' => 'API connectivity check successful'
         ]);
         exit;
     }
@@ -69,9 +68,8 @@ try {
 } catch (Exception $e) {
     http_response_code(400);
     echo json_encode([
-        'success' => false,
-        'message' => $e->getMessage(),
-        'timestamp' => date('Y-m-d H:i:s')
+        'status' => 'error',
+        'message' => $e->getMessage()
     ]);
 }
 
@@ -90,11 +88,10 @@ function handleGetOptions() {
         // For registration page (unauthenticated), return empty result for connectivity check
         if (!isset($_SESSION['role'])) {
             echo json_encode([
-                'success' => true,
+                'status' => 'success',
                 'data' => [],
                 'count' => 0,
-                'message' => 'No department specified for options retrieval',
-                'timestamp' => date('Y-m-d H:i:s')
+                'message' => 'No department specified for options retrieval'
             ]);
             return;
         }
@@ -113,12 +110,10 @@ function handleGetOptions() {
             $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             echo json_encode([
-                'success' => true,
+                'status' => 'success',
                 'data' => $options,
                 'count' => count($options),
-                'message' => count($options) === 1 ? '1 option found' : count($options) . ' options found',
-                'admin_mode' => true,
-                'timestamp' => date('Y-m-d H:i:s')
+                'message' => count($options) === 1 ? '1 option found' : count($options) . ' options found'
             ]);
             return;
         }
@@ -168,23 +163,19 @@ function handleGetOptions() {
         // Check if any options exist
         if (empty($options)) {
             echo json_encode([
-                'success' => true,
-                'department_id' => $departmentId,
-                'department_name' => $department['name'],
-                'options' => [],
+                'status' => 'success',
+                'data' => [],
                 'count' => 0,
-                'message' => 'No active programs found for this department',
-                'timestamp' => date('Y-m-d H:i:s')
+                'message' => 'No active programs found for this department'
             ]);
             return;
         }
 
         echo json_encode([
-            'success' => true,
+            'status' => 'success',
             'data' => $options,
             'count' => count($options),
-            'message' => count($options) === 1 ? '1 option found' : count($options) . ' options found',
-            'timestamp' => date('Y-m-d H:i:s')
+            'message' => count($options) === 1 ? '1 option found' : count($options) . ' options found'
         ]);
 
     } catch (PDOException $e) {
