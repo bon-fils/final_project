@@ -12,21 +12,48 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
 // Get HoD information and verify department assignment
 $user_id = $_SESSION['user_id'];
 try {
-    // First get the department by joining through lecturers table since hod_id stores lecturer ID
+    // First, check if the user has a lecturer record
+    $lecturer_stmt = $pdo->prepare("SELECT id FROM lecturers WHERE user_id = ?");
+    $lecturer_stmt->execute([$user_id]);
+    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$lecturer) {
+        // HOD user doesn't have a lecturer record - create one or redirect to setup
+        error_log("HOD user $user_id doesn't have a lecturer record");
+        header("Location: login_new.php?error=not_assigned");
+        exit;
+    }
+    
+    $lecturer_id = $lecturer['id'];
+    
+    // Now get the department where this lecturer is assigned as HOD
     $stmt = $pdo->prepare("
-        SELECT d.name as department_name, d.id as department_id
+        SELECT d.name as department_name, d.id as department_id, l.first_name, l.last_name
         FROM departments d
         JOIN lecturers l ON d.hod_id = l.id
-        JOIN users u ON l.user_id = u.id AND u.role = 'hod'
-        WHERE u.id = ?
+        WHERE l.id = ? AND d.hod_id IS NOT NULL
     ");
-    $stmt->execute([$user_id]);
+    $stmt->execute([$lecturer_id]);
     $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$dept_result) {
-        // User is HOD but not assigned to any department - deny access
-        header("Location: login_new.php?error=not_assigned");
-        exit;
+        // Alternative approach: Check if user is assigned to any department as HOD by email/user matching
+        $alt_stmt = $pdo->prepare("
+            SELECT d.name as department_name, d.id as department_id, u.first_name, u.last_name
+            FROM departments d
+            JOIN lecturers l ON d.hod_id = l.id
+            JOIN users u ON (l.email = u.email OR l.user_id = u.id)
+            WHERE u.id = ? AND u.role = 'hod'
+        ");
+        $alt_stmt->execute([$user_id]);
+        $dept_result = $alt_stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$dept_result) {
+            // User is HOD but not assigned to any department - deny access
+            error_log("HOD user $user_id (lecturer_id: $lecturer_id) is not assigned to any department");
+            header("Location: login_new.php?error=not_assigned");
+            exit;
+        }
     }
 
     $department_name = $dept_result['department_name'];

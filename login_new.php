@@ -13,7 +13,7 @@ $success = "";
 if (isset($_GET['error'])) {
     switch ($_GET['error']) {
         case 'not_assigned':
-            $error = "You are not assigned to any department. Please contact an administrator.";
+            $error = "You are not assigned to any department as HOD. Please contact an administrator to assign you to a department.";
             break;
         case 'access_denied':
             $error = "Access denied. Please log in with appropriate credentials.";

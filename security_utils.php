@@ -5,6 +5,7 @@
  * Version: 1.0
  */
 
+if (!class_exists('SecurityUtils')) {
 class SecurityUtils {
     
     /**
@@ -221,4 +222,5 @@ class SecurityUtils {
         
         return $rateLimit['count'] <= $maxRequests;
     }
+}
 }

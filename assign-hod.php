@@ -215,34 +215,71 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
     <!-- Main Content -->
     <div class="main-content" id="main-content">
         <div class="topbar">
-            <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center">
-                    <h2 class="mb-0">
-                        <i class="fas fa-user-tie me-3"></i>Assign Head of Department
-                    </h2>
-                </div>
-                <div class="d-flex gap-2 align-items-center flex-wrap">
-                    <div class="badge bg-primary fs-6 px-3 py-2">
-                        <i class="fas fa-clock me-1"></i>Live Updates
+            <div class="container-fluid">
+                <div class="row align-items-center">
+                    <div class="col-lg-6 col-md-12">
+                        <div class="page-header">
+                            <h1 class="page-title mb-0">
+                                <i class="fas fa-user-tie me-2 text-primary"></i>
+                                <span class="title-main">HOD Assignment</span>
+                            </h1>
+                            <p class="page-subtitle text-muted mb-0">
+                                <i class="fas fa-building me-1"></i>Department Management System
+                            </p>
+                        </div>
                     </div>
-                    <div class="badge bg-success fs-6 px-3 py-2">
-                        <i class="fas fa-user-shield me-1"></i>Admin
+                    <div class="col-lg-6 col-md-12">
+                        <div class="topbar-actions d-flex justify-content-lg-end justify-content-center mt-3 mt-lg-0">
+                            <!-- Status Indicators -->
+                            <div class="status-indicators me-3 d-none d-md-flex">
+                                <div class="badge bg-primary bg-gradient px-3 py-2 me-2">
+                                    <i class="fas fa-wifi me-1"></i>Live
+                                </div>
+                                <div class="badge bg-success bg-gradient px-3 py-2">
+                                    <i class="fas fa-user-shield me-1"></i>Admin
+                                </div>
+                            </div>
+                            
+                            <!-- Primary Actions -->
+                            <div class="btn-group me-2">
+                                <button class="btn btn-primary" onclick="loadData()" id="refreshBtn" title="Refresh data">
+                                    <i class="fas fa-sync-alt me-1"></i>
+                                    <span class="d-none d-sm-inline" id="refreshText">Refresh</span>
+                                </button>
+                            </div>
+                            
+                            <!-- Secondary Actions Dropdown -->
+                            <div class="dropdown">
+                                <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="More actions">
+                                    <i class="fas fa-ellipsis-v"></i>
+                                    <span class="d-none d-md-inline ms-1">Actions</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow">
+                                    <li>
+                                        <a class="dropdown-item" href="#" onclick="exportAssignments()" title="Export assignments to CSV">
+                                            <i class="fas fa-download me-2 text-info"></i>Export Data
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item" href="#" onclick="showQuickStats()" title="Show quick statistics">
+                                            <i class="fas fa-chart-bar me-2 text-success"></i>Statistics
+                                        </a>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <a class="dropdown-item" href="#" onclick="fixInvalidAssignments()" id="fixInvalidMenuItem" style="display: none;" title="Fix invalid assignments">
+                                            <i class="fas fa-tools me-2 text-warning"></i>Fix Invalid
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item" href="#" onclick="showHelp()" title="Show help">
+                                            <i class="fas fa-question-circle me-2 text-primary"></i>Help & Support
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
-                    <button class="btn btn-outline-warning btn-sm" onclick="fixInvalidAssignments()" title="Fix invalid assignments" id="fixInvalidBtn" style="display: none;">
-                        <i class="fas fa-tools me-1"></i>Fix Invalid
-                    </button>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="exportAssignments()" title="Export assignments to CSV">
-                        <i class="fas fa-download me-1"></i>Export
-                    </button>
-                    <button class="btn btn-outline-info btn-sm" onclick="showHelp()" title="Show help">
-                        <i class="fas fa-question-circle"></i>
-                    </button>
-                    <button class="btn btn-success btn-sm" id="quickStatsBtn" onclick="showQuickStats()" title="Show quick statistics">
-                        <i class="fas fa-chart-bar me-1"></i>Stats
-                    </button>
-                    <button class="btn btn-primary btn-sm" onclick="loadData()" id="refreshBtn">
-                        <i class="fas fa-sync-alt me-1"></i><span id="refreshText">Refresh</span>
-                    </button>
                 </div>
             </div>
         </div>
@@ -250,35 +287,65 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         <!-- Alert Messages -->
         <div id="alertContainer" class="container-fluid mt-3"></div>
 
-        <!-- Statistics Cards -->
+        <!-- Enhanced Statistics Cards -->
         <div class="container-fluid mt-4">
-            <div class="row g-4 mb-5">
-                <div class="col-xl-3 col-lg-6 col-md-6">
-                    <div class="stats-card fade-in">
-                        <i class="fas fa-building text-primary"></i>
-                        <h3 id="totalDepartments" aria-live="polite">0</h3>
-                        <p>Total Departments</p>
+            <div class="stats-section mb-5">
+                <div class="row g-3">
+                    <div class="col-lg-3 col-md-6 col-sm-6">
+                        <div class="stat-card stat-card-primary fade-in">
+                            <div class="stat-icon">
+                                <i class="fas fa-building"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="totalDepartments" aria-live="polite">0</h3>
+                                <p class="stat-label">Total Departments</p>
+                                <small class="stat-change text-muted">
+                                    <i class="fas fa-info-circle me-1"></i>System wide
+                                </small>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="col-xl-3 col-lg-6 col-md-6">
-                    <div class="stats-card fade-in">
-                        <i class="fas fa-user-check text-success"></i>
-                        <h3 id="assignedDepartments" aria-live="polite">0</h3>
-                        <p>Assigned HODs</p>
+                    <div class="col-lg-3 col-md-6 col-sm-6">
+                        <div class="stat-card stat-card-success fade-in">
+                            <div class="stat-icon">
+                                <i class="fas fa-user-check"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="assignedDepartments" aria-live="polite">0</h3>
+                                <p class="stat-label">Assigned HODs</p>
+                                <small class="stat-change text-muted">
+                                    <i class="fas fa-check-circle me-1"></i>Active assignments
+                                </small>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="col-xl-3 col-lg-6 col-md-6">
-                    <div class="stats-card fade-in">
-                        <i class="fas fa-chalkboard-teacher text-info"></i>
-                        <h3 id="totalLecturers" aria-live="polite">0</h3>
-                        <p>Available Lecturers</p>
+                    <div class="col-lg-3 col-md-6 col-sm-6">
+                        <div class="stat-card stat-card-info fade-in">
+                            <div class="stat-icon">
+                                <i class="fas fa-chalkboard-teacher"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="totalLecturers" aria-live="polite">0</h3>
+                                <p class="stat-label">Available Lecturers</p>
+                                <small class="stat-change text-muted">
+                                    <i class="fas fa-users me-1"></i>Eligible for HOD
+                                </small>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="col-xl-3 col-lg-6 col-md-6">
-                    <div class="stats-card fade-in">
-                        <i class="fas fa-exclamation-triangle text-warning"></i>
-                        <h3 id="unassignedDepartments" aria-live="polite">0</h3>
-                        <p>Unassigned Departments</p>
+                    <div class="col-lg-3 col-md-6 col-sm-6">
+                        <div class="stat-card stat-card-warning fade-in">
+                            <div class="stat-icon">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </div>
+                            <div class="stat-content">
+                                <h3 id="unassignedDepartments" aria-live="polite">0</h3>
+                                <p class="stat-label">Unassigned Departments</p>
+                                <small class="stat-change text-muted">
+                                    <i class="fas fa-clock me-1"></i>Needs attention
+                                </small>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
