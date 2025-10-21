@@ -40,7 +40,7 @@ if (empty($departments)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="connect-src 'self' http://192.168.137.194:80 https://192.168.137.194:80 ws://192.168.137.194:80 wss://192.168.137.194:80 http://192.168.1.127; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; default-src 'self';">
+    <meta http-equiv="Content-Security-Policy" content="connect-src 'self' http://192.168.137.40:80 https://192.168.137.40:80 ws://192.168.137.40:80 wss://192.168.137.40:80 http://192.168.1.127; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; default-src 'self';">
     <title>Student Registration - Rwanda Polytechnic</title>
 
     <!-- Bootstrap CSS -->
@@ -2035,7 +2035,7 @@ class StudentRegistration {
             this.showAlert('🔍 Checking ESP32 connection...', 'info');
 
             const statusResponse = await this.ajax({
-                url: 'http://192.168.137.194:80/status',
+                url: 'http://192.168.137.40:80/status',
                 method: 'GET',
                 timeout: 5000
             });
@@ -2059,7 +2059,7 @@ class StudentRegistration {
 
             // Step 2: Send instruction to ESP32 display
             await this.ajax({
-                url: 'http://192.168.137.194:80/display',
+                url: 'http://192.168.137.40:80/display',
                 method: 'GET',
                 data: { message: 'Place finger on sensor...' },
                 timeout: 3000
@@ -2101,7 +2101,7 @@ class StudentRegistration {
                 try {
                     // Query ESP32 for fingerprint detection
                     const response = await this.ajax({
-                        url: 'http://192.168.137.194:80/identify',
+                        url: 'http://192.168.137.40:80/identify',
                         method: 'GET',
                         timeout: 1500
                     });
@@ -2124,7 +2124,7 @@ class StudentRegistration {
 
                         // Send confirmation to ESP32 display
                         await this.ajax({
-                            url: 'http://192.168.137.194:80/display',
+                            url: 'http://192.168.137.40:80/display',
                             method: 'GET',
                             data: { message: 'Fingerprint captured!' },
                             timeout: 2000
@@ -2882,7 +2882,7 @@ class StudentRegistration {
 
             // Step 3: Send enrollment command to ESP32
             const enrollResponse = await this.ajax({
-                url: 'http://192.168.137.194:80/enroll',
+                url: 'http://192.168.137.40:80/enroll',
                 method: 'POST',
                 data: {
                     id: fingerprintId,
@@ -2907,7 +2907,7 @@ class StudentRegistration {
 
                 // Step 5: Update ESP32 display with success
                 await this.ajax({
-                    url: 'http://192.168.137.194:80/display',
+                    url: 'http://192.168.137.40:80/display',
                     method: 'GET',
                     data: { message: 'Enrollment complete!' },
                     timeout: 3000
@@ -2929,7 +2929,7 @@ class StudentRegistration {
             // Try to update ESP32 display with error
             try {
                 await this.ajax({
-                    url: 'http://192.168.137.194:80/display',
+                    url: 'http://192.168.137.40:80/display',
                     method: 'GET',
                     data: { message: 'Enrollment failed' },
                     timeout: 2000

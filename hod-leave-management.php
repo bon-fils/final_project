@@ -11,73 +11,100 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
 
 require_role(['hod']);
 
-// Get HoD department info by joining through lecturers table
-$hod_id = $_SESSION['user_id'];
+// Get HoD information and verify department assignment
+$user_id = $_SESSION['user_id'];
+$department_name = null;
+$department_id = null;
 try {
-    $deptStmt = $pdo->prepare("
-        SELECT d.id, d.name
-        FROM departments d
-        JOIN lecturers l ON d.hod_id = l.id
-        JOIN users u ON l.email = u.email AND u.role = 'hod'
-        WHERE u.id = ?
-    ");
-    $deptStmt->execute([$hod_id]);
-    $department = $deptStmt->fetch(PDO::FETCH_ASSOC);
+    // First, check if the user has a lecturer record
+    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
+    $lecturer_stmt->execute([$user_id]);
+    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer) {
+        // HOD user doesn't have a lecturer record
+        echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
+        echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Access Denied</h3>";
+        echo "<p>You are not registered as a lecturer. Please contact administrator.</p>";
+        echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
+        echo "</div>";
+        exit;
+    } else {
+        $lecturer_id = $lecturer['id'];
+
+        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
+        $dept_result = null;
+
+        // Approach 1: Correct way - hod_id points to lecturers.id
+        $stmt = $pdo->prepare("
+            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
+            FROM departments d
+            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+        ");
+        $stmt->execute([$lecturer_id]);
+        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
+        if (!$dept_result) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
+                FROM departments d
+                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$user_id]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // If found via legacy method, log it for potential data fix
+            if ($dept_result) {
+                error_log("HOD Leave Management: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
+            }
+        }
+
+        // Approach 3: Check if lecturer's department_id matches any department's hod_id
+        if (!$dept_result && $lecturer['department_id']) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
+                FROM departments d
+                WHERE d.id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$lecturer['department_id']]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$dept_result) {
+            // User is HOD but not assigned to any department
+            echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
+            echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Department Not Assigned</h3>";
+            echo "<p>You are not assigned as Head of Department for any department. Please contact administrator.</p>";
+            echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
+            echo "</div>";
+            exit;
+        } else {
+            $department_name = $dept_result['department_name'];
+            $department_id = $dept_result['department_id'];
+
+            // Get user information
+            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            $user['department_name'] = $department_name;
+            $user['department_id'] = $department_id;
+
+            // Log match type for debugging
+            error_log("HOD Leave Management: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
+
+            // Set the department variable for backward compatibility
+            $department = ['id' => $department_id, 'name' => $department_name];
+        }
+    }
 } catch (PDOException $e) {
     error_log("Database error in hod-leave-management.php: " . $e->getMessage());
     echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
     echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Database Error</h3>";
     echo "<p>There was an error connecting to the database. Please try again later.</p>";
+    echo "<p>Error: " . htmlspecialchars($e->getMessage()) . "</p>";
     echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
     echo "</div>";
-    exit;
-}
-
-if (!$department) {
-    // Debug information
-    error_log("Department not found for HoD ID: $hod_id in leave management");
-    error_log("Session data: " . print_r($_SESSION, true));
-
-    // Check if departments table exists and has data
-    $checkStmt = $pdo->prepare("SELECT COUNT(*) as count FROM departments");
-    $checkStmt->execute();
-    $deptCount = $checkStmt->fetch(PDO::FETCH_ASSOC);
-
-    error_log("Total departments in database: " . $deptCount['count']);
-
-    if ($deptCount['count'] > 0) {
-        $deptListStmt = $pdo->prepare("SELECT id, name, hod_id FROM departments");
-        $deptListStmt->execute();
-        $departments = $deptListStmt->fetchAll(PDO::FETCH_ASSOC);
-        error_log("Available departments: " . print_r($departments, true));
-    }
-
-    echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
-    echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Department Not Found</h3>";
-    echo "<p>It appears you are not properly assigned as Head of Department for any department.</p>";
-    echo "<p><strong>Debug Information:</strong></p>";
-    echo "<ul>";
-    echo "<li>Your User ID: <strong>$hod_id</strong></li>";
-    echo "<li>Your Role: <strong>" . ($_SESSION['role'] ?? 'Not set') . "</strong></li>";
-    echo "<li>Total Departments: <strong>" . $deptCount['count'] . "</strong></li>";
-    echo "</ul>";
-
-    if ($deptCount['count'] > 0) {
-        echo "<p><strong>Available Departments:</strong></p>";
-        echo "<ul>";
-        foreach ($departments as $dept) {
-            echo "<li>{$dept['name']} (ID: {$dept['id']}, HoD ID: {$dept['hod_id']})</li>";
-        }
-        echo "</ul>";
-        echo "<p><strong>Solution:</strong> Please contact your administrator to assign you as HoD for a department.</p>";
-    } else {
-        echo "<p><strong>Solution:</strong> No departments exist in the system. Please contact your administrator to create departments first.</p>";
-    }
-
-    echo "<hr style='margin: 20px 0;'>";
-    echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
-    echo "</div>";
-
     exit;
 }
 
@@ -518,8 +545,8 @@ body {
 </head>
 <body>
 
-<!-- Include Admin Sidebar -->
-<?php include 'includes/admin-sidebar.php'; ?>
+<!-- Include HOD Sidebar -->
+<?php include 'includes/hod_sidebar.php'; ?>
 
 <div class="topbar">
     <div class="d-flex align-items-center justify-content-end">

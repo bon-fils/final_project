@@ -178,21 +178,21 @@ const API = {
     },
 
     async getDepartments() {
-        return this.call('department-option-api.php?action=get_departments');
+        return this.call('get-departments.php');
     },
 
     async getOptions(departmentId) {
-        return this.call(`department-option-api.php?action=get_options&department_id=${departmentId}`, {
+        return this.call(`get-options.php?department_id=${departmentId}`, {
             method: 'GET'
         });
     },
 
     async getCourses(departmentId, optionId) {
-        return this.call(`assign-courses-api.php?action=get_courses&department_id=${departmentId}&option_id=${optionId}`);
+        return this.call(`get-courses.php?department_id=${departmentId}&option_id=${optionId}`);
     },
 
     async startSession(sessionData) {
-        return this.call('attendance-session-api.php?action=start_session', {
+        return this.call('start-session.php', {
             method: 'POST',
             body: JSON.stringify(sessionData)
         });

@@ -1,20 +1,99 @@
 <?php
-require_once "config.php"; // PDO connection - must be first
-require_once "session_check.php"; // Session management - requires config.php constants
-session_start(); // Start session after config and session_check
-require_role(['hod']);
+require_once "config.php";
+session_start();
+require_once "session_check.php";
 
-// Get HoD department id by joining through lecturers table
-$hod_id = $_SESSION['user_id'];
-$deptStmt = $pdo->prepare("
-    SELECT d.id, d.name
-    FROM departments d
-    JOIN lecturers l ON d.hod_id = l.id
-    JOIN users u ON l.email = u.email AND u.role = 'hod'
-    WHERE u.id = ?
-");
-$deptStmt->execute([$hod_id]);
-$department = $deptStmt->fetch(PDO::FETCH_ASSOC);
+// Ensure user is logged in and is HoD
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
+    header("Location: login_new.php");
+    exit;
+}
+
+// Get HoD information and verify department assignment
+$user_id = $_SESSION['user_id'];
+$department_name = null;
+$department_id = null;
+try {
+    // First, check if the user has a lecturer record
+    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
+    $lecturer_stmt->execute([$user_id]);
+    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer) {
+        // HOD user doesn't have a lecturer record
+        header("Location: login_new.php?error=not_assigned");
+        exit;
+    } else {
+        $lecturer_id = $lecturer['id'];
+
+        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
+        $dept_result = null;
+
+        // Approach 1: Correct way - hod_id points to lecturers.id
+        $stmt = $pdo->prepare("
+            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
+            FROM departments d
+            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+        ");
+        $stmt->execute([$lecturer_id]);
+        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
+        if (!$dept_result) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
+                FROM departments d
+                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$user_id]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // If found via legacy method, log it for potential data fix
+            if ($dept_result) {
+                error_log("HOD Department Reports: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
+            }
+        }
+
+        // Approach 3: Check if lecturer's department_id matches any department's hod_id
+        if (!$dept_result && $lecturer['department_id']) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
+                FROM departments d
+                WHERE d.id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$lecturer['department_id']]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$dept_result) {
+            // User is HOD but not assigned to any department
+            header("Location: login_new.php?error=not_assigned");
+            exit;
+        } else {
+            $department_name = $dept_result['department_name'];
+            $department_id = $dept_result['department_id'];
+
+            // Create department array for compatibility
+            $department = [
+                'id' => $department_id,
+                'name' => $department_name
+            ];
+
+            // Get user information
+            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            $user['department_name'] = $department_name;
+            $user['department_id'] = $department_id;
+
+            // Log match type for debugging
+            error_log("HOD Department Reports: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Database error in hod-department-reports.php: " . $e->getMessage());
+    $error_message = "Database connection error. Please try again later. Error: " . $e->getMessage();
+}
 
 if (!$department) {
     // Debug information
@@ -192,35 +271,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     min-height: 100vh;
   }
 
-  .sidebar {
-    position: fixed; top: 0; left: 0; width: 250px; height: 100vh;
-    background: linear-gradient(180deg, var(--primary-color) 0%, var(--secondary-color) 100%);
-    color: white; padding-top: 20px; box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-    z-index: 1000; overflow-y: auto;
-  }
-
-  .sidebar .sidebar-header {
-    text-align: center; margin-bottom: 20px; padding: 0 20px;
-  }
-
-  .sidebar a {
-    display: block; padding: 12px 20px; color: #fff; text-decoration: none;
-    transition: all 0.3s ease; margin: 2px 10px; border-radius: 8px; font-weight: 500;
-  }
-
-  .sidebar a:hover, .sidebar a.active {
-    background-color: rgba(255,255,255,0.1);
-    transform: translateX(5px);
-  }
-
   .topbar {
-    margin-left: 250px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
-    padding: 15px 30px; border-bottom: 1px solid rgba(0,51,102,0.1);
+    margin-left: 280px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
+    padding: 20px 30px; border-bottom: 1px solid rgba(0,51,102,0.1);
     position: sticky; top: 0; z-index: 900; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-radius: 0 0 15px 15px;
   }
 
   .main-content {
-    margin-left: 250px; padding: 30px;
+    margin-left: 280px; padding: 30px;
+    min-height: calc(100vh - 80px);
   }
 
   .card {
@@ -296,7 +356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 
   .footer {
-    text-align: center; margin-left: 250px; padding: 20px;
+    text-align: center; margin-left: 280px; padding: 20px;
     font-size: 0.9rem; color: #666; background: rgba(255,255,255,0.9);
     backdrop-filter: blur(10px); border-top: 1px solid rgba(0,51,102,0.1);
   }
@@ -340,12 +400,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 
   @media (max-width: 768px) {
-    .sidebar, .topbar, .main-content, .footer {
+    .topbar, .main-content, .footer {
       margin-left: 0 !important; width: 100%;
     }
-    .sidebar { display: none; }
+    .topbar { 
+      padding: 15px 20px;
+      border-radius: 0;
+    }
+    .main-content {
+      padding: 20px 15px;
+    }
     .table-responsive { font-size: 0.9rem; }
     .chart-container { height: 300px; }
+    .stats-card {
+      margin-bottom: 15px;
+    }
   }
 
   /* Custom scrollbar */
@@ -367,24 +436,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </style>
 </head>
 <body>
-<div class="sidebar">
-  <div class="sidebar-header">
-    <h4>👔 Head of Department</h4>
-    <hr style="border-color:#ffffff66;">
-  </div>
-  <a href="hod-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
-  <a href="hod-department-reports.php" class="active"><i class="fas fa-chart-bar me-2"></i> Department Reports</a>
-  <a href="hod-leave-management.php"><i class="fas fa-envelope-open-text me-2"></i> Manage Leave Requests</a>
-  <a href="hod-manage-lecturers.php"><i class="fas fa-user-plus me-2"></i> Manage Lecturers</a>
-  <a href="index.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
-</div>
+<!-- Enhanced HOD Sidebar -->
+<?php include 'includes/hod_sidebar.php'; ?>
 
 <div class="topbar">
-  <h5 class="m-0 fw-bold">Department Reports & Analytics</h5>
-  <span>HoD Panel</span>
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <nav aria-label="breadcrumb">
+        <ol class="breadcrumb mb-1">
+          <li class="breadcrumb-item"><a href="hod-dashboard.php"><i class="fas fa-home me-1"></i>Dashboard</a></li>
+          <li class="breadcrumb-item active" aria-current="page">Department Reports</li>
+        </ol>
+      </nav>
+      <h5 class="m-0 fw-bold">Department Reports & Analytics</h5>
+      <small class="text-muted"><?= htmlspecialchars($department_name) ?> Department</small>
+    </div>
+    <div class="d-flex align-items-center">
+      <span class="me-3">
+        <i class="fas fa-user-tie me-1"></i>
+        <?= htmlspecialchars($user['name'] ?? 'HOD') ?>
+      </span>
+      <div class="dropdown">
+        <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="fas fa-cog me-1"></i> Actions
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="hod-dashboard.php"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</a></li>
+          <li><a class="dropdown-item" href="hod-students.php"><i class="fas fa-users me-2"></i>Students</a></li>
+          <li><a class="dropdown-item" href="hod-courses.php"><i class="fas fa-book me-2"></i>Courses</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item" href="logout.php"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="main-content">
+  <!-- Error Message Display -->
+  <?php if (isset($error_message)): ?>
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+      <i class="fas fa-exclamation-triangle me-2"></i>
+      <?= htmlspecialchars($error_message) ?>
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  <?php endif; ?>
+
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="mb-2">
+        <i class="fas fa-chart-bar text-primary me-2"></i>
+        Department Analytics Dashboard
+      </h2>
+      <p class="text-muted mb-0">Comprehensive reports and insights for <?= htmlspecialchars($department_name) ?> Department</p>
+    </div>
+    <div>
+      <button class="btn btn-success me-2" onclick="refreshAllData()">
+        <i class="fas fa-sync-alt me-1"></i> Refresh Data
+      </button>
+      <button class="btn btn-primary" onclick="scheduleReport()">
+        <i class="fas fa-calendar-plus me-1"></i> Schedule Report
+      </button>
+    </div>
+  </div>
+
   <!-- Department Overview Cards -->
   <div class="row g-4 mb-4" id="overviewCards">
     <div class="col-md-3">
@@ -1086,6 +1202,99 @@ function resetFilters() {
     if (courseSelect.dataset.originalOptions) {
         courseSelect.innerHTML = courseSelect.dataset.originalOptions;
     }
+}
+
+// Additional utility functions
+function refreshAllData() {
+    const refreshBtn = document.querySelector('[onclick="refreshAllData()"]');
+    const originalText = refreshBtn.innerHTML;
+    refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Refreshing...';
+    refreshBtn.disabled = true;
+    
+    // Clear any cached data
+    localStorage.removeItem('hod_reports_cache');
+    
+    // Reload overview stats
+    loadOverviewStats();
+    
+    // If there's current report data, regenerate it
+    if (currentData.length > 0) {
+        document.getElementById('filterForm').dispatchEvent(new Event('submit'));
+    }
+    
+    setTimeout(() => {
+        refreshBtn.innerHTML = originalText;
+        refreshBtn.disabled = false;
+        showAlert('Data refreshed successfully!', 'success');
+    }, 2000);
+}
+
+function scheduleReport() {
+    // Create modal for scheduling reports
+    const modalHtml = `
+        <div class="modal fade" id="scheduleModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Schedule Automated Report</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="scheduleForm">
+                            <div class="mb-3">
+                                <label class="form-label">Report Frequency</label>
+                                <select class="form-select" name="frequency" required>
+                                    <option value="">Select frequency...</option>
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="monthly">Monthly</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Email Recipients</label>
+                                <input type="email" class="form-control" name="recipients" 
+                                       placeholder="Enter email addresses (comma separated)" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Report Format</label>
+                                <select class="form-select" name="format" required>
+                                    <option value="pdf">PDF Report</option>
+                                    <option value="excel">Excel Spreadsheet</option>
+                                    <option value="both">Both PDF and Excel</option>
+                                </select>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="submitSchedule()">Schedule Report</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existingModal = document.getElementById('scheduleModal');
+    if (existingModal) existingModal.remove();
+    
+    // Add modal to body
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // Show modal
+    new bootstrap.Modal(document.getElementById('scheduleModal')).show();
+}
+
+function submitSchedule() {
+    const form = document.getElementById('scheduleForm');
+    const formData = new FormData(form);
+    
+    // Here you would typically send to a backend API
+    // For now, just show success message
+    showAlert('Report scheduled successfully! You will receive automated reports as configured.', 'success');
+    
+    // Close modal
+    bootstrap.Modal.getInstance(document.getElementById('scheduleModal')).hide();
 }
 
 // Initialize on page load

@@ -11,69 +11,99 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
 
 // Get HoD information and verify department assignment
 $user_id = $_SESSION['user_id'];
+$department_name = null;
+$department_id = null;
+$hod_info = null;
+
 try {
     // First, check if the user has a lecturer record
-    $lecturer_stmt = $pdo->prepare("SELECT id FROM lecturers WHERE user_id = ?");
+    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
     $lecturer_stmt->execute([$user_id]);
     $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$lecturer) {
-        // HOD user doesn't have a lecturer record - create one or redirect to setup
-        error_log("HOD user $user_id doesn't have a lecturer record");
-        header("Location: login_new.php?error=not_assigned");
-        exit;
-    }
-    
-    $lecturer_id = $lecturer['id'];
-    
-    // Now get the department where this lecturer is assigned as HOD
-    $stmt = $pdo->prepare("
-        SELECT d.name as department_name, d.id as department_id, l.first_name, l.last_name
-        FROM departments d
-        JOIN lecturers l ON d.hod_id = l.id
-        WHERE l.id = ? AND d.hod_id IS NOT NULL
-    ");
-    $stmt->execute([$lecturer_id]);
-    $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$dept_result) {
-        // Alternative approach: Check if user is assigned to any department as HOD by email/user matching
-        $alt_stmt = $pdo->prepare("
-            SELECT d.name as department_name, d.id as department_id, u.first_name, u.last_name
+    if (!$lecturer) {
+        // HOD user doesn't have a lecturer record
+        $error_message = "You are not registered as a lecturer. Please contact administrator.";
+    } else {
+        $lecturer_id = $lecturer['id'];
+
+        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
+        $dept_result = null;
+
+        // Approach 1: Correct way - hod_id points to lecturers.id
+        $stmt = $pdo->prepare("
+            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
             FROM departments d
-            JOIN lecturers l ON d.hod_id = l.id
-            JOIN users u ON (l.email = u.email OR l.user_id = u.id)
-            WHERE u.id = ? AND u.role = 'hod'
+            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
         ");
-        $alt_stmt->execute([$user_id]);
-        $dept_result = $alt_stmt->fetch(PDO::FETCH_ASSOC);
-        
+        $stmt->execute([$lecturer_id]);
+        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
         if (!$dept_result) {
-            // User is HOD but not assigned to any department - deny access
-            error_log("HOD user $user_id (lecturer_id: $lecturer_id) is not assigned to any department");
-            header("Location: login_new.php?error=not_assigned");
-            exit;
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
+                FROM departments d
+                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$user_id]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // If found via legacy method, log it for potential data fix
+            if ($dept_result) {
+                error_log("HOD Dashboard: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
+            }
+        }
+
+        // Approach 3: Check if lecturer's department_id matches any department's hod_id
+        if (!$dept_result && $lecturer['department_id']) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
+                FROM departments d
+                WHERE d.id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$lecturer['department_id']]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$dept_result) {
+            // User is HOD but not assigned to any department
+            $error_message = "You are not assigned as Head of Department for any department. Please contact administrator.";
+        } else {
+            $department_name = $dept_result['department_name'];
+            $department_id = $dept_result['department_id'];
+
+            // Get user information
+            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            $user['department_name'] = $department_name;
+            $user['department_id'] = $department_id;
+
+            // Store HOD information for backend use
+            $hod_info = [
+                'user_id' => $user_id,
+                'lecturer_id' => $lecturer_id,
+                'department_id' => $department_id,
+                'department_name' => $department_name,
+                'name' => $user['name'],
+                'email' => $user['email'],
+                'match_type' => $dept_result['match_type']
+            ];
+
+            // Log match type for debugging
+            error_log("HOD Dashboard: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
         }
     }
 
-    $department_name = $dept_result['department_name'];
-    $department_id = $dept_result['department_id'];
-
-    // Get user information
-    $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
-    $stmt->execute([$user_id]);
-    $user = $stmt->fetch(PDO::FETCH_ASSOC);
-    $user['department_name'] = $department_name;
-    $user['department_id'] = $department_id;
-
-    if (!$user) {
+    if (!$user && !$error_message) {
         error_log("HoD user not found: User ID $user_id");
         header("Location: login_new.php");
         exit;
     }
 } catch (PDOException $e) {
     error_log("Database error in hod-dashboard.php: " . $e->getMessage());
-    $error_message = "Database connection error. Please try again later.";
+    $error_message = "Database connection error. Please try again later. Error: " . $e->getMessage();
 }
 
 // Get enhanced dynamic statistics with caching and performance monitoring
@@ -83,7 +113,7 @@ $cache_time = 300; // 5 minutes cache
 
 try {
     // Check cache first
-    if (file_exists($cache_file) && (time() - filemtime($cache_file)) < $cache_time && isset($department_id)) {
+    if (file_exists($cache_file) && (time() - filemtime($cache_file)) < $cache_time && $department_id) {
         $cached_stats = json_decode(file_get_contents($cache_file), true);
         if ($cached_stats) {
             $stats = $cached_stats;
@@ -91,7 +121,7 @@ try {
     }
 
     // Fetch fresh data if not cached or cache expired
-    if (empty($stats) && isset($department_id)) {
+    if (empty($stats) && $department_id) {
         $start_time = microtime(true);
 
         // Enhanced attendance calculation with multiple time periods
@@ -251,8 +281,106 @@ try {
         'total_courses' => 0,
         'assigned_courses' => 0,
         'unassigned_courses' => 0,
-        'error' => 'Unable to load statistics'
+        'error' => 'Unable to load statistics: ' . $e->getMessage()
     ];
+}
+
+// Backend API handling for AJAX requests
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
+    header('Content-Type: application/json');
+
+    if (!$hod_info) {
+        echo json_encode(['success' => false, 'message' => 'HOD not authenticated']);
+        exit;
+    }
+
+    $action = $_GET['action'] ?? '';
+
+    try {
+        switch ($action) {
+            case 'get_stats':
+                // Return current statistics
+                echo json_encode([
+                    'success' => true,
+                    'stats' => $stats,
+                    'hod_info' => $hod_info
+                ]);
+                break;
+
+            case 'get_recent_activity':
+                // Get recent department activity
+                $stmt = $pdo->prepare("
+                    SELECT lr.requested_at, u.first_name, u.last_name, lr.status, 'leave_request' as activity_type
+                    FROM leave_requests lr
+                    JOIN students s ON lr.student_id = s.id
+                    JOIN users u ON s.user_id = u.id
+                    JOIN options o ON s.option_id = o.id
+                    WHERE o.department_id = ?
+                    ORDER BY lr.requested_at DESC
+                    LIMIT 5
+                ");
+                $stmt->execute([$hod_info['department_id']]);
+                $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'success' => true,
+                    'activities' => $activities
+                ]);
+                break;
+
+            case 'get_performance_metrics':
+                // Get performance metrics for the department
+                $stmt = $pdo->prepare("
+                    SELECT
+                        AVG(CASE WHEN ar.status = 'present' THEN 100 ELSE 0 END) as avg_attendance_rate,
+                        COUNT(DISTINCT s.id) as total_students,
+                        COUNT(DISTINCT l.id) as total_lecturers,
+                        COUNT(DISTINCT c.id) as total_courses
+                    FROM students s
+                    LEFT JOIN attendance_records ar ON s.id = ar.student_id AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                    LEFT JOIN lecturers l ON l.department_id = ?
+                    LEFT JOIN courses c ON c.department_id = ?
+                    JOIN options o ON s.option_id = o.id
+                    WHERE o.department_id = ?
+                ");
+                $stmt->execute([$hod_info['department_id'], $hod_info['department_id'], $hod_info['department_id']]);
+                $metrics = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'success' => true,
+                    'metrics' => $metrics
+                ]);
+                break;
+
+            case 'get_lecturers':
+                // Get lecturers for the department with course assignments
+                $stmt = $pdo->prepare("
+                    SELECT
+                        l.id, l.first_name, l.last_name, l.email,
+                        GROUP_CONCAT(DISTINCT CONCAT(c.course_name, ' (', c.course_code, ')') SEPARATOR ', ') as courses
+                    FROM lecturers l
+                    LEFT JOIN courses c ON l.id = c.lecturer_id
+                    WHERE l.department_id = ?
+                    GROUP BY l.id, l.first_name, l.last_name, l.email
+                    ORDER BY l.first_name, l.last_name
+                ");
+                $stmt->execute([$hod_info['department_id']]);
+                $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                echo json_encode([
+                    'success' => true,
+                    'lecturers' => $lecturers
+                ]);
+                break;
+
+            default:
+                echo json_encode(['success' => false, 'message' => 'Invalid action']);
+        }
+    } catch (PDOException $e) {
+        error_log("AJAX error in hod-dashboard.php: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+    exit;
 }
 
 ?>
@@ -277,38 +405,18 @@ try {
       margin: 0;
     }
 
-    .sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 250px;
-      height: 100vh;
-      background-color: #003366;
-      color: white;
-      padding-top: 20px;
-    }
-
-    .sidebar a {
-      display: block;
-      padding: 12px 20px;
-      color: #fff;
-      text-decoration: none;
-    }
-
-    .sidebar a:hover {
-      background-color: #0059b3;
-    }
-
     .topbar {
-      margin-left: 250px;
+      margin-left: 280px;
       background-color: #fff;
-      padding: 10px 30px;
-      border-bottom: 1px solid #ddd;
+      padding: 15px 30px;
+      border-bottom: 1px solid #e5e7eb;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
 
     .main-content {
-      margin-left: 250px;
+      margin-left: 280px;
       padding: 30px;
+      min-height: calc(100vh - 80px);
     }
 
     .card {
@@ -327,11 +435,12 @@ try {
 
     .footer {
       text-align: center;
-      margin-left: 250px;
+      margin-left: 280px;
       padding: 15px;
       font-size: 0.9rem;
       color: #666;
-      background-color: #f0f0f0;
+      background-color: #f8fafc;
+      border-top: 1px solid #e5e7eb;
     }
 
     /* Accessibility improvements */
@@ -369,7 +478,6 @@ try {
     }
 
     @media (max-width: 768px) {
-      .sidebar,
       .topbar,
       .main-content,
       .footer {
@@ -377,12 +485,8 @@ try {
         width: 100%;
       }
 
-      .sidebar {
-        display: none;
-      }
-
       .topbar {
-        padding: 10px 15px;
+        padding: 15px 20px;
       }
 
       .main-content {
@@ -432,19 +536,8 @@ try {
 
 <body>
 
-  <!-- Sidebar -->
-  <div class="sidebar">
-    <div class="text-center mb-4">
-      <h4>👔 Head of Department</h4>
-      <hr style="border-color: #ffffff66;">
-    </div>
-    <a href="hod-dashboard.php"><i class="fas fa-home me-2"></i> Dashboard</a>
-    <a href="hod-department-reports.php"><i class="fas fa-chart-bar me-2"></i> Department Reports</a>
-    <a href="hod-leave-management.php"><i class="fas fa-envelope-open-text me-2"></i> Manage Leave Requests</a>
-    <a href="#" onclick="showCourseAssignmentModal()"><i class="fas fa-book me-2"></i> Assign Courses</a>
-    <a href="hod-manage-lecturers.php"><i class="fas fa-user-plus me-2"></i> Manage Lecturers</a>
-    <a href="logout.php"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
-  </div>
+  <!-- Enhanced HOD Sidebar -->
+  <?php include 'includes/hod_sidebar.php'; ?>
 
   <!-- Topbar -->
   <div class="topbar d-flex justify-content-between align-items-center">
@@ -456,7 +549,7 @@ try {
         </ol>
       </nav>
       <h5 class="m-0 fw-bold">Head of Department Dashboard</h5>
-      <small class="text-muted">Welcome back, <?php echo htmlspecialchars($user['name']); ?> | <?php echo htmlspecialchars($user['department_name']); ?></small>
+      <small class="text-muted">Welcome back, <?php echo htmlspecialchars($user['name'] ?? 'User'); ?> | <?php echo htmlspecialchars($department_name ?? 'No Department Assigned'); ?></small>
       <?php if (isset($error_message)): ?>
         <div class="alert alert-warning alert-dismissible fade show mt-2 py-2" role="alert">
           <i class="fas fa-exclamation-triangle me-1"></i>
@@ -648,12 +741,14 @@ try {
               </a>
             </div>
             <div class="col-6">
+              <?php if ($department_id): ?>
               <button type="button" class="btn btn-info w-100 mb-2" onclick="showCourseAssignmentModal()">
                 <i class="fas fa-book me-1"></i> Assign Courses
                 <?php if ($stats['unassigned_courses'] > 0): ?>
                   <span class="badge bg-warning text-dark ms-1"><?php echo $stats['unassigned_courses']; ?></span>
                 <?php endif; ?>
               </button>
+              <?php endif; ?>
             </div>
             <div class="col-6">
               <a href="manage-departments.php" class="btn btn-secondary w-100 mb-2">
@@ -661,19 +756,25 @@ try {
               </a>
             </div>
             <div class="col-6">
+              <?php if ($department_id): ?>
               <button type="button" class="btn btn-outline-primary w-100 mb-2" onclick="generateDepartmentReport()">
                 <i class="fas fa-file-pdf me-1"></i> Export Report
               </button>
+              <?php endif; ?>
             </div>
             <div class="col-6">
+              <?php if ($department_id): ?>
               <button type="button" class="btn btn-outline-success w-100 mb-2" onclick="sendDepartmentNotification()">
                 <i class="fas fa-bell me-1"></i> Send Notification
               </button>
+              <?php endif; ?>
             </div>
             <div class="col-6">
+              <?php if ($department_id): ?>
               <button type="button" class="btn btn-outline-info w-100 mb-2" onclick="scheduleDepartmentMeeting()">
                 <i class="fas fa-calendar-plus me-1"></i> Schedule Meeting
               </button>
+              <?php endif; ?>
             </div>
           </div>
         </div>
@@ -734,7 +835,7 @@ try {
             <?php
             try {
                 // Use the department_id we already have
-                if (isset($department_id)) {
+                if ($department_id) {
                     // Get recent leave requests for this department
                     $stmt = $pdo->prepare("
                         SELECT lr.requested_at, u.first_name, u.last_name, lr.status
@@ -776,6 +877,7 @@ try {
       </div>
 
       <!-- Course Assignment Section -->
+      <?php if ($department_id): ?>
       <div class="col-12">
         <div class="card p-4 mt-3">
           <h6 class="mb-3"><i class="fas fa-book me-2"></i>Course Assignment Overview</h6>
@@ -803,8 +905,10 @@ try {
           </div>
         </div>
       </div>
+      <?php endif; ?>
 
       <!-- Filter Section -->
+      <?php if ($department_id): ?>
       <div class="col-12">
         <div class="card p-4 mt-3">
           <h6 class="mb-3"><i class="fas fa-filter me-2"></i>Filter Records</h6>
@@ -858,6 +962,7 @@ try {
           </form>
         </div>
       </div>
+      <?php endif; ?>
 
     </div>
   </div>
@@ -1111,7 +1216,44 @@ try {
     // Load course assignment overview on page load
     document.addEventListener('DOMContentLoaded', function() {
       loadCourseAssignmentOverview();
+      loadLecturerData();
     });
+
+    // Load lecturer data for course assignment overview
+    function loadLecturerData() {
+      fetch('hod-dashboard.php?ajax=1&action=get_lecturers')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success && data.lecturers) {
+            renderLecturerTable(data.lecturers);
+          }
+        })
+        .catch(error => {
+          console.error('Error loading lecturer data:', error);
+        });
+    }
+
+    // Render lecturer table with course assignments
+    function renderLecturerTable(lecturers) {
+      const content = document.getElementById('assignmentTableContent');
+
+      if (lecturers && lecturers.length > 0) {
+        content.innerHTML = lecturers.map(lecturer => `
+          <tr>
+            <td>${lecturer.first_name} ${lecturer.last_name}</td>
+            <td>${lecturer.email}</td>
+            <td>${lecturer.courses || '<span class="text-muted">No courses assigned</span>'}</td>
+            <td>
+              <button class='btn btn-sm btn-primary' onclick='assignCourses(${lecturer.id}, "${lecturer.first_name} ${lecturer.last_name}")'>
+                <i class='fas fa-plus me-1'></i>Assign
+              </button>
+            </td>
+          </tr>
+        `).join('');
+      } else {
+        content.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No lecturers found in your department</td></tr>';
+      }
+    }
 
     function updateEducationLevel() {
       const userType = document.getElementById("userType").value;

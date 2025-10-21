@@ -7,7 +7,7 @@
 
     // Configuration
     const CONFIG = {
-        apiBaseUrl: 'api/assign-hod-api.php',
+        apiBaseUrl: 'api/assign-hod-api-improved.php',
         cacheTimeout: 5 * 60 * 1000, // 5 minutes
         debounceDelay: 300,
         maxRetries: 3,
@@ -1097,22 +1097,55 @@
         console.log('Updating lecturer select with:', lecturers);
 
         const select = $('#lecturerSelect');
-        select.empty().append('<option value="">-- Select Lecturer --</option>');
+        select.empty().append('<option value="">-- Select Lecturer (Optional) --</option>');
 
         if (lecturers && lecturers.length > 0) {
+            let availableCount = 0;
             lecturers.forEach(lecturer => {
                 const displayName = lecturer.full_name ||
                                    `${lecturer.first_name} ${lecturer.last_name}`;
 
-                // Add HOD department info if applicable
-                const hodInfo = lecturer.role === 'hod' && lecturer.hod_department_name ?
-                    ` (HOD of ${lecturer.hod_department_name})` : '';
+                // Check if lecturer can be assigned as HOD
+                let optionClass = '';
+                let warningText = '';
+                let disabled = false;
 
-                select.append(`<option value="${lecturer.id}">${Utils.sanitizeHtml(displayName)}${hodInfo}</option>`);
+                if (lecturer.hod_status === 'already_hod') {
+                    warningText = ` (Already HOD of ${lecturer.current_hod_dept_name})`;
+                    optionClass = 'text-warning';
+                    disabled = true;
+                } else if (lecturer.warning_message) {
+                    warningText = ` (${lecturer.warning_message})`;
+                    optionClass = 'text-muted';
+                    disabled = !lecturer.can_be_hod;
+                } else if (lecturer.can_be_hod) {
+                    availableCount++;
+                }
+
+                const option = `<option value="${lecturer.id}" ${disabled ? 'disabled' : ''} class="${optionClass}">
+                    ${Utils.sanitizeHtml(displayName)}${warningText}
+                </option>`;
+                
+                select.append(option);
             });
-            console.log(`Loaded ${lecturers.length} lecturers into dropdown`);
+            
+            console.log(`Loaded ${lecturers.length} lecturers (${availableCount} available) into dropdown`);
+            
+            // Update feedback based on available lecturers
+            if (availableCount === 0) {
+                $('#lecturerSelectFeedback')
+                    .html('<i class="fas fa-exclamation-triangle me-1"></i>No lecturers available for HOD assignment in this department')
+                    .removeClass('text-success text-info').addClass('text-warning');
+            } else {
+                $('#lecturerSelectFeedback')
+                    .html(`<i class="fas fa-info-circle me-1"></i>${availableCount} lecturer(s) available for HOD assignment`)
+                    .removeClass('text-success text-warning').addClass('text-info');
+            }
         } else {
-            select.append('<option value="" disabled>No lecturers available</option>');
+            select.append('<option value="" disabled>No lecturers found in this department</option>');
+            $('#lecturerSelectFeedback')
+                .html('<i class="fas fa-exclamation-triangle me-1"></i>No lecturers found in this department')
+                .removeClass('text-success text-info').addClass('text-warning');
             console.warn('No lecturers available for dropdown');
         }
 
@@ -1325,6 +1358,13 @@
     // Add the missing function for department-specific lecturer loading
     function loadLecturersForDepartment(departmentId) {
         return new Promise((resolve, reject) => {
+            console.log(`Loading lecturers for department ID: ${departmentId}`);
+            
+            // Show loading state
+            const select = $('#lecturerSelect');
+            select.empty().append('<option value="">Loading lecturers...</option>');
+            select.prop('disabled', true);
+            
             const url = `${CONFIG.apiBaseUrl}?action=get_lecturers&ajax=1&department_id=${departmentId}`;
             
             $.ajax({
@@ -1336,24 +1376,58 @@
                 },
                 timeout: 30000,
                 success: function(response) {
+                    console.log('Lecturer loading response:', response);
+                    
                     if (response.status === 'success') {
-                        AppState.setLecturers(response.data);
-                        console.log(`Loaded ${response.data.length} lecturers for department ${departmentId}`);
-                        resolve(response.data);
+                        AppState.setLecturers(response.data || []);
+                        console.log(`Successfully loaded ${(response.data || []).length} lecturers for department ${departmentId}`);
+                        
+                        // Re-enable the select
+                        select.prop('disabled', false);
+                        
+                        // Show success message if no lecturers found
+                        if (!response.data || response.data.length === 0) {
+                            UI.showAlert('info', 'No lecturers found in this department. You may need to add lecturers to this department first.');
+                        }
+                        
+                        resolve(response.data || []);
                     } else {
+                        console.error('API returned error:', response.message);
+                        select.prop('disabled', false);
+                        select.empty().append('<option value="">Error loading lecturers</option>');
+                        UI.showAlert('danger', response.message || 'Failed to load lecturers for selected department');
                         reject(new Error(response.message || 'Failed to load lecturers'));
                     }
                 },
                 error: function(xhr, status, error) {
-                    let errorMessage = 'Network error occurred';
-                    if (xhr.status === 429) {
+                    console.error('AJAX Error loading lecturers:', {
+                        status: xhr.status,
+                        statusText: xhr.statusText,
+                        responseText: xhr.responseText,
+                        error: error
+                    });
+                    
+                    let errorMessage = 'Failed to load lecturers for selected department';
+                    
+                    if (xhr.status === 0) {
+                        errorMessage = 'Network connection failed. Please check your internet connection.';
+                    } else if (xhr.status === 404) {
+                        errorMessage = 'API endpoint not found. Please contact administrator.';
+                    } else if (xhr.status === 429) {
                         errorMessage = 'Too many requests. Please wait and try again.';
                     } else if (xhr.status === 403) {
-                        errorMessage = 'Access denied. Please refresh the page.';
+                        errorMessage = 'Access denied. Please refresh the page and try again.';
+                    } else if (xhr.status === 500) {
+                        errorMessage = 'Server error occurred. Please try again later.';
                     } else if (xhr.responseJSON && xhr.responseJSON.message) {
                         errorMessage = xhr.responseJSON.message;
                     }
-                    console.error('Load Lecturers Error:', xhr.responseText);
+                    
+                    // Re-enable select and show error
+                    select.prop('disabled', false);
+                    select.empty().append('<option value="">Error loading lecturers</option>');
+                    
+                    UI.showAlert('danger', errorMessage);
                     reject(new Error(errorMessage));
                 }
             });

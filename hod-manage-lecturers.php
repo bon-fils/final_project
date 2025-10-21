@@ -7,17 +7,88 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 require_role(['hod']);
 
-// Get HoD's department ID by joining through lecturers table with user_id
-$hod_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("
-    SELECT d.id AS department_id
-    FROM departments d
-    JOIN lecturers l ON d.hod_id = l.id
-    WHERE l.user_id = ? LIMIT 1
-");
-$stmt->execute([$hod_id]);
-$hod = $stmt->fetch(PDO::FETCH_ASSOC);
-$hod_department = $hod['department_id'] ?? null;
+// Get HoD information and verify department assignment
+$user_id = $_SESSION['user_id'];
+$department_name = null;
+$department_id = null;
+try {
+    // First, check if the user has a lecturer record
+    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
+    $lecturer_stmt->execute([$user_id]);
+    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lecturer) {
+        // HOD user doesn't have a lecturer record
+        header("Location: login_new.php?error=not_assigned");
+        exit;
+    } else {
+        $lecturer_id = $lecturer['id'];
+
+        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
+        $dept_result = null;
+
+        // Approach 1: Correct way - hod_id points to lecturers.id
+        $stmt = $pdo->prepare("
+            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
+            FROM departments d
+            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+        ");
+        $stmt->execute([$lecturer_id]);
+        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
+        if (!$dept_result) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
+                FROM departments d
+                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$user_id]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // If found via legacy method, log it for potential data fix
+            if ($dept_result) {
+                error_log("HOD Manage Lecturers: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
+            }
+        }
+
+        // Approach 3: Check if lecturer's department_id matches any department's hod_id
+        if (!$dept_result && $lecturer['department_id']) {
+            $stmt = $pdo->prepare("
+                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
+                FROM departments d
+                WHERE d.id = ? AND d.hod_id IS NOT NULL
+            ");
+            $stmt->execute([$lecturer['department_id']]);
+            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$dept_result) {
+            // User is HOD but not assigned to any department
+            header("Location: login_new.php?error=not_assigned");
+            exit;
+        } else {
+            $department_name = $dept_result['department_name'];
+            $department_id = $dept_result['department_id'];
+
+            // Get user information
+            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            $user['department_name'] = $department_name;
+            $user['department_id'] = $department_id;
+
+            // Log match type for debugging
+            error_log("HOD Manage Lecturers: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
+
+            // Set the department variable for backward compatibility
+            $hod_department = $department_id;
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Database error in hod-manage-lecturers.php: " . $e->getMessage());
+    $error_message = "Database connection error. Please try again later. Error: " . $e->getMessage();
+}
 
 // Pagination & Search
 $limit = 10;
@@ -845,6 +916,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </style>
 </head>
 <body>
+
+<!-- Include HOD Sidebar -->
+<?php include 'includes/hod_sidebar.php'; ?>
 
 <div class="sidebar">
   <div class="sidebar-header">

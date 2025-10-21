@@ -596,7 +596,7 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
                             <label for="option" class="form-label">
                                 <i class="fas fa-graduation-cap me-1"></i>Academic Option
                             </label>
-                            <select class="form-select" id="option" name="option_id" required disabled>
+                            <select class="form-select" id="option" name="option_id" required>
                                 <option value="" disabled selected>Choose an academic option</option>
                             </select>
                             <div id="option-feedback" class="form-text text-muted">
@@ -794,6 +794,16 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
         };
 
         console.log('Backend config loaded:', window.BACKEND_CONFIG);
+        
+        // Initialize the attendance session system when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 DOM loaded, initializing attendance session...');
+            if (typeof FormHandlers !== 'undefined') {
+                FormHandlers.initialize();
+            } else {
+                console.error('❌ FormHandlers not found - check attendance-session.js');
+            }
+        });
     </script>
 </body>
 </html>

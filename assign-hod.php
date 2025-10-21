@@ -70,8 +70,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token'])) {
 if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
     // For POST requests, forward to API with POST data
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        // Build the target URL
-        $target_url = 'api/assign-hod-api.php?' . http_build_query($_GET);
+        // Build the target URL - use improved API
+        $target_url = 'api/assign-hod-api-improved.php?' . http_build_query($_GET);
 
         // Create a new POST request to the API endpoint
         $ch = curl_init($target_url);
@@ -114,8 +114,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         echo $body;
         exit;
     } else {
-        // For GET requests, simple redirect
-        header('Location: api/assign-hod-api.php?' . http_build_query($_GET));
+        // For GET requests, simple redirect - use improved API
+        header('Location: api/assign-hod-api-improved.php?' . http_build_query($_GET));
         exit;
     }
 }

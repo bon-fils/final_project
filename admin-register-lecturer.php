@@ -8,9 +8,29 @@
 // INITIALIZATION & CONFIGURATION
 // ================================
 
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Debug: Confirm file is loading
+echo "<!-- DEBUG: admin-register-lecturer.php is loading -->\n";
+
 require_once "config.php";
 require_once "session_check.php";
-require_role(['admin']);
+
+// Check if user is logged in and has admin role
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php?error=not_logged_in');
+    exit('Not logged in. Please login first.');
+}
+
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header('Location: login.php?error=insufficient_permissions');
+    exit('Access denied. Admin role required.');
+}
+
+// Debug: Confirm user has admin access
+echo "<!-- DEBUG: User has admin access, user_id: " . ($_SESSION['user_id'] ?? 'unknown') . ", role: " . ($_SESSION['role'] ?? 'unknown') . " -->\n";
 
 // Initialize CSRF token if not exists
 if (!isset($_SESSION['csrf_token'])) {
@@ -459,24 +479,36 @@ function checkFormSubmissionRateLimit() {
 
 // ================================
 // MAIN PROCESSING LOGIC
-// ================================
 
 $formError = '';
 $successMessage = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    echo "<!-- DEBUG: POST request received -->\n";
+    
+    // Debug: Show POST data
+    error_log("POST data received: " . print_r($_POST, true));
+    
     // Rate limiting check
     if (!checkFormSubmissionRateLimit()) {
         $formError = 'Too many registration attempts. Please wait before trying again.';
-    } elseif (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        echo "<!-- DEBUG: Rate limit exceeded -->\n";
+    } elseif (!isset($_POST['csrf_token'])) {
+        $formError = 'CSRF token missing. Please refresh the page and try again.';
+        echo "<!-- DEBUG: CSRF token missing -->\n";
+    } elseif (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         $formError = 'Security validation failed. Please refresh the page and try again.';
+        echo "<!-- DEBUG: CSRF token mismatch -->\n";
     } else {
+        echo "<!-- DEBUG: Starting registration process -->\n";
         try {
             // Log the registration attempt
             error_log("Lecturer registration attempt by user ID: " . ($_SESSION['user_id'] ?? 'unknown') .
                      " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 
             $result = processLecturerRegistration($_POST);
+            echo "<!-- DEBUG: Registration processed, result: " . print_r($result, true) . " -->\n";
+            
             if ($result['success']) {
                 $_SESSION['success_message'] = $result['message'];
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -484,8 +516,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Clear form submission tracking on success
                 unset($_SESSION['form_submissions']);
 
+                echo "<!-- DEBUG: Registration successful, redirecting -->\n";
                 header("Location: admin-register-lecturer.php");
                 exit;
+            } else {
+                $formError = 'Registration failed: Unknown error occurred';
+                echo "<!-- DEBUG: Registration failed with no success flag -->\n";
             }
         } catch (Exception $e) {
             error_log('Lecturer registration error: ' . $e->getMessage() .
@@ -493,6 +529,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      ' | IP: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 
             $formError = 'Registration failed: ' . htmlspecialchars($e->getMessage());
+            echo "<!-- DEBUG: Exception caught: " . htmlspecialchars($e->getMessage()) . " -->\n";
         }
     }
 }
