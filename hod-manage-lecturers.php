@@ -1412,7 +1412,13 @@ let csrfToken = '<?php echo $_SESSION['csrf_token']; ?>';
 function loadOptionsForRegistration() {
     const optionsContainer = document.getElementById('optionsContainer');
 
-    fetch('api/department-option-api.php?action=get_options')
+    fetch('api/department-option-api.php?action=get_options', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin'
+    })
         .then(response => response.json())
         .then(data => {
             if (data.success && data.data && data.data.length > 0) {
@@ -1443,7 +1449,13 @@ function loadOptionsForRegistration() {
 function loadCoursesForRegistration() {
     const coursesContainer = document.getElementById('coursesContainer');
 
-    fetch('api/assign-courses-api.php?action=get_courses')
+    fetch('api/assign-courses-api.php?action=get_courses', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin'
+    })
         .then(response => response.json())
         .then(data => {
             if (data.success && data.data) {
@@ -1986,11 +1998,11 @@ function loadLecturerStatistics() {
     });
 
     fetch('api/assign-courses-api.php?action=get_lecturer_statistics', {
-        method: 'GET',
+        method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache'
-        }
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin'
     })
     .then(response => {
         if (!response.ok) {
@@ -2109,7 +2121,13 @@ function updateStatisticWithAnimation(elementId, newValue) {
 
 // Legacy fallback method for statistics loading
 function loadLecturerStatisticsLegacy() {
-    fetch('api/assign-courses-api.php?action=get_lecturers')
+    fetch('api/assign-courses-api.php?action=get_lecturers', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin'
+    })
         .then(response => response.json())
         .then(data => {
             if (data && Array.isArray(data)) {
