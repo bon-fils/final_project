@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test ESP32 Display</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        .result {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🖥️ Test ESP32 OLED Display</h1>
+    
+    <div>
+        <label><strong>Message to display:</strong></label>
+        <input type="text" id="message" value="Hello\nESP32!" placeholder="Enter message (use \n for new line)">
+    </div>
+    
+    <button onclick="sendMessage()">📤 Send to ESP32 Display</button>
+    <button onclick="testMessages()">🧪 Test Multiple Messages</button>
+    
+    <div id="result"></div>
+
+    <script>
+        const ESP32_IP = '192.168.137.93';
+        const ESP32_PORT = 80;
+
+        async function sendMessage() {
+            const message = document.getElementById('message').value;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.innerHTML = '<div class="result">Sending...</div>';
+
+            try {
+                const url = `http://${ESP32_IP}:${ESP32_PORT}/display?message=${encodeURIComponent(message)}`;
+                console.log('Sending to:', url);
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <div class="result success">
+                            <strong>✅ Success!</strong><br>
+                            Message sent to ESP32 display.<br>
+                            <small>Check the OLED screen on your ESP32.</small>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(data.error || 'Failed to display message');
+                }
+                
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="result error">
+                        <strong>❌ Error:</strong> ${error.message}<br>
+                        <small>Make sure ESP32 is connected and on the same network.</small>
+                    </div>
+                `;
+                console.error('Error:', error);
+            }
+        }
+
+        async function testMessages() {
+            const messages = [
+                'Test 1',
+                'Hello\nWorld!',
+                'ESP32\nOnline',
+                'Fingerprint\nReady',
+                'Click Enroll\nButton!'
+            ];
+
+            for (let i = 0; i < messages.length; i++) {
+                document.getElementById('message').value = messages[i];
+                await sendMessage();
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds between messages
+            }
+        }
+
+        // Test connection on load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`http://${ESP32_IP}:${ESP32_PORT}/status`);
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    console.log('✅ ESP32 connected:', data);
+                }
+            } catch (error) {
+                console.error('⚠️ ESP32 not reachable:', error);
+            }
+        });
+    </script>
+</body>
+</html>

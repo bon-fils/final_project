@@ -967,6 +967,8 @@ class StudentRegistration {
         this.csrfToken = '<?= addslashes($csrf_token) ?>';
         this.fingerprintCaptured = false;
         this.fingerprintData = null;
+        this.esp32IP = '<?= ESP32_IP ?>';
+        this.esp32Port = <?= ESP32_PORT ?>;
         this.fingerprintQuality = 0;
         this.isCapturing = false;
         this.originalCellOptions = [];
@@ -1188,7 +1190,17 @@ class StudentRegistration {
 
             const finalOptions = { ...defaultOptions, ...options };
 
-            xhr.open(finalOptions.method, finalOptions.url);
+            // Prepare URL with query string for GET requests AND ESP32 POST requests
+            // ESP32's server.hasArg() reads from URL parameters, not body
+            let url = finalOptions.url;
+            if (finalOptions.data && (finalOptions.method === 'GET' || url.includes('192.168.137'))) {
+                const queryString = Object.keys(finalOptions.data)
+                    .map(key => encodeURIComponent(key) + '=' + encodeURIComponent(finalOptions.data[key]))
+                    .join('&');
+                url += (url.includes('?') ? '&' : '?') + queryString;
+            }
+
+            xhr.open(finalOptions.method, url);
 
             // Set headers
             Object.keys(finalOptions.headers).forEach(header => {
@@ -1224,10 +1236,11 @@ class StudentRegistration {
                 reject(new Error('Request timeout'));
             };
 
-            // Prepare data
+            // Prepare data for POST requests only (GET and ESP32 data is already in URL)
             let data = null;
-            if (finalOptions.data) {
-                if (finalOptions.method === 'POST' && !(finalOptions.data instanceof FormData)) {
+            if (finalOptions.data && finalOptions.method === 'POST' && !url.includes('192.168.137')) {
+                // Only send data in body for non-ESP32 POST requests (PHP backend)
+                if (!(finalOptions.data instanceof FormData)) {
                     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
                     data = Object.keys(finalOptions.data)
                         .map(key => encodeURIComponent(key) + '=' + encodeURIComponent(finalOptions.data[key]))
@@ -2126,12 +2139,14 @@ class StudentRegistration {
             this.showAlert('🔍 Checking ESP32 connection...', 'info');
 
             const statusResponse = await this.ajax({
-                url: 'http://192.168.137.93:80/status',
+                url: `http://${this.esp32IP}:${this.esp32Port}/status`,
                 method: 'GET',
                 timeout: 5000
             });
 
-            if (!statusResponse.success) {
+            console.log('ESP32 Status Response:', statusResponse);
+
+            if (!statusResponse || !statusResponse.status || statusResponse.status !== 'ok') {
                 throw new Error('ESP32 not responding. Please check if the device is powered on and connected to the network.');
             }
 
@@ -2150,7 +2165,7 @@ class StudentRegistration {
 
             // Step 2: Send instruction to ESP32 display
             await this.ajax({
-                url: 'http://192.168.137.93:80/display',
+                url: `http://${this.esp32IP}:${this.esp32Port}/display`,
                 method: 'GET',
                 data: { message: 'Place finger on sensor...' },
                 timeout: 3000
@@ -2177,11 +2192,62 @@ class StudentRegistration {
         placeholder.classList.add('d-none');
 
         try {
+            // NOTE: For registration, we just validate sensor readiness
+            // Actual fingerprint enrollment happens via enrollFingerprint() method
+            
+            // Step 1: Show sensor is ready
+            status.textContent = 'ESP32 sensor validated. Ready for enrollment...';
+            this.drawFingerprintPattern(ctx, 50);
+
+            // Step 2: Animate to show sensor is ready
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            this.fingerprintCaptured = true;
+            this.fingerprintQuality = 0; // Quality will be set during actual enrollment
+            
+            // Complete visualization
+            this.drawFingerprintPattern(ctx, 100);
+            this.updateQualityIndicator(ctx.canvas, this.fingerprintQuality);
+            
+            this.isCapturing = false;
+            this.updateFingerprintUI('captured');
+            
+            // Send confirmation to ESP32 display
+            await this.ajax({
+                url: `http://${this.esp32IP}:${this.esp32Port}/display`,
+                method: 'GET',
+                data: { message: 'Click Enroll\nButton!' },
+                timeout: 2000
+            });
+            
+            this.showAlert('✅ ESP32 Sensor Ready! Click "Enroll Fingerprint" button to register your fingerprint (you will scan your finger twice).', 'success');
+
+        } catch (error) {
+            console.error('Sensor validation error:', error);
+            status.textContent = 'Sensor validation failed';
+            this.isCapturing = false;
+            this.updateFingerprintUI('error');
+            throw error;
+        }
+    }
+    
+    // OLD METHOD - keeping for reference but not used
+    async captureFingerprintFromSensor_OLD() {
+        const canvas = document.getElementById('fingerprintCanvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('fingerprintPlaceholder');
+        const status = document.getElementById('fingerprintStatus');
+
+        canvas.classList.remove('d-none');
+        placeholder.classList.add('d-none');
+
+        try {
             // Step 1: Initialize capture visualization
             status.textContent = 'Initializing sensor...';
             this.drawFingerprintPattern(ctx, 10);
 
             // Step 2: Poll ESP32 sensor for fingerprint detection
+            // NOTE: /identify is for ATTENDANCE, not registration!
             const maxAttempts = 150; // 30 seconds at 200ms intervals
             let attempts = 0;
             let captureComplete = false;
@@ -2192,7 +2258,7 @@ class StudentRegistration {
                 try {
                     // Query ESP32 for fingerprint detection
                     const response = await this.ajax({
-                        url: 'http://192.168.137.93:80/identify',
+                        url: `http://${this.esp32IP}:${this.esp32Port}/identify`,
                         method: 'GET',
                         timeout: 1500
                     });
@@ -2215,7 +2281,7 @@ class StudentRegistration {
 
                         // Send confirmation to ESP32 display
                         await this.ajax({
-                            url: 'http://192.168.137.93:80/display',
+                            url: `http://${this.esp32IP}:${this.esp32Port}/display`,
                             method: 'GET',
                             data: { message: 'Fingerprint captured!' },
                             timeout: 2000
@@ -2525,32 +2591,28 @@ class StudentRegistration {
             });
 
             // Include fingerprint data if captured and enrolled
-            const fingerprintIntegration = window.fingerprintIntegration;
-            if (fingerprintIntegration && fingerprintIntegration.isFingerprintCaptured()) {
-                const fingerprintData = fingerprintIntegration.getFingerprintData();
+            const fingerprintEnrollment = window.fingerprintEnrollment;
+            if (fingerprintEnrollment) {
+                const fingerprintData = fingerprintEnrollment.getFingerprintData();
                 
-                formData.append('fingerprint_enrolled', 'true');
-                formData.append('fingerprint_id', fingerprintData?.fingerprint_id || '');
-                formData.append('fingerprint_template', fingerprintData?.template || '');
-                formData.append('fingerprint_hash', fingerprintData?.hash || '');
-                formData.append('fingerprint_quality', fingerprintData?.confidence || '');
-                formData.append('fingerprint_enrolled_at', new Date().toISOString());
+                // Add all fingerprint data to form
+                Object.keys(fingerprintData).forEach(key => {
+                    formData.append(key, fingerprintData[key] || '');
+                });
 
-                // Include canvas visualization for reference
-                const canvas = document.getElementById('fingerprintCanvas');
-                if (canvas) {
-                    const fingerprintImageData = canvas.toDataURL('image/png');
-                    formData.append('fingerprint_image', fingerprintImageData);
+                // Include canvas visualization for reference if enrolled
+                if (fingerprintData.fingerprint_enrolled === 'true') {
+                    const canvas = document.getElementById('fingerprintCanvas');
+                    if (canvas) {
+                        const fingerprintImageData = canvas.toDataURL('image/png');
+                        formData.append('fingerprint_image', fingerprintImageData);
+                    }
                 }
 
-                console.log('Including enrolled fingerprint data:', {
-                    id: fingerprintData?.fingerprint_id,
-                    confidence: fingerprintData?.confidence,
-                    enrolled: true
-                });
+                console.log('Including fingerprint data:', fingerprintData);
             } else {
                 formData.append('fingerprint_enrolled', 'false');
-                console.log('No fingerprint data to include - not enrolled');
+                console.log('No fingerprint enrollment system found - not enrolled');
             }
 
             // Use fetch API instead of jQuery AJAX for better error handling
@@ -2921,7 +2983,7 @@ class StudentRegistration {
                 clearBtn.classList.remove('d-none');
                 enrollBtn.classList.remove('d-none');
                 enrollBtn.innerHTML = '<i class="fas fa-save me-2"></i>Enroll with ESP32';
-                status.textContent = `Fingerprint captured from sensor - Quality: ${this.fingerprintQuality}%`;
+                status.textContent = `ESP32 sensor validated. Click "Enroll with ESP32" to register fingerprint.`;
                 break;
 
             case 'enrolled':
@@ -2929,7 +2991,8 @@ class StudentRegistration {
                 captureBtn.classList.add('d-none');
                 clearBtn.classList.remove('d-none');
                 enrollBtn.classList.add('d-none'); // Hide enroll button after enrollment
-                status.textContent = `✅ Fingerprint enrolled with ESP32 sensor - Quality: ${this.fingerprintQuality}%`;
+                const quality = this.fingerprintData?.quality || this.fingerprintData?.confidence || this.fingerprintQuality || 85;
+                status.textContent = `✅ Fingerprint enrolled with ESP32 sensor - ID: ${this.fingerprintData?.fingerprint_id || this.fingerprintData?.id || 'N/A'} - Quality: ${quality}%`;
                 break;
 
             default: // ready
@@ -2992,7 +3055,7 @@ class StudentRegistration {
 
             // Step 3: Send enrollment command to ESP32
             const enrollResponse = await this.ajax({
-                url: 'http://192.168.137.93:80/enroll',
+                url: `http://${this.esp32IP}:${this.esp32Port}/enroll`,
                 method: 'POST',
                 data: {
                     id: fingerprintId,
@@ -3003,21 +3066,30 @@ class StudentRegistration {
             });
 
             if (enrollResponse.success) {
-                // Step 4: Store enrollment data
+                // Step 4: Store enrollment data with correct property names for form submission
                 this.fingerprintData = {
-                    id: fingerprintId,
+                    fingerprint_id: fingerprintId,  // Form expects fingerprint_id
+                    id: fingerprintId,               // Keep for compatibility
                     template: enrollResponse.template || `template_${fingerprintId}_${Date.now()}`,
                     hash: enrollResponse.hash || `hash_${fingerprintId}_${Date.now()}`,
-                    quality: this.fingerprintQuality,
+                    quality: 85,  // Default quality (will be updated from ESP32 if available)
+                    confidence: 85,  // Form expects confidence
                     enrolled: true,
                     enrolled_at: new Date().toISOString(),
                     student_name: studentName,
                     reg_no: regNo
                 };
+                
+                // Update quality from ESP32 response if available
+                if (enrollResponse.quality) {
+                    this.fingerprintData.quality = enrollResponse.quality;
+                    this.fingerprintData.confidence = enrollResponse.quality;
+                    this.fingerprintQuality = enrollResponse.quality;
+                }
 
                 // Step 5: Update ESP32 display with success
                 await this.ajax({
-                    url: 'http://192.168.137.93:80/display',
+                    url: `http://${this.esp32IP}:${this.esp32Port}/display`,
                     method: 'GET',
                     data: { message: 'Enrollment complete!' },
                     timeout: 3000
@@ -3039,7 +3111,7 @@ class StudentRegistration {
             // Try to update ESP32 display with error
             try {
                 await this.ajax({
-                    url: 'http://192.168.137.93:80/display',
+                    url: `http://${this.esp32IP}:${this.esp32Port}/display`,
                     method: 'GET',
                     data: { message: 'Enrollment failed' },
                     timeout: 2000
@@ -3298,7 +3370,12 @@ document.addEventListener('DOMContentLoaded', () => {
     <!-- Bootstrap JS -->
     <script src="js/bootstrap.bundle.min.js"></script>
     
-    <!-- Working Fingerprint Integration -->
-    <script src="js/fingerprint-integration-working.js"></script>
+    <!-- Enhanced Fingerprint Enrollment System -->
+    <script>
+        // ESP32 Configuration from PHP
+        window.ESP32_IP = '<?= ESP32_IP ?>';
+        window.ESP32_PORT = <?= ESP32_PORT ?>;
+    </script>
+    <script src="js/fingerprint-enrollment.js"></script>
 </body>
 </html>

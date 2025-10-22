@@ -142,7 +142,7 @@ class FingerprintIntegration {
                 captureBtn.classList.add('d-none');
                 enrollBtn.classList.remove('d-none');
                 clearBtn.classList.remove('d-none');
-                status.textContent = `✅ Fingerprint captured! ID: ${this.fingerprintData?.fingerprint_id || 'Unknown'}`;
+                status.textContent = `✅ ESP32 Sensor Ready! Click "Enroll Fingerprint" to register.`;
                 status.className = 'text-success';
                 break;
 
@@ -184,46 +184,28 @@ class FingerprintIntegration {
             }
 
             // Step 2: Send display message
-            await this.makeESP32Request('/display', 'GET', { message: 'Place finger on sensor...' });
+            await this.makeESP32Request('/display', 'GET', { message: 'Sensor ready!' });
 
-            // Step 3: Start polling for fingerprint
-            const maxAttempts = 50; // 10 seconds at 200ms intervals
-            let attempts = 0;
-
-            const pollInterval = setInterval(async () => {
-                attempts++;
-
-                try {
-                    const identifyResult = await this.makeESP32Request('/identify');
-                    
-                    if (identifyResult.success && identifyResult.data.success) {
-                        // Fingerprint detected!
-                        clearInterval(pollInterval);
-                        this.fingerprintCaptured = true;
-                        this.fingerprintData = identifyResult.data;
-                        
-                        this.updateFingerprintUI('captured');
-                        this.isCapturing = false;
-
-                        // Update display
-                        await this.makeESP32Request('/display', 'GET', { message: 'Fingerprint captured!' });
-                        
-                        // Visual feedback in canvas
-                        this.updateFingerprintCanvas();
-                        
-                        console.log('🎉 Fingerprint captured:', this.fingerprintData);
-
-                    } else if (attempts >= maxAttempts) {
-                        // Timeout
-                        clearInterval(pollInterval);
-                        throw new Error('Timeout: No fingerprint detected');
-                    }
-
-                } catch (pollError) {
-                    console.log(`Poll attempt ${attempts} failed: ${pollError.message}`);
-                }
-
-            }, 200);
+            // Step 3: Simulate capture for registration
+            // NOTE: /identify is for ATTENDANCE (matching existing fingerprints)
+            // For REGISTRATION, we just validate sensor and use enrollFingerprint() later
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            this.fingerprintCaptured = true;
+            this.fingerprintData = { 
+                success: true, 
+                quality: 90,
+                message: 'Sensor validated. Ready for enrollment.' 
+            };
+            
+            this.updateFingerprintUI('captured');
+            this.isCapturing = false;
+            
+            // Visual feedback in canvas
+            this.updateFingerprintCanvas();
+            
+            this.showAlert('✅ Sensor validated! Click "Enroll Fingerprint" to register with ESP32.', 'success');
+            console.log('🎉 Sensor ready for enrollment');
 
         } catch (error) {
             console.error(`Capture failed: ${error.message}`);

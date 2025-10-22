@@ -639,22 +639,41 @@ function getUploadErrorMessage($errorCode) {
 function handleFingerprintDataSafely($postData, $regNo) {
     // Check if fingerprint is enrolled
     if (empty($postData['fingerprint_enrolled']) || $postData['fingerprint_enrolled'] !== 'true') {
-        return ['path' => null, 'quality' => 0, 'id' => null, 'enrolled' => false];
+        return [
+            'path' => null, 
+            'quality' => 0, 
+            'id' => null, 
+            'enrolled' => false,
+            'confidence' => 0,
+            'enrolled_at' => null
+        ];
     }
 
-    // Process fingerprint image if available
+    // Process fingerprint image if available (canvas visualization)
     $fingerprintPath = null;
     if (!empty($postData['fingerprint_image'])) {
-        $fingerprintPath = processFingerprintData($postData['fingerprint_image'], $regNo);
+        try {
+            $fingerprintPath = processFingerprintData($postData['fingerprint_image'], $regNo);
+        } catch (Exception $e) {
+            error_log("Fingerprint image processing failed: " . $e->getMessage());
+            // Continue without image - the important data is the ID and quality
+        }
     }
+
+    // Extract fingerprint data from the new enrollment system
+    $fingerprintId = !empty($postData['fingerprint_id']) ? (int)$postData['fingerprint_id'] : null;
+    $quality = !empty($postData['fingerprint_quality']) ? (int)$postData['fingerprint_quality'] : 0;
+    $confidence = !empty($postData['fingerprint_confidence']) ? (int)$postData['fingerprint_confidence'] : $quality;
+    $enrolledAt = !empty($postData['fingerprint_enrolled_at']) ? $postData['fingerprint_enrolled_at'] : date('Y-m-d H:i:s');
 
     return [
         'path' => $fingerprintPath['path'] ?? null,
-        'quality' => (int)($postData['fingerprint_quality'] ?? 0),
-        'id' => $postData['fingerprint_id'] ?? null,
+        'quality' => $quality,
+        'confidence' => $confidence,
+        'id' => $fingerprintId,
         'template' => $postData['fingerprint_template'] ?? null,
         'hash' => $postData['fingerprint_hash'] ?? null,
-        'enrolled_at' => $postData['fingerprint_enrolled_at'] ?? null,
+        'enrolled_at' => $enrolledAt,
         'enrolled' => true
     ];
 }
