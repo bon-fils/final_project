@@ -361,10 +361,12 @@ function processLecturerRegistration($post_data) {
 
         $pdo->commit();
 
-        // Clear cache
+        // Clear cache if cache utilities are available
         if (file_exists("cache_utils.php")) {
             require_once "cache_utils.php";
-            cache_delete("lecturer_stats_dept_{$data['department_id']}");
+            if (function_exists('cache_delete')) {
+                cache_delete("lecturer_stats_dept_{$data['department_id']}");
+            }
         }
 
         return [
@@ -488,18 +490,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Debug: Show POST data
     error_log("POST data received: " . print_r($_POST, true));
+    error_log("FILES data received: " . print_r($_FILES, true));
     
-    // Rate limiting check
-    if (!checkFormSubmissionRateLimit()) {
-        $formError = 'Too many registration attempts. Please wait before trying again.';
-        echo "<!-- DEBUG: Rate limit exceeded -->\n";
-    } elseif (!isset($_POST['csrf_token'])) {
-        $formError = 'CSRF token missing. Please refresh the page and try again.';
+    // Enhanced validation
+    $validation_errors = [];
+    
+    // Check CSRF token
+    if (!isset($_POST['csrf_token'])) {
+        $validation_errors[] = 'CSRF token missing. Please refresh the page and try again.';
         echo "<!-- DEBUG: CSRF token missing -->\n";
-    } elseif (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
-        $formError = 'Security validation failed. Please refresh the page and try again.';
+    } elseif (!isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $validation_errors[] = 'Security validation failed. Please refresh the page and try again.';
         echo "<!-- DEBUG: CSRF token mismatch -->\n";
-    } else {
+    }
+    
+    // Check required fields
+    $required_fields = ['first_name', 'last_name', 'gender', 'dob', 'id_number', 'email', 'department_id', 'education_level'];
+    foreach ($required_fields as $field) {
+        if (empty(trim($_POST[$field] ?? ''))) {
+            $validation_errors[] = ucfirst(str_replace('_', ' ', $field)) . ' is required.';
+        }
+    }
+    
+    // If no validation errors, proceed
+    if (empty($validation_errors)) {
         echo "<!-- DEBUG: Starting registration process -->\n";
         try {
             // Log the registration attempt
@@ -527,10 +541,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             error_log('Lecturer registration error: ' . $e->getMessage() .
                      ' | User ID: ' . ($_SESSION['user_id'] ?? 'unknown') .
                      ' | IP: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
-
-            $formError = 'Registration failed: ' . htmlspecialchars($e->getMessage());
+            $formError = 'Registration failed: ' . $e->getMessage();
             echo "<!-- DEBUG: Exception caught: " . htmlspecialchars($e->getMessage()) . " -->\n";
         }
+    } else {
+        // Display validation errors
+        $formError = 'Please fix the following errors: ' . implode(', ', $validation_errors);
+        echo "<!-- DEBUG: Validation errors: " . htmlspecialchars(implode(', ', $validation_errors)) . " -->\n";
     }
 }
 
@@ -811,14 +828,14 @@ if (isset($_SESSION['success_message'])) {
             font-size: 1.1rem;
         }
 
-        /* Photo Upload Styles */
+        /* Enhanced Photo Upload Styling */
         .photo-upload-container {
-            text-align: center;
-            padding: 2rem;
-            border: 2px dashed #e9ecef;
+            background: #f8f9ff;
+            border: 2px solid #e3f2fd;
             border-radius: var(--border-radius);
-            background: #f8f9fa;
+            padding: 2rem;
             transition: all 0.3s ease;
+            position: relative;
         }
 
         .photo-upload-container:hover {
@@ -826,37 +843,50 @@ if (isset($_SESSION['success_message'])) {
             background: #f0f4ff;
         }
 
-        .photo-preview {
+        .photo-preview-wrapper {
             position: relative;
             display: inline-block;
-            margin-bottom: 1.5rem;
+        }
+
+        .photo-preview {
+            width: 200px;
+            height: 200px;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 0 auto;
+            border: 3px solid #e3f2fd;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .photo-preview:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
         }
 
         .photo-preview img {
-            width: 150px;
-            height: 150px;
+            width: 100%;
+            height: 100%;
             object-fit: cover;
-            border-radius: 50%;
-            border: 4px solid #667eea;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            transition: all 0.3s ease;
         }
 
         .photo-placeholder {
-            width: 150px;
-            height: 150px;
-            border-radius: 50%;
-            background: #f8f9fa;
-            display: inline-flex;
+            display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            border: 2px dashed #dee2e6;
-            margin: 0 auto 1.5rem;
+            height: 100%;
+            color: #999;
+            cursor: pointer;
+            transition: all 0.3s ease;
         }
 
-        .photo-controls {
-            margin-bottom: 1rem;
-        }
+        .photo-placeholder:hover {
 
         .photo-controls .btn {
             margin: 0.25rem;
@@ -1090,6 +1120,11 @@ if (isset($_SESSION['success_message'])) {
             to { opacity: 1; transform: translateY(0); }
         }
 
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .slide-in {
             animation: slideIn 0.3s ease-out;
         }
@@ -1197,36 +1232,81 @@ if (isset($_SESSION['success_message'])) {
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? bin2hex(random_bytes(32)); ?>">
                     <input type="hidden" name="role" value="lecturer">
 
-                    <!-- Photo Upload Section -->
+                    <!-- Enhanced Photo Upload Section -->
                     <div class="row g-3 mb-4 fade-in">
                          <div class="col-12 section-header">
                              <h6>
                                  <i class="fas fa-camera me-2"></i>Profile Photo
+                                 <span class="badge bg-secondary ms-2">Optional</span>
                              </h6>
+                             <small class="text-muted">Upload a professional photo for the lecturer's profile</small>
                          </div>
                          <div class="col-12">
                              <div class="photo-upload-container">
-                                 <div class="photo-preview">
-                                     <img id="photoPreview" src="" alt="Profile Photo Preview" style="display: none;">
-                                     <div id="photoPlaceholder" class="photo-placeholder">
-                                         <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
-                                         <p class="text-muted mb-2">No photo selected</p>
-                                         <small class="text-muted">Click "Choose Photo" to upload</small>
+                                 <div class="row align-items-center">
+                                     <div class="col-md-4">
+                                         <div class="photo-preview-wrapper">
+                                             <div class="photo-preview" id="photoPreviewContainer">
+                                                 <img id="photoPreview" src="" alt="Profile Photo Preview" style="display: none;">
+                                                 <div id="photoPlaceholder" class="photo-placeholder">
+                                                     <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
+                                                     <p class="text-muted mb-2 fw-bold">No photo selected</p>
+                                                     <small class="text-muted">Click "Choose Photo" to upload</small>
+                                                 </div>
+                                             </div>
+                                             <div class="photo-overlay" id="photoOverlay" style="display: none;">
+                                                 <button type="button" class="btn btn-sm btn-light" onclick="document.getElementById('lecturer_photo').click()">
+                                                     <i class="fas fa-edit me-1"></i>Change
+                                                 </button>
+                                                 <button type="button" class="btn btn-sm btn-danger ms-1" onclick="clearPhoto()">
+                                                     <i class="fas fa-trash me-1"></i>Remove
+                                                 </button>
+                                             </div>
+                                         </div>
+                                     </div>
+                                     <div class="col-md-8">
+                                         <div class="photo-controls">
+                                             <input type="file" id="lecturer_photo" name="lecturer_photo" class="form-control d-none"
+                                                    accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" onchange="previewPhoto(this)">
+                                             
+                                             <div class="d-grid gap-2 d-md-flex">
+                                                 <button type="button" class="btn btn-primary btn-lg" onclick="document.getElementById('lecturer_photo').click()">
+                                                     <i class="fas fa-camera me-2"></i>Choose Photo
+                                                 </button>
+                                                 <button type="button" class="btn btn-outline-secondary" onclick="clearPhoto()" id="clearPhotoBtn" style="display: none;">
+                                                     <i class="fas fa-trash me-2"></i>Clear Photo
+                                                 </button>
+                                             </div>
+                                             
+                                             <div class="mt-3">
+                                                 <div class="photo-requirements">
+                                                     <h6 class="text-primary mb-2">
+                                                         <i class="fas fa-info-circle me-1"></i>Photo Requirements:
+                                                     </h6>
+                                                     <ul class="list-unstyled small text-muted">
+                                                         <li><i class="fas fa-check text-success me-2"></i>Professional passport-style photo</li>
+                                                         <li><i class="fas fa-check text-success me-2"></i>Clear face visibility</li>
+                                                         <li><i class="fas fa-check text-success me-2"></i>Maximum file size: 2MB</li>
+                                                         <li><i class="fas fa-check text-success me-2"></i>Formats: JPG, PNG, GIF, WebP</li>
+                                                         <li><i class="fas fa-check text-success me-2"></i>Recommended: 300x300 pixels or larger</li>
+                                                     </ul>
+                                                 </div>
+                                             </div>
+                                             
+                                             <div class="photo-info mt-3" id="photoInfo" style="display: none;">
+                                                 <div class="alert alert-success border-0 py-2">
+                                                     <div class="d-flex align-items-center">
+                                                         <i class="fas fa-check-circle text-success me-2"></i>
+                                                         <div>
+                                                             <strong>Photo uploaded successfully!</strong><br>
+                                                             <small id="photoDetails" class="text-muted"></small>
+                                                         </div>
+                                                     </div>
+                                                 </div>
+                                             </div>
+                                         </div>
                                      </div>
                                  </div>
-                                 <div class="photo-controls">
-                                     <input type="file" id="lecturer_photo" name="lecturer_photo" class="form-control d-none"
-                                            accept="image/*" onchange="previewPhoto(this)">
-                                     <button type="button" class="btn btn-outline-primary me-2" onclick="document.getElementById('lecturer_photo').click()">
-                                         <i class="fas fa-camera me-2"></i>Choose Photo
-                                     </button>
-                                     <button type="button" class="btn btn-outline-secondary" onclick="clearPhoto()">
-                                         <i class="fas fa-trash me-2"></i>Clear
-                                     </button>
-                                 </div>
-                                 <small class="form-text text-muted mt-2">
-                                     <i class="fas fa-info-circle me-1"></i>Upload a clear passport-style photo. Maximum file size: 2MB. Supported formats: JPG, PNG, GIF.
-                                 </small>
                              </div>
                          </div>
                      </div>
@@ -1395,64 +1475,76 @@ if (isset($_SESSION['success_message'])) {
                                 </div>
                                 <div class="card-body">
                                     <!-- Option Assignment Section -->
-                                    <div class="row mb-4">
-                                        <div class="col-12">
-                                            <label class="form-label">
-                                                <i class="fas fa-list me-2"></i>Option Access (Required)
-                                                <small class="text-muted fw-normal">- Select options this lecturer can access based on department you selected</small>
-                                            </label>
-                                            <div class="option-selection-container border-0 bg-light">
-                                                <div id="optionsContainer" class="text-center py-4">
-                                                    <div class="spinner-border text-primary mb-3" role="status" style="width: 2rem; height: 2rem;">
-                                                        <span class="visually-hidden">Loading options...</span>
-                                                    </div>
-                                                    <h6 class="text-primary mb-2">Loading Available Options</h6>
-                                                    <p class="text-muted mb-0">Fetching options for the selected department...</p>
-                                                    <div class="progress mt-3" style="height: 4px;">
-                                                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="d-flex justify-content-between align-items-center mt-3">
-                                                <small class="form-text text-muted">
-                                                    <i class="fas fa-info-circle me-1"></i>
-                                                    Select at least one option for the lecturer to access based on department permissions.
-                                                </small>
-                                                <div class="selection-counter">
-                                                    <i class="fas fa-check-circle"></i>
-                                                    <span id="selectedOptionsCount">0</span> options selected
-                                                </div>
-                                            </div>
-                                        </div>
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <label class="form-label">
+                                <i class="fas fa-list me-2"></i>Option Access
+                                <span class="badge bg-primary ms-2">Required</span>
+                                <small class="text-muted fw-normal d-block mt-1">Select options this lecturer can access based on department</small>
+                            </label>
+                            <div class="option-selection-container border rounded p-3 bg-light">
+                                <div id="optionsContainer" class="text-center py-4">
+                                    <div class="alert alert-info border-0">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        <strong>Please select a department first</strong><br>
+                                        <small>Choose a department above to view available options</small>
                                     </div>
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <div class="d-flex align-items-center">
+                                    <button type="button" class="btn btn-sm btn-outline-primary me-2" onclick="selectAllOptions()">
+                                        <i class="fas fa-check-double me-1"></i>Select All
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllOptions()">
+                                        <i class="fas fa-times me-1"></i>Clear All
+                                    </button>
+                                </div>
+                                <div class="selection-counter badge bg-success fs-6">
+                                    <i class="fas fa-check-circle me-1"></i>
+                                    <span id="selectedOptionsCount">0</span> selected
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                                     <!-- Course Assignment Section -->
-                                    <div class="row">
-                                        <div class="col-12">
-                                            <label class="form-label">
-                                                <i class="fas fa-book me-2"></i>Course Assignment (Optional)
-                                                <small class="text-warning fw-bold">- Only unassigned courses are displayed for selection</small>
-                                            </label>
-                                            <div class="course-selection-container border-0 bg-light">
-                                                <div id="coursesContainer" class="text-center py-4">
-                                                    <i class="fas fa-book-open fa-3x text-muted mb-3"></i>
-                                                    <h6 class="text-muted mb-2">Course Assignment</h6>
-                                                    <p class="text-muted mb-1">Select a department above to view available courses</p>
-                                                    <small class="text-muted">Only unassigned courses will be shown for assignment</small>
-                                                </div>
-                                            </div>
-                                            <div class="d-flex justify-content-between align-items-center mt-3">
-                                                <div class="alert alert-warning py-2 px-3 mb-0" style="font-size: 0.85rem;">
-                                                    <i class="fas fa-exclamation-triangle me-1"></i>
-                                                    <strong>Important:</strong> Only courses that are not currently assigned to any lecturer are shown here.
-                                                </div>
-                                                <div class="selection-counter">
-                                                    <i class="fas fa-graduation-cap"></i>
-                                                    <span id="selectedCoursesCount">0</span> courses selected
-                                                </div>
-                                            </div>
-                                        </div>
+                    <div class="row">
+                        <div class="col-12">
+                            <label class="form-label">
+                                <i class="fas fa-book me-2"></i>Course Assignment
+                                <span class="badge bg-secondary ms-2">Optional</span>
+                                <small class="text-muted fw-normal d-block mt-1">Assign specific courses to this lecturer</small>
+                            </label>
+                            <div class="course-selection-container border rounded p-3 bg-light">
+                                <div id="coursesContainer" class="text-center py-4">
+                                    <div class="alert alert-info border-0">
+                                        <i class="fas fa-book-open me-2"></i>
+                                        <strong>Select a department first</strong><br>
+                                        <small>Choose a department above to view available courses</small>
                                     </div>
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <div class="d-flex align-items-center">
+                                    <button type="button" class="btn btn-sm btn-outline-primary me-2" onclick="selectAllCourses()">
+                                        <i class="fas fa-check-double me-1"></i>Select All
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllCourses()">
+                                        <i class="fas fa-times me-1"></i>Clear All
+                                    </button>
+                                    <small class="text-warning ms-3">
+                                        <i class="fas fa-info-circle me-1"></i>Only unassigned courses shown
+                                    </small>
+                                </div>
+                                <div class="selection-counter badge bg-info fs-6">
+                                    <i class="fas fa-graduation-cap me-1"></i>
+                                    <span id="selectedCoursesCount">0</span> selected
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                                 </div>
                             </div>
                         </div>
@@ -1463,12 +1555,23 @@ if (isset($_SESSION['success_message'])) {
                     <div id="selectedCoursesInputs" style="display: none;"></div>
 
                     <div class="text-center mt-4">
-                        <button type="submit" class="btn btn-primary btn-lg" id="addBtn">
-                            <i class="fas fa-plus me-2"></i>Register Lecturer
-                        </button>
-                        <a href="admin-dashboard.php" class="btn btn-secondary ms-2">
-                            <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
-                        </a>
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-center">
+                            <button type="submit" class="btn btn-primary btn-lg px-5" id="addBtn">
+                                <i class="fas fa-user-plus me-2"></i>Register Lecturer
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-lg" onclick="resetForm()">
+                                <i class="fas fa-undo me-2"></i>Reset Form
+                            </button>
+                            <a href="admin-dashboard.php" class="btn btn-secondary btn-lg">
+                                <i class="fas fa-arrow-left me-2"></i>Cancel
+                            </a>
+                        </div>
+                        <div class="mt-3">
+                            <small class="text-muted">
+                                <i class="fas fa-info-circle me-1"></i>
+                                Default password will be <strong>12345</strong> - advise lecturer to change on first login
+                            </small>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -2270,72 +2373,102 @@ if (isset($_SESSION['success_message'])) {
                                '<ul class="mb-0 mt-2" style="text-align: left;">' +
                                validationErrors.map(error => `<li>${error}</li>`).join('') +
                                '</ul>';
-            showAlert(errorMessage, 'danger', 8000); // Show longer for detailed errors
-            e.preventDefault();
-            return false;
-        }
 
-        // Mark form as submitting to prevent double submission
-        this.dataset.submitting = 'true';
+            const placeholder = document.getElementById('photoPlaceholder');
 
-        // Set loading state
-        const addBtn = document.getElementById('addBtn');
-        const loadingOverlay = document.getElementById('loadingOverlay');
-        if (addBtn) {
-            addBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Registering Lecturer...';
-            addBtn.disabled = true;
-        }
-        if (loadingOverlay) {
-            loadingOverlay.style.display = 'flex';
-        }
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
 
-        return true;
-    });
+                // Validate file size (2MB max)
+                if (file.size > 2 * 1024 * 1024) {
+                    showAlert('File size must be less than 2MB', 'error');
+                    clearPhoto();
+                    return;
+                }
 
-    // Photo preview functionality
-    function previewPhoto(input) {
-        const preview = document.getElementById('photoPreview');
-        const placeholder = document.getElementById('photoPlaceholder');
+                // Validate file type
+                const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+                if (!validTypes.includes(file.type)) {
+                    showAlert('Please select a valid image file (JPG, PNG, or GIF)', 'error');
+                    clearPhoto();
+                    return;
+                }
 
-        if (input.files && input.files[0]) {
-            const file = input.files[0];
-
-            // Validate file size (2MB max)
-            if (file.size > 2 * 1024 * 1024) {
-                showAlert('File size must be less than 2MB', 'error');
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                    placeholder.style.display = 'none';
+                };
+                reader.readAsDataURL(file);
+            } else {
                 clearPhoto();
-                return;
             }
-
-            // Validate file type
-            const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-            if (!validTypes.includes(file.type)) {
-                showAlert('Please select a valid image file (JPG, PNG, or GIF)', 'error');
-                clearPhoto();
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                preview.src = e.target.result;
-                preview.style.display = 'block';
-                placeholder.style.display = 'none';
-            };
-            reader.readAsDataURL(file);
-        } else {
-            clearPhoto();
-        }
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedOptions();
+        showAlert('All available options selected', 'success', 2000);
     }
 
-    function clearPhoto() {
-        const input = document.getElementById('lecturer_photo');
-        const preview = document.getElementById('photoPreview');
-        const placeholder = document.getElementById('photoPlaceholder');
+    function clearAllOptions() {
+        const checkboxes = document.querySelectorAll('.option-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedOptions();
+        showAlert('All options cleared', 'info', 2000);
+    }
 
-        input.value = '';
-        preview.src = '';
-        preview.style.display = 'none';
-        placeholder.style.display = 'flex';
+    function selectAllCourses() {
+        const checkboxes = document.querySelectorAll('.course-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = true;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedCourses();
+        showAlert('All available courses selected', 'success', 2000);
+    }
+
+    function clearAllCourses() {
+        const checkboxes = document.querySelectorAll('.course-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedCourses();
+        showAlert('All courses cleared', 'info', 2000);
+    }
+
+    function resetForm() {
+        if (confirm('Are you sure you want to reset the form? All entered data will be lost.')) {
+            document.getElementById('lecturerRegistrationForm').reset();
+            clearPhoto();
+            clearAllOptions();
+            clearAllCourses();
+            
+            // Reset department-dependent sections
+            const optionsContainer = document.getElementById('optionsContainer');
+            const coursesContainer = document.getElementById('coursesContainer');
+            
+            optionsContainer.innerHTML = `
+                <div class="alert alert-info border-0">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Please select a department first</strong><br>
+                    <small>Choose a department above to view available options</small>
+                </div>
+            `;
+            
+            coursesContainer.innerHTML = `
+                <div class="alert alert-info border-0">
+                    <i class="fas fa-book-open me-2"></i>
+                    <strong>Select a department first</strong><br>
+                    <small>Choose a department above to view available courses</small>
+                </div>
+            `;
+            
+            showAlert('Form has been reset', 'info', 2000);
+        }
     }
 
     // Enhanced alert function with better styling
@@ -2374,6 +2507,163 @@ if (isset($_SESSION['success_message'])) {
             }, duration);
         }
     }
+
+    // Enhanced photo preview functionality with drag and drop
+    function previewPhoto(input) {
+        const preview = document.getElementById('photoPreview');
+        const placeholder = document.getElementById('photoPlaceholder');
+        const photoInfo = document.getElementById('photoInfo');
+        const photoDetails = document.getElementById('photoDetails');
+        const clearBtn = document.getElementById('clearPhotoBtn');
+        const photoOverlay = document.getElementById('photoOverlay');
+
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+
+            // Enhanced validation
+            const maxSize = 2 * 1024 * 1024; // 2MB
+            const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+
+            if (file.size > maxSize) {
+                showAlert(`File size too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 2MB`, 'error');
+                clearPhoto();
+                return;
+            }
+
+            if (!validTypes.includes(file.type)) {
+                showAlert('Please select a valid image file (JPG, PNG, GIF, or WebP)', 'error');
+                clearPhoto();
+                return;
+            }
+
+            // Show loading state
+            placeholder.innerHTML = `
+                <div class="spinner-border text-primary mb-2" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted mb-0">Processing image...</p>
+            `;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                // Create image to get dimensions
+                const img = new Image();
+                img.onload = function() {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                    placeholder.style.display = 'none';
+                    if (photoOverlay) photoOverlay.style.display = 'flex';
+                    if (clearBtn) clearBtn.style.display = 'inline-block';
+
+                    // Show photo info
+                    if (photoDetails && photoInfo) {
+                        const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
+                        photoDetails.textContent = `${file.name} • ${img.width}×${img.height}px • ${fileSizeMB}MB`;
+                        photoInfo.style.display = 'block';
+                    }
+
+                    showAlert('Photo uploaded successfully!', 'success', 3000);
+                };
+                img.src = e.target.result;
+            };
+
+            reader.onerror = function() {
+                showAlert('Error reading file. Please try again.', 'error');
+                clearPhoto();
+            };
+
+            reader.readAsDataURL(file);
+        } else {
+            clearPhoto();
+        }
+    }
+
+    function clearPhoto() {
+        const input = document.getElementById('lecturer_photo');
+        const preview = document.getElementById('photoPreview');
+        const placeholder = document.getElementById('photoPlaceholder');
+        const photoInfo = document.getElementById('photoInfo');
+        const clearBtn = document.getElementById('clearPhotoBtn');
+        const photoOverlay = document.getElementById('photoOverlay');
+
+        if (input) input.value = '';
+        if (preview) {
+            preview.src = '';
+            preview.style.display = 'none';
+        }
+        if (placeholder) placeholder.style.display = 'flex';
+        if (photoInfo) photoInfo.style.display = 'none';
+        if (clearBtn) clearBtn.style.display = 'none';
+        if (photoOverlay) photoOverlay.style.display = 'none';
+
+        // Reset placeholder content
+        if (placeholder) {
+            placeholder.innerHTML = `
+                <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
+                <p class="text-muted mb-2 fw-bold">No photo selected</p>
+                <small class="text-muted">Click "Choose Photo" to upload</small>
+            `;
+        }
+
+        showAlert('Photo removed', 'info', 2000);
+    }
+
+    // Initialize drag and drop functionality when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        const photoContainer = document.querySelector('.photo-upload-container');
+        const fileInput = document.getElementById('lecturer_photo');
+        const photoPlaceholder = document.getElementById('photoPlaceholder');
+
+        // Make placeholder clickable
+        if (photoPlaceholder && fileInput) {
+            photoPlaceholder.addEventListener('click', function() {
+                fileInput.click();
+            });
+        }
+
+        if (photoContainer && fileInput) {
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                photoContainer.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // Highlight drop area when item is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                photoContainer.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                photoContainer.addEventListener(eventName, unhighlight, false);
+            });
+
+            // Handle dropped files
+            photoContainer.addEventListener('drop', handleDrop, false);
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function highlight(e) {
+                photoContainer.classList.add('drag-over');
+            }
+
+            function unhighlight(e) {
+                photoContainer.classList.remove('drag-over');
+            }
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    previewPhoto(fileInput);
+                }
+            }
+        }
+    });
     </script>
 </body>
 </html>

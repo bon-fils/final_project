@@ -129,7 +129,7 @@ function updatePasswordHash($userId, $password, $pdo) {
 }
 
 // Load role-specific session data with optimized queries
-function loadRoleSpecificData($pdo, $user) {
+function loadRoleSpecificData($pdo, $user, $selectedRole = null) {
     try {
         switch ($user['role']) {
             case 'student':
@@ -198,7 +198,13 @@ function loadRoleSpecificData($pdo, $user) {
                     $_SESSION['education_level'] = $data['education_level'];
                     // Set personal info
                     setPersonalInfo($data);
-                    return ($user['role'] === 'hod') ? "hod-dashboard.php" : "lecturer-dashboard.php";
+                    
+                    // Handle HOD users who login as lecturers
+                    if ($user['role'] === 'hod' && $selectedRole === 'lecturer') {
+                        return "lecturer-dashboard.php";
+                    } else {
+                        return ($user['role'] === 'hod') ? "hod-dashboard.php" : "lecturer-dashboard.php";
+                    }
                 }
                 break;
 
@@ -279,16 +285,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = "Too many login attempts. Please try again in 15 minutes.";
         } else {
             try {
-                // Single optimized query with prepared statement
+                // Enhanced query to allow HOD access to lecturer functionality
+                $roleCondition = '';
+                $params = [$emailOrUsername, $emailOrUsername];
+                
+                if ($role === 'lecturer') {
+                    // Allow both lecturer and hod roles to access lecturer functionality
+                    $roleCondition = "AND role IN ('lecturer', 'hod')";
+                } else {
+                    // For other roles, use exact match
+                    $roleCondition = "AND role = ?";
+                    $params[] = $role;
+                }
+                
                 $stmt = $pdo->prepare("
                     SELECT id, username, email, password, role, status, last_login 
                     FROM users 
                     WHERE (email = ? OR username = ?) 
-                    AND role = ? 
+                    $roleCondition
                     AND status = 'active' 
                     LIMIT 1
                 ");
-                $stmt->execute([$emailOrUsername, $emailOrUsername, $role]);
+                $stmt->execute($params);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
                 if (!$user) {
@@ -341,7 +359,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $_SESSION['user_id'] = $user['id'];
                         $_SESSION['username'] = $user['username'];
                         $_SESSION['email'] = $user['email'];
-                        $_SESSION['role'] = $user['role'];
+                        // For HOD users logging in as lecturers, set session role to lecturer
+                        $_SESSION['role'] = ($user['role'] === 'hod' && $role === 'lecturer') ? 'lecturer' : $user['role'];
+                        $_SESSION['actual_role'] = $user['role']; // Store the actual database role
                         $_SESSION['login_time'] = time();
                         $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'] ?? '';
                         $_SESSION['ip_address'] = $_SERVER['REMOTE_ADDR'] ?? '';
@@ -351,7 +371,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $role_valid = true;
 
                         // Load role-specific session data using optimized queries
-                        $redirect_url = loadRoleSpecificData($pdo, $user);
+                        // Pass the selected role to handle HOD users logging in as lecturers
+                        $redirect_url = loadRoleSpecificData($pdo, $user, $role);
                         if (!$redirect_url) {
                             error_log("Login failed: loadRoleSpecificData returned false for user {$user['id']} with role {$user['role']}");
                             $error = "Unable to load user profile. Please contact support.";

@@ -145,7 +145,7 @@ function processStudentRegistration($pdo, $logger, $isFromRegistration) {
         // Step 5: File upload handling
         $uploadStart = microtime(true);
         $faceImagePaths = handleFaceImagesUploadSafely($_FILES['face_images'] ?? null, $logger);
-        $fingerprintData = handleFingerprintDataSafely($_POST['fingerprint_data'] ?? null, $studentData['reg_no']);
+        $fingerprintData = handleFingerprintDataSafely($_POST, $studentData['reg_no']);
         $uploadTime = microtime(true) - $uploadStart;
 
         // Step 6: Database record creation
@@ -636,12 +636,27 @@ function getUploadErrorMessage($errorCode) {
 /**
  * Handle fingerprint data safely
  */
-function handleFingerprintDataSafely($fingerprintData, $regNo) {
-    if (empty($fingerprintData)) {
-        return ['path' => null, 'quality' => 0];
+function handleFingerprintDataSafely($postData, $regNo) {
+    // Check if fingerprint is enrolled
+    if (empty($postData['fingerprint_enrolled']) || $postData['fingerprint_enrolled'] !== 'true') {
+        return ['path' => null, 'quality' => 0, 'id' => null, 'enrolled' => false];
     }
 
-    return processFingerprintData($fingerprintData, $regNo);
+    // Process fingerprint image if available
+    $fingerprintPath = null;
+    if (!empty($postData['fingerprint_image'])) {
+        $fingerprintPath = processFingerprintData($postData['fingerprint_image'], $regNo);
+    }
+
+    return [
+        'path' => $fingerprintPath['path'] ?? null,
+        'quality' => (int)($postData['fingerprint_quality'] ?? 0),
+        'id' => $postData['fingerprint_id'] ?? null,
+        'template' => $postData['fingerprint_template'] ?? null,
+        'hash' => $postData['fingerprint_hash'] ?? null,
+        'enrolled_at' => $postData['fingerprint_enrolled_at'] ?? null,
+        'enrolled' => true
+    ];
 }
 
 
@@ -743,14 +758,14 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
         $insertStudent = $pdo->prepare("
             INSERT INTO students (
                 user_id, option_id, year_level, reg_no, student_id_number,
-                fingerprint_path, fingerprint_quality, student_photos,
+                fingerprint_path, fingerprint_quality, fingerprint_id, student_photos,
                 department_id, parent_first_name, parent_last_name, parent_contact,
-                status, fingerprint_status
+                status, fingerprint_status, fingerprint_enrolled_at
             ) VALUES (
                 :user_id, :option_id, :year_level, :reg_no, :student_id,
-                :fingerprint_path, :fingerprint_quality, :student_photos,
+                :fingerprint_path, :fingerprint_quality, :fingerprint_id, :student_photos,
                 :department_id, :parent_first_name, :parent_last_name, :parent_contact,
-                'active', :fingerprint_status
+                'active', :fingerprint_status, :fingerprint_enrolled_at
             )
         ");
 
@@ -762,12 +777,14 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             ':student_id' => $studentData['student_id'],
             ':fingerprint_path' => $fingerprintData['path'],
             ':fingerprint_quality' => $fingerprintData['quality'],
+            ':fingerprint_id' => $fingerprintData['id'],
             ':student_photos' => json_encode($biometricData),
             ':department_id' => $studentData['department_id'],
             ':parent_first_name' => $studentData['parent_first_name'],
             ':parent_last_name' => $studentData['parent_last_name'],
             ':parent_contact' => $studentData['parent_contact'],
-            ':fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled'
+            ':fingerprint_status' => $fingerprintData['enrolled'] ? 'enrolled' : 'not_enrolled',
+            ':fingerprint_enrolled_at' => $fingerprintData['enrolled_at']
         ]);
 
         $studentId = $pdo->lastInsertId();
@@ -798,14 +815,14 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             'year_level' => $studentData['year_level'],
             'registered_by' => $_SESSION['user_id'] ?? null,
             'registration_timestamp' => date('Y-m-d H:i:s'),
-            'biometric_data_stored' => !empty($faceImagePaths) || !empty($fingerprintData['path']),
+            'biometric_data_stored' => !empty($faceImagePaths) || $fingerprintData['enrolled'],
             'face_images_count' => count($faceImagePaths),
-            'fingerprint_enrolled' => !empty($fingerprintData['path']),
+            'fingerprint_enrolled' => $fingerprintData['enrolled'] ?? false,
             'fingerprint_quality' => $fingerprintData['quality'] ?? 0,
-            'fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled',
+            'fingerprint_status' => $fingerprintData['enrolled'] ? 'enrolled' : 'not_enrolled',
             'biometric_types' => array_filter([
                 !empty($faceImagePaths) ? 'face_recognition' : null,
-                !empty($fingerprintData['path']) ? 'fingerprint' : null
+                $fingerprintData['enrolled'] ? 'fingerprint' : null
             ]),
             'guardian_info_provided' => !empty($studentData['parent_first_name']) || !empty($studentData['parent_last_name'])
         ];
@@ -826,7 +843,7 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             $registrationSummary[] = "Face Recognition: {$faceCount} images";
         }
 
-        if ($fingerprintData['path']) {
+        if ($fingerprintData['enrolled']) {
             $message .= ' Fingerprint enrolled successfully!';
             $registrationSummary[] = 'Fingerprint: Enrolled';
         }
@@ -841,8 +858,8 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             'student_id' => $studentId,
             'record_creation_time_ms' => round($recordTime * 1000, 2),
             'face_images_count' => count($faceImagePaths),
-            'fingerprint_enrolled' => !empty($fingerprintData['path']),
-            'fingerprint_status' => !empty($fingerprintData['path']) ? 'enrolled' : 'not_enrolled',
+            'fingerprint_enrolled' => $fingerprintData['enrolled'] ?? false,
+            'fingerprint_status' => $fingerprintData['enrolled'] ? 'enrolled' : 'not_enrolled',
             'guardian_registered' => !empty($studentData['parent_first_name']) || !empty($studentData['parent_last_name'])
         ]);
 
@@ -852,8 +869,8 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             'student_id' => $studentId,
             'student_name' => $studentData['first_name'] . ' ' . $studentData['last_name'],
             'reg_no' => $studentData['reg_no'],
-            'fingerprint_enrolled' => !empty($fingerprintData['path']),
-            'biometric_complete' => (!empty($faceImagePaths) || !empty($fingerprintData['path'])),
+            'fingerprint_enrolled' => $fingerprintData['enrolled'] ?? false,
+            'biometric_complete' => (!empty($faceImagePaths) || $fingerprintData['enrolled']),
             'registration_summary' => $registrationSummary,
             'redirect' => 'login.php',
             'performance' => [

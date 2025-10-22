@@ -64,7 +64,7 @@ class SecurityUtils {
                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; " .
                "img-src 'self' data: https:; " .
                "font-src 'self' https://cdnjs.cloudflare.com; " .
-               "connect-src 'self'; " .
+               "connect-src 'self' http://192.168.137.40 http://192.168.137.40:80 https://192.168.137.40 https://192.168.137.40:80; " .
                "frame-ancestors 'none';";
         header("Content-Security-Policy: $csp");
         

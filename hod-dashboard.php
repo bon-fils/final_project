@@ -3,11 +3,8 @@ require_once "config.php"; // PDO connection - must be first
 session_start();
 require_once "session_check.php";
 
-// Ensure user is logged in and is HoD
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
-    header("Location: login_new.php");
-    exit;
-}
+// Ensure user is logged in and has HOD role
+require_role(['hod']);
 
 // Get HoD information and verify department assignment
 $user_id = $_SESSION['user_id'];

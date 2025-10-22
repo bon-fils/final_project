@@ -151,9 +151,15 @@ function require_role($roles) {
         $roles = [$roles];
     }
 
-    if (!in_array($_SESSION['role'], $roles)) {
+    // Check both session role and actual role (for HOD users who login as lecturers)
+    $userRole = $_SESSION['role'];
+    $actualRole = $_SESSION['actual_role'] ?? $_SESSION['role'];
+    
+    $hasAccess = in_array($userRole, $roles) || in_array($actualRole, $roles);
+    
+    if (!$hasAccess) {
         // Log unauthorized access attempt
-        error_log("Unauthorized access attempt: User ID {$_SESSION['user_id']} tried to access restricted area. Required roles: " . implode(', ', $roles) . ", User role: {$_SESSION['role']}");
+        error_log("Unauthorized access attempt: User ID {$_SESSION['user_id']} tried to access restricted area. Required roles: " . implode(', ', $roles) . ", User role: {$userRole}, Actual role: {$actualRole}");
 
         $is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
 

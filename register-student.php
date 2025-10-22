@@ -40,7 +40,7 @@ if (empty($departments)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="connect-src 'self' http://192.168.137.40:80 https://192.168.137.40:80 ws://192.168.137.40:80 wss://192.168.137.40:80 http://192.168.1.127; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; default-src 'self';">
+    <!-- CSP temporarily disabled for ESP32 testing -->
     <title>Student Registration - Rwanda Polytechnic</title>
 
     <!-- Bootstrap CSS -->
@@ -60,8 +60,6 @@ if (empty($departments)) {
     <!-- Custom CSS -->
     <link href="css/register-student.css" rel="stylesheet">
 
-    <!-- Bootstrap JS -->
-    <script src="js/bootstrap.bundle.min.js"></script>
 </head>
 <body>
     <div class="container-fluid">
@@ -1991,11 +1989,20 @@ class StudentRegistration {
                                 </div>
                             </div>
                             <div class="modal-footer justify-content-center">
+                                <div class="text-center w-100 mb-3">
+                                    <div class="alert alert-info mb-3">
+                                        <i class="fas fa-clock me-2"></i>
+                                        <strong>Auto-refresh:</strong> Page will refresh in <span id="refreshCountdown">5</span> seconds
+                                    </div>
+                                </div>
                                 <button type="button" class="btn btn-success btn-lg px-4" id="continueButton">
-                                    <i class="fas fa-tachometer-alt me-2"></i>Go to Dashboard
+                                    <i class="fas fa-tachometer-alt me-2"></i>Go to Dashboard Now
                                 </button>
-                                <button type="button" class="btn btn-outline-success" data-bs-dismiss="modal">
-                                    <i class="fas fa-times me-2"></i>Close
+                                <button type="button" class="btn btn-outline-success" id="refreshNowButton">
+                                    <i class="fas fa-refresh me-2"></i>Refresh Now
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" id="cancelRefreshButton">
+                                    <i class="fas fa-times me-2"></i>Cancel Auto-refresh
                                 </button>
                             </div>
                         </div>
@@ -2012,16 +2019,100 @@ class StudentRegistration {
         });
         modal.show();
 
+        // Auto-refresh functionality
+        let refreshCountdown = 5;
+        let refreshInterval;
+        
+        const countdownElement = document.getElementById('refreshCountdown');
         const continueBtn = document.getElementById('continueButton');
+        const refreshNowBtn = document.getElementById('refreshNowButton');
+        const cancelRefreshBtn = document.getElementById('cancelRefreshButton');
+        
+        // Start countdown
+        const startCountdown = () => {
+            refreshInterval = setInterval(() => {
+                refreshCountdown--;
+                if (countdownElement) {
+                    countdownElement.textContent = refreshCountdown;
+                }
+                
+                if (refreshCountdown <= 0) {
+                    clearInterval(refreshInterval);
+                    this.refreshPage();
+                }
+            }, 1000);
+        };
+        
+        // Button event listeners
         if (continueBtn) {
             continueBtn.addEventListener('click', () => {
+                clearInterval(refreshInterval);
                 modal.hide();
-                // Add a small delay to show transition
                 setTimeout(() => {
                     window.location.href = response.redirect || 'admin-dashboard.php';
                 }, 300);
             });
         }
+        
+        if (refreshNowBtn) {
+            refreshNowBtn.addEventListener('click', () => {
+                clearInterval(refreshInterval);
+                this.refreshPage();
+            });
+        }
+        
+        if (cancelRefreshBtn) {
+            cancelRefreshBtn.addEventListener('click', () => {
+                clearInterval(refreshInterval);
+                const alertDiv = document.querySelector('#successModal .alert-info');
+                if (alertDiv) {
+                    alertDiv.innerHTML = '<i class="fas fa-info-circle me-2"></i><strong>Auto-refresh cancelled.</strong> You can manually refresh or continue.';
+                    alertDiv.className = 'alert alert-warning mb-3';
+                }
+                cancelRefreshBtn.style.display = 'none';
+            });
+        }
+        
+        // Start the countdown
+        startCountdown();
+    }
+
+    refreshPage() {
+        // Show loading indicator
+        this.showAlert('🔄 Refreshing page...', 'info');
+        
+        // Clear any stored form data
+        this.clearForm();
+        
+        // Refresh the page
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
+    }
+
+    clearForm() {
+        // Reset the form
+        const form = document.getElementById('registrationForm');
+        if (form) {
+            form.reset();
+        }
+        
+        // Clear face images
+        this.clearFaceImages();
+        
+        // Clear fingerprint data
+        if (window.fingerprintIntegration) {
+            window.fingerprintIntegration.clearFingerprint();
+        }
+        
+        // Reset progress bar
+        this.updateProgress(0);
+        
+        // Clear any validation errors
+        const invalidElements = this.$$('.is-invalid');
+        invalidElements.forEach(el => this.removeClass(el, 'is-invalid'));
+        const feedbackElements = this.$$('.invalid-feedback');
+        feedbackElements.forEach(el => el.remove());
     }
 
     async startFingerprintCapture() {
@@ -2434,23 +2525,28 @@ class StudentRegistration {
             });
 
             // Include fingerprint data if captured and enrolled
-            if (this.fingerprintCaptured && this.fingerprintData && this.fingerprintData.enrolled) {
+            const fingerprintIntegration = window.fingerprintIntegration;
+            if (fingerprintIntegration && fingerprintIntegration.isFingerprintCaptured()) {
+                const fingerprintData = fingerprintIntegration.getFingerprintData();
+                
                 formData.append('fingerprint_enrolled', 'true');
-                formData.append('fingerprint_id', this.fingerprintData.id || '');
-                formData.append('fingerprint_template', this.fingerprintData.template || '');
-                formData.append('fingerprint_hash', this.fingerprintData.hash || '');
-                formData.append('fingerprint_quality', this.fingerprintQuality);
-                formData.append('fingerprint_enrolled_at', this.fingerprintData.enrolled_at || '');
+                formData.append('fingerprint_id', fingerprintData?.fingerprint_id || '');
+                formData.append('fingerprint_template', fingerprintData?.template || '');
+                formData.append('fingerprint_hash', fingerprintData?.hash || '');
+                formData.append('fingerprint_quality', fingerprintData?.confidence || '');
+                formData.append('fingerprint_enrolled_at', new Date().toISOString());
 
                 // Include canvas visualization for reference
                 const canvas = document.getElementById('fingerprintCanvas');
-                const fingerprintImageData = canvas.toDataURL('image/png');
-                formData.append('fingerprint_image', fingerprintImageData);
+                if (canvas) {
+                    const fingerprintImageData = canvas.toDataURL('image/png');
+                    formData.append('fingerprint_image', fingerprintImageData);
+                }
 
                 console.log('Including enrolled fingerprint data:', {
-                    id: this.fingerprintData.id,
-                    template: this.fingerprintData.template,
-                    quality: this.fingerprintQuality
+                    id: fingerprintData?.fingerprint_id,
+                    confidence: fingerprintData?.confidence,
+                    enrolled: true
                 });
             } else {
                 formData.append('fingerprint_enrolled', 'false');
@@ -2466,8 +2562,17 @@ class StudentRegistration {
                 }
             });
 
+            // Check for duplicate user error (HTTP 409)
+            if (response.status === 409) {
+                const responseData = await response.json();
+                this.showDuplicateUserAlert(responseData);
+                return;
+            }
+
+            // Check for other HTTP errors
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const responseData = await response.json().catch(() => ({}));
+                throw new Error(`HTTP ${response.status}: ${responseData.message || response.statusText}`);
             }
 
             const responseData = await response.json();
@@ -2475,7 +2580,12 @@ class StudentRegistration {
             if (responseData.success) {
                 this.showSuccess(responseData);
             } else {
-                this.handleSubmissionError(responseData);
+                // Check for duplicate user error in response message
+                if (responseData.message && responseData.message.toLowerCase().includes('already exists')) {
+                    this.showDuplicateUserAlert(responseData);
+                } else {
+                    this.handleSubmissionError(responseData);
+                }
             }
         } catch (error) {
             this.handleNetworkError(error);
@@ -3013,6 +3123,30 @@ class StudentRegistration {
         this.disableForm(false);
     }
 
+    // Show duplicate user alert
+    showDuplicateUserAlert(response) {
+        let alertMessage = '⚠️ **User Already Exists**: A student with this information is already registered in the system.';
+        
+        // Check which fields are duplicated
+        if (response.message) {
+            const message = response.message.toLowerCase();
+            if (message.includes('email')) {
+                alertMessage = '⚠️ **Email Already Registered**: This email address is already associated with another student account.';
+            } else if (message.includes('registration number')) {
+                alertMessage = '⚠️ **Registration Number Taken**: This registration number is already in use by another student.';
+            } else if (message.includes('phone')) {
+                alertMessage = '⚠️ **Phone Number Registered**: This phone number is already associated with another student account.';
+            }
+        }
+        
+        alertMessage += '\n\n**Please check:**\n• Email address\n• Registration number\n• Phone number\n\nOr contact the administrator if this is an error.';
+        
+        this.showAlert(alertMessage, 'error', false);
+        
+        // Scroll to top to show the error
+        this.animate(document.documentElement, { scrollTop: 0 }, 500);
+    }
+
     // Show duplicate user modal
     showDuplicateUserModal(response) {
         const modal = document.getElementById('duplicateUserModal');
@@ -3160,5 +3294,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
     </script>
+    
+    <!-- Bootstrap JS -->
+    <script src="js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Working Fingerprint Integration -->
+    <script src="js/fingerprint-integration-working.js"></script>
 </body>
 </html>
