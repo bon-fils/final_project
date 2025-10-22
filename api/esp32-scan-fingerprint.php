@@ -115,7 +115,12 @@ try {
     
     // Step 2: Get fingerprint ID from ESP32 response
     $fingerprint_id = $scan_data['fingerprint_id'] ?? null;
-    $confidence = $scan_data['confidence'] ?? 0;
+    $raw_confidence = $scan_data['confidence'] ?? 0;
+    
+    // Normalize confidence to 0-100% range
+    // ESP32 returns values like 232 (higher = better match)
+    // Convert to percentage: cap at 100%, minimum 50% for successful match
+    $confidence = min(100, max(50, round(($raw_confidence / 255) * 100)));
     
     if (!$fingerprint_id) {
         error_log("⚠️ Fingerprint not recognized by scanner");

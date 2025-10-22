@@ -164,6 +164,28 @@ const FormHandlers = {
         console.log('🚀 Initializing form handlers...');
         this.setupEventListeners();
         this.loadInitialData();
+        this.initializeAudioContext();
+    },
+    
+    initializeAudioContext: function() {
+        // Initialize AudioContext on first user interaction to avoid autoplay policy
+        const initAudio = () => {
+            if (!window.attendanceAudioContext) {
+                try {
+                    window.attendanceAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    console.log('🔊 Audio context initialized');
+                } catch (e) {
+                    console.log('Audio not available');
+                }
+            }
+            // Remove listeners after first interaction
+            document.removeEventListener('click', initAudio);
+            document.removeEventListener('touchstart', initAudio);
+        };
+        
+        // Wait for first user interaction
+        document.addEventListener('click', initAudio, { once: true });
+        document.addEventListener('touchstart', initAudio, { once: true });
     },
 
     setupEventListeners: function() {
@@ -1053,7 +1075,20 @@ const FingerprintSystem = {
     playSuccessSound() {
         // Optional: Play success beep
         try {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            // Create or reuse AudioContext (avoid autoplay policy issues)
+            if (!window.attendanceAudioContext) {
+                window.attendanceAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            const audioContext = window.attendanceAudioContext;
+            
+            // Resume context if suspended (browser autoplay policy)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().catch(() => {
+                    console.log('Audio autoplay blocked by browser');
+                });
+            }
+            
             const oscillator = audioContext.createOscillator();
             const gainNode = audioContext.createGain();
             
@@ -1069,7 +1104,8 @@ const FingerprintSystem = {
             oscillator.start(audioContext.currentTime);
             oscillator.stop(audioContext.currentTime + 0.2);
         } catch (e) {
-            // Audio not supported or blocked
+            // Audio not supported or blocked - silently fail
+            console.log('Audio playback not available:', e.message);
         }
     }
 };
