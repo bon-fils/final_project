@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage ESP32 Fingerprints</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid #28a745;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid #dc3545;
+        }
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid #ffc107;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid #17a2b8;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .slot-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .slot {
+            padding: 15px;
+            text-align: center;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .slot.occupied {
+            background: #28a745;
+            color: white;
+        }
+        .slot.empty {
+            background: #e9ecef;
+            color: #6c757d;
+        }
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 ESP32 Fingerprint Management</h1>
+        
+        <div class="warning">
+            <strong>⚠️ WARNING: These actions directly modify ESP32 sensor memory!</strong><br>
+            Make sure you understand what you're doing before deleting fingerprints.
+        </div>
+
+        <!-- Status Section -->
+        <div class="section">
+            <h2>📊 Current Status</h2>
+            <button onclick="getStatus()">🔍 Refresh Status</button>
+            <div id="statusResult"></div>
+        </div>
+
+        <!-- List Fingerprints -->
+        <div class="section">
+            <h2>📋 Stored Fingerprints</h2>
+            <button onclick="listFingerprints()">📋 List All Fingerprints</button>
+            <div id="listResult"></div>
+        </div>
+
+        <!-- Delete Specific ID -->
+        <div class="section">
+            <h2>🗑️ Delete Specific Fingerprint</h2>
+            <p>Enter the fingerprint ID you want to delete (from OLED display or logs):</p>
+            <input type="number" id="deleteId" min="1" max="255" placeholder="Enter ID (e.g., 7)" style="width: 200px;">
+            <button onclick="deleteFingerprint()" class="danger">🗑️ Delete This ID</button>
+            <div id="deleteResult"></div>
+        </div>
+
+        <!-- Clear All -->
+        <div class="section">
+            <h2>⚠️ Clear All Fingerprints</h2>
+            <div class="error">
+                <strong>DANGER ZONE!</strong><br>
+                This will delete ALL fingerprints from the ESP32 sensor.<br>
+                You will need to re-enroll all students after this.
+            </div>
+            <button onclick="confirmClearAll()" class="danger">🗑️ CLEAR ALL FINGERPRINTS</button>
+            <div id="clearAllResult"></div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="section">
+            <h3>📖 How to Fix Duplicate Fingerprint Issue</h3>
+            <ol>
+                <li><strong>Click "List All Fingerprints"</strong> to see which IDs are stored</li>
+                <li><strong>Check your database</strong> at <a href="check_fingerprint_ids.php" target="_blank">check_fingerprint_ids.php</a></li>
+                <li><strong>Delete IDs that don't match</strong> your database</li>
+                <li><strong>OR Clear All</strong> and re-enroll everyone from scratch</li>
+            </ol>
+            
+            <h3>🎯 Your Issue:</h3>
+            <div class="info">
+                ESP32 is returning different IDs (7, 18) for the same finger.<br>
+                This means multiple templates exist for one finger.<br>
+                <strong>Solution:</strong> Delete the duplicate IDs, keep only one per student.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ESP32_IP = '192.168.137.93';
+        const ESP32_PORT = 80;
+        const ESP32_URL = `http://${ESP32_IP}:${ESP32_PORT}`;
+        
+        console.log('ESP32 URL:', ESP32_URL);
+
+        async function getStatus() {
+            const resultDiv = document.getElementById('statusResult');
+            resultDiv.innerHTML = '<p>Loading...</p>';
+
+            try {
+                const response = await fetch(`${ESP32_URL}/status`);
+                const data = await response.json();
+
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <strong>✅ ESP32 Connected</strong><br>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <strong>❌ Connection Failed</strong><br>
+                        ${error.message}<br><br>
+                        Make sure ESP32 is powered on and connected to WiFi.
+                    </div>
+                `;
+            }
+        }
+
+        async function listFingerprints() {
+            const resultDiv = document.getElementById('listResult');
+            resultDiv.innerHTML = '<p>Scanning ESP32 memory... This may take a minute...</p>';
+
+            try {
+                const response = await fetch(`${ESP32_URL}/list`);
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    let html = `
+                        <div class="success">
+                            <strong>📊 Fingerprint Storage</strong><br>
+                            Total Capacity: ${data.total_capacity}<br>
+                            Stored Count: ${data.stored_count}<br>
+                            Free Slots: ${data.total_capacity - data.stored_count}
+                        </div>
+                    `;
+
+                    if (data.occupied_slots && data.occupied_slots.length > 0) {
+                        html += '<h3>Occupied Slots:</h3><div class="slot-list">';
+                        data.occupied_slots.forEach(id => {
+                            html += `<div class="slot occupied">${id}</div>`;
+                        });
+                        html += '</div>';
+                        
+                        html += '<div class="info">';
+                        html += '<strong>These IDs are stored in ESP32:</strong> ' + data.occupied_slots.join(', ');
+                        html += '</div>';
+                    } else {
+                        html += '<div class="info">No fingerprints stored in ESP32 memory.</div>';
+                    }
+
+                    resultDiv.innerHTML = html;
+                } else {
+                    throw new Error(data.message || 'Failed to list fingerprints');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <strong>❌ Failed to list fingerprints</strong><br>
+                        ${error.message}<br><br>
+                        Note: The /list endpoint must be added to your Arduino sketch.<br>
+                        See DELETE_ENDPOINTS.ino file for code.
+                    </div>
+                `;
+            }
+        }
+
+        async function deleteFingerprint() {
+            const id = parseInt(document.getElementById('deleteId').value);
+            const resultDiv = document.getElementById('deleteResult');
+
+            if (!id || id < 1 || id > 255) {
+                resultDiv.innerHTML = '<div class="error">Please enter a valid ID (1-255)</div>';
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to delete fingerprint ID ${id}?`)) {
+                return;
+            }
+
+            resultDiv.innerHTML = '<p>Deleting...</p>';
+
+            try {
+                const response = await fetch(`${ESP32_URL}/delete`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ fingerprint_id: id })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <strong>✅ Fingerprint Deleted!</strong><br>
+                            ID ${id} has been removed from ESP32 memory.
+                        </div>
+                    `;
+                    // Refresh the list
+                    setTimeout(() => listFingerprints(), 1000);
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <strong>❌ Delete Failed</strong><br>
+                        ${error.message}<br><br>
+                        Note: The /delete endpoint must be added to your Arduino sketch.<br>
+                        See DELETE_ENDPOINTS.ino file for code.
+                    </div>
+                `;
+            }
+        }
+
+        function confirmClearAll() {
+            const confirmed = confirm(
+                '⚠️ WARNING: This will DELETE ALL fingerprints from ESP32!\n\n' +
+                'Are you ABSOLUTELY sure?\n\n' +
+                'You will need to re-enroll ALL students after this.'
+            );
+
+            if (!confirmed) return;
+
+            const doubleCheck = prompt('Type "DELETE ALL" to confirm (case-sensitive):');
+            if (doubleCheck !== 'DELETE ALL') {
+                alert('Cancelled. Must type exactly "DELETE ALL" to proceed.');
+                return;
+            }
+
+            clearAll();
+        }
+
+        async function clearAll() {
+            const resultDiv = document.getElementById('clearAllResult');
+            resultDiv.innerHTML = '<p>Clearing all fingerprints...</p>';
+
+            try {
+                const response = await fetch(`${ESP32_URL}/clear-all`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <strong>✅ All Fingerprints Cleared!</strong><br>
+                            ESP32 memory is now empty.<br>
+                            You can now re-enroll students with fresh IDs.
+                        </div>
+                    `;
+                    // Refresh status
+                    setTimeout(() => {
+                        getStatus();
+                        listFingerprints();
+                    }, 1000);
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <strong>❌ Clear Failed</strong><br>
+                        ${error.message}<br><br>
+                        Note: The /clear-all endpoint must be added to your Arduino sketch.<br>
+                        See DELETE_ENDPOINTS.ino file for code.
+                    </div>
+                `;
+            }
+        }
+
+        // Auto-load status on page load
+        window.addEventListener('load', () => {
+            getStatus();
+        });
+    </script>
+</body>
+</html>

@@ -131,6 +131,8 @@ try {
     error_log("✅ Fingerprint scanned - ID: $fingerprint_id, Confidence: $confidence%");
     
     // Step 3: Find student with this fingerprint ID in database
+    error_log("🔍 Searching for student with fingerprint_id=$fingerprint_id in option_id={$session['option_id']}, year_level={$session['year_level']}");
+    
     $student_stmt = $pdo->prepare("
         SELECT 
             s.id,
@@ -159,7 +161,29 @@ try {
     $student = $student_stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$student) {
-        error_log("⚠️ No student found with fingerprint ID: $fingerprint_id for this session");
+        error_log("⚠️ No student found with fingerprint ID: $fingerprint_id for session {$session['id']}");
+        
+        // Debug: Check if fingerprint exists in database at all
+        $debug_stmt = $pdo->prepare("
+            SELECT s.id, s.reg_no, s.fingerprint_id, s.fingerprint_status, 
+                   s.option_id, s.year_level, s.status,
+                   CONCAT(u.first_name, ' ', u.last_name) as name
+            FROM students s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.fingerprint_id = ?
+            LIMIT 5
+        ");
+        $debug_stmt->execute([$fingerprint_id]);
+        $debug_students = $debug_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (!empty($debug_students)) {
+            error_log("📋 Found " . count($debug_students) . " student(s) with fingerprint_id=$fingerprint_id in database:");
+            foreach ($debug_students as $ds) {
+                error_log("  - {$ds['name']} (ID:{$ds['id']}, Reg:{$ds['reg_no']}, Status:{$ds['fingerprint_status']}, Option:{$ds['option_id']}, Year:{$ds['year_level']})");
+            }
+        } else {
+            error_log("❌ Fingerprint ID $fingerprint_id does NOT exist in database at all!");
+        }
         
         // Check if fingerprint exists but in different class
         $other_student_stmt = $pdo->prepare("
@@ -177,14 +201,20 @@ try {
                 "status" => "wrong_class",
                 "message" => "Student not in this class",
                 "details" => "Fingerprint belongs to: " . $other_student['name'],
-                "guidance" => "This student is enrolled in:\n• " . $other_student['option_name'] . "\n• " . $other_student['year_level'] . "\n\nNot in current session class."
+                "guidance" => "This student is enrolled in:\n• " . $other_student['option_name'] . "\n• " . $other_student['year_level'] . "\n\nNot in current session class.",
+                "fingerprint_id" => $fingerprint_id,
+                "debug_url" => "http://localhost/final_project_1/check_fingerprint_ids.php?search_id=$fingerprint_id"
             ]);
         } else {
             echo json_encode([
                 "status" => "not_enrolled",
                 "message" => "Fingerprint not enrolled in system",
                 "details" => "Scanner recognized fingerprint but no student record found",
-                "guidance" => "Please contact administrator to:\n1. Check student registration\n2. Verify fingerprint enrollment\n3. Update student records"
+                "guidance" => "Please contact administrator to:\n1. Check student registration\n2. Verify fingerprint enrollment\n3. Update student records",
+                "fingerprint_id" => $fingerprint_id,
+                "esp32_returned" => "Fingerprint ID: $fingerprint_id",
+                "debug_url" => "http://localhost/final_project_1/check_fingerprint_ids.php?search_id=$fingerprint_id",
+                "help" => "Visit debug_url to see if this fingerprint_id exists in database"
             ]);
         }
         exit;

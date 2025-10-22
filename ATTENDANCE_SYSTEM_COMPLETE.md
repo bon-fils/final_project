@@ -226,7 +226,7 @@ Final Statistics:
 
 ### **ESP32 Settings (config.php)**
 ```php
-define('ESP32_IP', '192.168.137.220');
+define('ESP32_IP', '192.168.137.93');
 define('ESP32_PORT', 80);
 define('ESP32_TIMEOUT', 30);
 ```
@@ -468,7 +468,7 @@ The attendance system is **fully functional** and ready for production use:
 - Verify Table: `http://localhost/final_project_1/verify_attendance_table.php`
 
 ### **ESP32**
-- IP: `192.168.137.220`
+- IP: `192.168.137.93`
 - Port: `80`
 - Endpoint: `/scan`
 

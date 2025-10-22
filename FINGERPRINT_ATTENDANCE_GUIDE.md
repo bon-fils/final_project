@@ -73,7 +73,7 @@ Ready for next student (automatic loop continues)
 ### **Connection Setup**
 ```php
 // In config.php
-define('ESP32_IP', '192.168.137.220');
+define('ESP32_IP', '192.168.137.93');
 define('ESP32_PORT', 80);
 define('ESP32_TIMEOUT', 30);
 ```
@@ -81,7 +81,7 @@ define('ESP32_TIMEOUT', 30);
 ### **Scanner Request**
 ```javascript
 // Every 2 seconds, system sends:
-POST http://192.168.137.220:80/scan
+POST http://192.168.137.93:80/scan
 {
     "action": "scan"
 }
@@ -172,7 +172,7 @@ VALUES (?, ?, 'present', NOW(), 'fingerprint', ?)
 │                                        │
 │  [🟢 Scanning Active...]              │
 │                                        │
-│  Scanner IP: 192.168.137.220:80       │
+│  Scanner IP: 192.168.137.93:80       │
 └────────────────────────────────────────┘
 ```
 
@@ -483,7 +483,7 @@ const char* serverIP = "192.168.88.111"; // Your XAMPP server
 ### **Step 2: Configure PHP**
 ```php
 // In config.php
-define('ESP32_IP', '192.168.137.220'); // Your ESP32 IP
+define('ESP32_IP', '192.168.137.93'); // Your ESP32 IP
 define('ESP32_PORT', 80);
 ```
 

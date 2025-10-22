@@ -6,7 +6,7 @@
 
 class FingerprintIntegration {
     constructor() {
-        this.esp32IP = '192.168.137.220';
+        this.esp32IP = '192.168.137.93';
         this.esp32Port = 80;
         this.isCapturing = false;
         this.fingerprintCaptured = false;
