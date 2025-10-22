@@ -29,13 +29,13 @@ try {
     $stmt = $pdo->prepare("
         SELECT u.username, u.email, u.first_name, u.last_name,
                l.department_id, d.name as department_name,
-               l.id as lecturer_id, u.status as user_status
+               l.id as lecturer_id, u.id as user_id, u.status as user_status
         FROM users u
         LEFT JOIN lecturers l ON u.id = l.user_id
         LEFT JOIN departments d ON l.department_id = d.id
-        WHERE u.id = :user_id
+        WHERE u.id = ?
     ");
-    $stmt->execute(['user_id' => $user_id]);
+    $stmt->execute([$user_id]);
     $user_info = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$user_info) {
@@ -83,6 +83,54 @@ try {
 $assigned_department_id = $user_info['department_id'];
 $assigned_department_name = $user_info['department_name'];
 $lecturer_id = $user_info['lecturer_id'];
+$user_id_for_session = $user_info['user_id']; // This is the ID for foreign key
+
+// Check for existing active session
+$active_session = null;
+try {
+    $session_check_stmt = $pdo->prepare("
+        SELECT 
+            ats.id,
+            ats.session_date,
+            ats.start_time,
+            ats.biometric_method,
+            ats.year_level,
+            ats.status,
+            c.name as course_name,
+            c.course_code,
+            o.name as option_name,
+            d.name as department_name,
+            CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+            (SELECT COUNT(*) FROM students 
+             WHERE option_id = ats.option_id 
+             AND year_level = ats.year_level 
+             AND status = 'active') as total_students,
+            (SELECT COUNT(*) FROM attendance_records 
+             WHERE session_id = ats.id 
+             AND status = 'present') as students_present
+        FROM attendance_sessions ats
+        JOIN courses c ON ats.course_id = c.id
+        JOIN options o ON ats.option_id = o.id
+        JOIN departments d ON ats.department_id = d.id
+        JOIN users u ON ats.lecturer_id = u.id
+        WHERE ats.lecturer_id = ? 
+        AND ats.status = 'active'
+        AND ats.session_date = CURDATE()
+        ORDER BY ats.id DESC
+        LIMIT 1
+    ");
+    $session_check_stmt->execute([$user_id_for_session]);
+    $active_session = $session_check_stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($active_session) {
+        $logger->info('Active session found', [
+            'session_id' => $active_session['id'],
+            'course' => $active_session['course_name']
+        ]);
+    }
+} catch (Exception $e) {
+    $logger->error('Session check failed', ['error' => $e->getMessage()]);
+}
 
 // Page metadata
 $pageTitle = "Attendance Session - " . htmlspecialchars($assigned_department_name) . " | " . ucfirst($userRole) . " | RP Attendance System";
@@ -157,61 +205,9 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             margin-right: 8px;
         }
 
-        /* Sidebar */
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            height: 100vh;
-            width: var(--sidebar-width);
-            background: var(--primary-gradient);
-            color: white;
-            padding: 20px 0;
-            z-index: 100;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
-        }
-
-        .sidebar .sidebar-header {
-            padding: 0 20px 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.2);
-            margin-bottom: 20px;
-        }
-
-        .sidebar .sidebar-header h4 {
-            margin: 0;
-            font-weight: 600;
-            font-size: 18px;
-        }
-
-        .sidebar .sidebar-header .subtitle {
-            font-size: 12px;
-            opacity: 0.8;
-            margin-top: 4px;
-        }
-
-        .sidebar a {
-            color: white;
-            text-decoration: none;
-            padding: 12px 20px;
-            display: block;
-            transition: var(--transition);
-            border-left: 3px solid transparent;
-        }
-
-        .sidebar a:hover, .sidebar a.active {
-            background: rgba(255, 255, 255, 0.1);
-            border-left-color: rgba(255, 255, 255, 0.5);
-        }
-
-        .sidebar a i {
-            margin-right: 10px;
-            width: 16px;
-            text-align: center;
-        }
-
-        /* Main Content */
+        /* Main Content - Updated for lecturer sidebar */
         .main-content {
-            margin-left: var(--sidebar-width);
+            margin-left: 280px; /* Match lecturer sidebar width */
             padding: 20px;
             min-height: 100vh;
         }
@@ -486,19 +482,10 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
 
         /* Mobile Responsive */
         @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-                transition: transform 0.3s ease;
-            }
-
-            .sidebar.show {
-                transform: translateX(0);
-            }
-
             .main-content {
                 margin-left: 0;
+                padding: 10px;
             }
-
             .topbar {
                 flex-direction: column;
                 gap: 15px;
@@ -529,23 +516,8 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
         Attendance Session Management System - <?php echo htmlspecialchars($assigned_department_name); ?>
     </div>
 
-    <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <h4><i class="fas fa-graduation-cap me-2"></i>RP System</h4>
-            <div class="subtitle"><?php echo ucfirst($userRole); ?> Panel</div>
-        </div>
-
-        <nav>
-            <a href="admin-dashboard.php"><i class="fas fa-tachometer-alt"></i>Dashboard</a>
-            <a href="manage-departments.php"><i class="fas fa-building"></i>Departments</a>
-            <a href="assign-hod.php"><i class="fas fa-user-tie"></i>Assign HOD</a>
-            <a href="admin-reports.php"><i class="fas fa-chart-bar"></i>Reports</a>
-            <a href="manage-users.php"><i class="fas fa-users"></i>Manage Users</a>
-            <a href="system-logs.php"><i class="fas fa-file-alt"></i>System Logs</a>
-            <a href="logout.php" class="mt-4 text-danger"><i class="fas fa-sign-out-alt"></i>Logout</a>
-        </nav>
-    </div>
+    <!-- Lecturer Sidebar -->
+    <?php include "includes/lecturer-sidebar.php"; ?>
 
     <!-- Mobile Menu Toggle -->
     <button class="btn btn-primary d-md-none position-fixed" style="top: 80px; right: 20px; z-index: 1001;" onclick="toggleSidebar()">
@@ -593,8 +565,9 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
 
                     <div class="col-md-6">
                         <div class="form-group">
-                            <label for="option" class="form-label">
-                                <i class="fas fa-graduation-cap me-1"></i>Academic Option
+                            <label for="option" class="form-label d-flex align-items-center">
+                                <i class="fas fa-graduation-cap me-1"></i>
+                                <span class="mt-1">Academic Option</span>
                             </label>
                             <select class="form-select" id="option" name="option_id" required>
                                 <option value="" disabled selected>Choose an academic option</option>
@@ -648,8 +621,8 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
                             </label>
                             <select class="form-select" id="biometric_method" name="biometric_method" required>
                                 <option value="" disabled selected>Choose biometric method</option>
-                                <option value="face">Face Recognition</option>
-                                <option value="finger">Fingerprint</option>
+                                <option value="face_recognition">Face Recognition</option>
+                                <option value="fingerprint">Fingerprint</option>
                             </select>
                             <div class="form-text text-muted">
                                 <i class="fas fa-info-circle me-1"></i>Select face recognition or fingerprint scanning
@@ -677,9 +650,14 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
                 <div class="status-text" id="sessionInfo">
                     Session details will appear here
                 </div>
-                <button class="btn btn-danger" onclick="endSession()">
-                    <i class="fas fa-stop me-2"></i>End Session
-                </button>
+                <div class="d-flex gap-2 justify-content-center flex-wrap">
+                    <button class="btn btn-danger" onclick="endSession()">
+                        <i class="fas fa-stop me-2"></i>End Session
+                    </button>
+                    <button class="btn btn-warning" onclick="startNewSession()">
+                        <i class="fas fa-plus me-2"></i>Start New Session
+                    </button>
+                </div>
             </div>
 
             <!-- Stats Cards -->
@@ -779,8 +757,8 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
             integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 
-    <!-- Attendance Session JavaScript -->
-    <script src="js/attendance-session.js"></script>
+    <!-- Attendance Session JavaScript - Clean Version -->
+    <script src="js/attendance-session-clean.js"></script>
 
     <!-- Backend Configuration -->
     <script>
@@ -788,20 +766,29 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
         window.BACKEND_CONFIG = {
             DEPARTMENT_ID: <?php echo json_encode($assigned_department_id); ?>,
             DEPARTMENT_NAME: <?php echo json_encode($assigned_department_name); ?>,
-            LECTURER_ID: <?php echo json_encode($lecturer_id); ?>,
+            LECTURER_ID: <?php echo json_encode($user_id_for_session); ?>, // Using user_id for foreign key
             USER_ROLE: <?php echo json_encode($userRole); ?>,
-            API_BASE_URL: 'api/'
+            API_BASE_URL: 'api/',
+            ACTIVE_SESSION: <?php echo json_encode($active_session); ?> // Existing active session if any
         };
 
         console.log('Backend config loaded:', window.BACKEND_CONFIG);
         
+        // Check for active session on page load
+        if (window.BACKEND_CONFIG.ACTIVE_SESSION) {
+            console.log('🔄 Active session detected:', window.BACKEND_CONFIG.ACTIVE_SESSION);
+        }
+        
         // Initialize the attendance session system when page loads
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 DOM loaded, initializing attendance session...');
+            
+            // Check if FormHandlers is available from the clean JS file
             if (typeof FormHandlers !== 'undefined') {
+                console.log('✅ FormHandlers found - initializing...');
                 FormHandlers.initialize();
             } else {
-                console.error('❌ FormHandlers not found - check attendance-session.js');
+                console.error('❌ FormHandlers not found - check attendance-session-clean.js');
             }
         });
     </script>

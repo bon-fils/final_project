@@ -4,6 +4,9 @@
  * Allows administrators to register new lecturers with full option and course assignment capabilities
  */
 
+// Start output buffering to prevent header issues
+ob_start();
+
 // ================================
 // INITIALIZATION & CONFIGURATION
 // ================================
@@ -23,21 +26,6 @@ header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
-
-// ================================
-// INCLUDE BACKEND CLASSES
-// ================================
-
-require_once "backend/classes/DatabaseManager.php";
-require_once "backend/classes/InputValidator.php";
-require_once "backend/classes/LecturerRegistrationManager.php";
-require_once "backend/classes/DepartmentManager.php";
-
-// Initialize managers
-$dbManager = new DatabaseManager($pdo);
-$validator = new InputValidator();
-$lecturerManager = new LecturerRegistrationManager($pdo, $dbManager, $validator);
-$departmentManager = new DepartmentManager($pdo);
 
 // ================================
 // DATA LOADING FUNCTIONS
@@ -470,8 +458,8 @@ $formError = '';
 $successMessage = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Rate limiting check using new manager
-    if (!$lecturerManager->checkRateLimit()) {
+    // Rate limiting check
+    if (!checkFormSubmissionRateLimit()) {
         $formError = 'Too many registration attempts. Please wait before trying again.';
     } elseif (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         $formError = 'Security validation failed. Please refresh the page and try again.';
@@ -481,16 +469,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             error_log("Lecturer registration attempt by user ID: " . ($_SESSION['user_id'] ?? 'unknown') .
                       " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 
-            $result = $lecturerManager->registerLecturer($_POST);
+            $result = processLecturerRegistration($_POST);
             if ($result['success']) {
                 $_SESSION['success_message'] = $result['message'];
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
                 // Clear form submission tracking on success
-                unset($_SESSION['lecturer_reg_submissions']);
+                unset($_SESSION['form_submissions']);
 
                 header("Location: admin-register-lecturer.php");
                 exit;
+            } else {
+                $formError = $result['message'];
             }
         } catch (Exception $e) {
             error_log('Lecturer registration error: ' . $e->getMessage() .
@@ -502,15 +492,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Load data for form using new manager
-$departmentsResult = $lecturerManager->getDepartments();
-$departments = $departmentsResult['success'] ? $departmentsResult['data'] : [];
+// Load data for form
+try {
+    $departments = getDepartments();
+} catch (Exception $e) {
+    error_log("Error loading departments: " . $e->getMessage());
+    $departments = [];
+}
 
 // Handle success message from redirect
 if (isset($_SESSION['success_message'])) {
     $successMessage = $_SESSION['success_message'];
     unset($_SESSION['success_message']);
 }
+
+// Flush output buffer to ensure proper rendering
+ob_end_flush();
 ?>
 
 <!DOCTYPE html>
@@ -1111,16 +1108,23 @@ if (isset($_SESSION['success_message'])) {
                     </div>
                 <?php endif; ?>
 
+                <!-- 
+                    FORM STRUCTURE ALIGNED WITH DATABASE SCHEMA:
+                    - users table: first_name, last_name, email, phone, gender, dob, username, password, role, status
+                    - lecturers table: user_id, gender, dob, id_number, department_id, education_level, created_at, updated_at
+                    - Relationships: lecturers.user_id → users.id, lecturers.department_id → departments.id
+                -->
                 <form id="lecturerRegistrationForm" method="POST">
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? bin2hex(random_bytes(32)); ?>">
                     <input type="hidden" name="role" value="lecturer">
 
-                    <!-- Personal Information Section -->
+                    <!-- Personal Information Section (stored in users table) -->
                     <div class="row g-3 mb-4 fade-in">
                         <div class="col-12 section-header">
                             <h6>
                                 <i class="fas fa-user me-2"></i>Personal Information
                             </h6>
+                            <small class="text-muted">This information will be stored in the users table</small>
                         </div>
                         <div class="col-md-6">
                              <label class="form-label" for="first_name">
@@ -1177,12 +1181,13 @@ if (isset($_SESSION['success_message'])) {
                          </div>
                     </div>
 
-                    <!-- Department & Education Section -->
+                    <!-- Department & Education Section (stored in lecturers table) -->
                     <div class="row g-3 mb-4 fade-in">
                         <div class="col-12 section-header">
                             <h6>
                                 <i class="fas fa-building me-2"></i>Department & Education
                             </h6>
+                            <small class="text-muted">This information will be stored in the lecturers table</small>
                         </div>
                         <div class="col-md-6">
                             <label for="department_id" class="form-label">
@@ -1435,14 +1440,19 @@ if (isset($_SESSION['success_message'])) {
         }
 
         // Check cache first
-        const cachedData = sessionStorage.getItem(cacheKey);
-        if (cachedData) {
-            const parsed = JSON.parse(cachedData);
-            if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
-                availableOptions = parsed.data;
-                renderOptionsForRegistration();
-                return;
+        try {
+            const cachedData = sessionStorage.getItem(cacheKey);
+            if (cachedData) {
+                const parsed = JSON.parse(cachedData);
+                if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
+                    availableOptions = parsed.data;
+                    renderOptionsForRegistration();
+                    return;
+                }
             }
+        } catch (e) {
+            console.warn('Cache read error:', e);
+            sessionStorage.removeItem(cacheKey);
         }
 
         // Show enhanced loading state
@@ -1482,10 +1492,14 @@ if (isset($_SESSION['success_message'])) {
                 if (data.success && data.options && data.options.length > 0) {
                     availableOptions = data.options;
                     // Cache the result
-                    sessionStorage.setItem(cacheKey, JSON.stringify({
-                        data: availableOptions,
-                        timestamp: Date.now()
-                    }));
+                    try {
+                        sessionStorage.setItem(cacheKey, JSON.stringify({
+                            data: availableOptions,
+                            timestamp: Date.now()
+                        }));
+                    } catch (e) {
+                        console.warn('Cache write error:', e);
+                    }
                     renderOptionsForRegistration();
                 } else {
                     optionsContainer.innerHTML = `
@@ -1549,14 +1563,19 @@ if (isset($_SESSION['success_message'])) {
         }
 
         // Check cache first
-        const cachedData = sessionStorage.getItem(cacheKey);
-        if (cachedData) {
-            const parsed = JSON.parse(cachedData);
-            if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
-                availableCourses = parsed.data;
-                renderCoursesForRegistration();
-                return;
+        try {
+            const cachedData = sessionStorage.getItem(cacheKey);
+            if (cachedData) {
+                const parsed = JSON.parse(cachedData);
+                if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
+                    availableCourses = parsed.data;
+                    renderCoursesForRegistration();
+                    return;
+                }
             }
+        } catch (e) {
+            console.warn('Cache read error:', e);
+            sessionStorage.removeItem(cacheKey);
         }
 
         // Show enhanced loading state with better messaging
@@ -1596,10 +1615,14 @@ if (isset($_SESSION['success_message'])) {
                 if (data.success && data.courses) {
                     availableCourses = data.courses;
                     // Cache the result
-                    sessionStorage.setItem(cacheKey, JSON.stringify({
-                        data: availableCourses,
-                        timestamp: Date.now()
-                    }));
+                    try {
+                        sessionStorage.setItem(cacheKey, JSON.stringify({
+                            data: availableCourses,
+                            timestamp: Date.now()
+                        }));
+                    } catch (e) {
+                        console.warn('Cache write error:', e);
+                    }
                     renderCoursesForRegistration();
                 } else {
                     coursesContainer.innerHTML = `

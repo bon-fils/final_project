@@ -1,0 +1,42 @@
+QUICK FIX FOR ATTENDANCE SESSIONS TABLE
+========================================
+
+Error: Unknown column 'status' in 'where clause'
+Solution: Add missing columns to attendance_sessions table
+
+RUN THESE SQL COMMANDS IN YOUR DATABASE:
+==========================================
+
+-- 1. Add status column (MAIN FIX)
+ALTER TABLE attendance_sessions 
+ADD COLUMN status ENUM('active', 'completed', 'cancelled') DEFAULT 'active';
+
+-- 2. Add other missing columns (if needed)
+ALTER TABLE attendance_sessions 
+ADD COLUMN biometric_method ENUM('face', 'finger') NOT NULL AFTER year_level;
+
+ALTER TABLE attendance_sessions 
+ADD COLUMN session_date DATE NOT NULL AFTER department_id;
+
+ALTER TABLE attendance_sessions 
+ADD COLUMN start_time TIME NOT NULL AFTER session_date;
+
+ALTER TABLE attendance_sessions 
+ADD COLUMN end_time TIME NULL AFTER start_time;
+
+ALTER TABLE attendance_sessions 
+ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+
+
+OR USE THE AUTOMATIC FIX TOOL:
+===============================
+Go to: http://localhost/final_project_1/fix_attendance_sessions_table.php
+Click: "Fix All Columns Automatically"
+
+
+VERIFICATION:
+=============
+After adding columns, verify with:
+DESCRIBE attendance_sessions;
+
+Then try starting the attendance session again!

@@ -432,21 +432,25 @@ const FormHandlers = {
         console.log('🔄 Starting to load options for department:', departmentId);
         Utils.showLoading(optionSelect, 'Loading options...');
 
-        try {
-            console.log('📡 Making API call to get options...');
-            const response = await API.getOptions(departmentId);
-            console.log('📡 API Response received:', response);
+async handleStartSession(e) {
+    e.preventDefault();
 
-            // Check response validity - API returns 'success' field, not 'status'
-            const isValidResponse = response.success === true || response.data;
-            console.log('✅ Response validity check:', isValidResponse);
-            console.log('📡 Full response structure:', response);
+    if (!Utils.validateForm()) {
+        Utils.showNotification('❌ Please complete all form fields', 'error');
+        return;
+    }
 
-            if (isValidResponse) {
-                console.log('🧹 Clearing existing options...');
-                // Clear existing options
-                optionSelect.innerHTML = '<option value="" disabled selected>Choose an academic option</option>';
+    const sessionData = {
+        department_id: document.getElementById('department').value,
+        option_id: document.getElementById('option').value,
+        course_id: document.getElementById('course').value,
+        year_level: document.getElementById('year_level').value,
+        biometric_method: document.getElementById('biometric_method').value,
+        lecturer_id: window.BACKEND_CONFIG ? window.BACKEND_CONFIG.LECTURER_ID : null
+    };
 
+    const startBtn = document.getElementById('start-session');
+    Utils.showLoading(startBtn, 'Starting Session...');
                 // Check if data exists and has length
                 const hasData = response.data && response.data.length > 0;
                 console.log('📊 Data check - hasData:', hasData, 'length:', response.data?.length);

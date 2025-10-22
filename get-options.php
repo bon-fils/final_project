@@ -1,13 +1,11 @@
 <?php
 /**
- * Enhanced Options Loading Endpoint
- * Returns available options for a specific department with improved security and performance
+ * Options Loading Endpoint
+ * Returns available options for a specific department
  */
 
 require_once "config.php";
 require_once "session_check.php";
-require_once "backend/classes/DatabaseManager.php";
-require_once "backend/classes/DepartmentManager.php";
 
 // Set JSON header
 header('Content-Type: application/json');
@@ -24,10 +22,6 @@ try {
         exit;
     }
 
-    // Initialize managers
-    $dbManager = DatabaseManager::getInstance($pdo);
-    $departmentManager = new DepartmentManager($pdo);
-
     // Get and validate department ID
     $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
 
@@ -41,7 +35,7 @@ try {
         exit;
     }
 
-    // Verify department exists using direct query
+    // Verify department exists
     $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id = ?");
     $stmt->execute([$department_id]);
     $department = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -56,8 +50,8 @@ try {
         exit;
     }
 
-    // Get options for the department with enhanced query
-    $options = $dbManager->findAll("
+    // Get options for the department
+    $stmt = $pdo->prepare("
         SELECT
             id,
             name,
@@ -69,7 +63,9 @@ try {
         WHERE department_id = ?
         AND status = 'active'
         ORDER BY name ASC
-    ", [$department_id], "Load options for department");
+    ");
+    $stmt->execute([$department_id]);
+    $options = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Return response with additional metadata
     echo json_encode([

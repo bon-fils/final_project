@@ -64,7 +64,7 @@ define('SMTP_USER', $_ENV['SMTP_USER'] ?? '');
 define('SMTP_PASS', $_ENV['SMTP_PASS'] ?? '');
 
 // ESP32 Configuration
-define('ESP32_IP', $_ENV['ESP32_IP'] ?? '192.168.137.40');
+define('ESP32_IP', $_ENV['ESP32_IP'] ?? '192.168.137.220');
 define('ESP32_PORT', (int)($_ENV['ESP32_PORT'] ?? 80));
 define('ESP32_TIMEOUT', (int)($_ENV['ESP32_TIMEOUT'] ?? 30)); // seconds
 

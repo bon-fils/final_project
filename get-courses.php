@@ -1,12 +1,11 @@
 <?php
 /**
- * Enhanced Course Loading Endpoint
- * Returns unassigned courses for a specific department with improved security and performance
+ * Course Loading Endpoint
+ * Returns unassigned courses for a specific department
  */
 
 require_once "config.php";
 require_once "session_check.php";
-require_once "backend/classes/DatabaseManager.php";
 
 // Set JSON header
 header('Content-Type: application/json');
@@ -23,9 +22,6 @@ try {
         exit;
     }
 
-    // Initialize database manager
-    $dbManager = DatabaseManager::getInstance($pdo);
-
     // Get and validate department ID
     $department_id = filter_input(INPUT_GET, 'department_id', FILTER_VALIDATE_INT);
 
@@ -40,7 +36,9 @@ try {
     }
 
     // Verify department exists
-    $department = $dbManager->findOne("SELECT id, name FROM departments WHERE id = ?", [$department_id], "Verify department exists");
+    $stmt = $pdo->prepare("SELECT id, name FROM departments WHERE id = ?");
+    $stmt->execute([$department_id]);
+    $department = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$department) {
         http_response_code(404);
@@ -52,8 +50,8 @@ try {
         exit;
     }
 
-    // Get unassigned courses for the department with enhanced query
-    $courses = $dbManager->findAll("
+    // Get unassigned courses for the department
+    $stmt = $pdo->prepare("
         SELECT
             c.id,
             COALESCE(c.course_name, c.name) as course_name,
@@ -74,7 +72,9 @@ try {
         AND (c.lecturer_id IS NULL OR c.lecturer_id = 0)
         AND c.status = 'active'
         ORDER BY c.course_code ASC, COALESCE(c.course_name, c.name) ASC
-    ", [$department_id], "Load unassigned courses for department");
+    ");
+    $stmt->execute([$department_id]);
+    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Return response with additional metadata
     echo json_encode([

@@ -2,91 +2,22 @@
 require_once "config.php";
 session_start();
 require_once "session_check.php";
+require_once "includes/hod_auth_helper.php";
 
-// Ensure user is logged in and is HoD
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'hod') {
-    header("Location: login_new.php");
-    exit;
-}
+// Verify HOD access and get department information
+$auth_result = verifyHODAccess($pdo, $_SESSION['user_id']);
 
-// Get HoD information and verify department assignment
-$user_id = $_SESSION['user_id'];
-$department_name = null;
-$department_id = null;
-try {
-    // First, check if the user has a lecturer record
-    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
-    $lecturer_stmt->execute([$user_id]);
-    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$lecturer) {
-        // HOD user doesn't have a lecturer record
-        header("Location: login_new.php?error=not_assigned");
-        exit;
-    } else {
-        $lecturer_id = $lecturer['id'];
-
-        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
-        $dept_result = null;
-
-        // Approach 1: Correct way - hod_id points to lecturers.id
-        $stmt = $pdo->prepare("
-            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
-            FROM departments d
-            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
-        ");
-        $stmt->execute([$lecturer_id]);
-        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
-        if (!$dept_result) {
-            $stmt = $pdo->prepare("
-                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
-                FROM departments d
-                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
-            ");
-            $stmt->execute([$user_id]);
-            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            // If found via legacy method, log it for potential data fix
-            if ($dept_result) {
-                error_log("HOD Attendance Overview: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
-            }
-        }
-
-        // Approach 3: Check if lecturer's department_id matches any department's hod_id
-        if (!$dept_result && $lecturer['department_id']) {
-            $stmt = $pdo->prepare("
-                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
-                FROM departments d
-                WHERE d.id = ? AND d.hod_id IS NOT NULL
-            ");
-            $stmt->execute([$lecturer['department_id']]);
-            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-        }
-
-        if (!$dept_result) {
-            // User is HOD but not assigned to any department
-            header("Location: login_new.php?error=not_assigned");
-            exit;
-        } else {
-            $department_name = $dept_result['department_name'];
-            $department_id = $dept_result['department_id'];
-
-            // Get user information
-            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            $user['department_name'] = $department_name;
-            $user['department_id'] = $department_id;
-
-            // Log match type for debugging
-            error_log("HOD Attendance Overview: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
-        }
-    }
-} catch (PDOException $e) {
-    error_log("Database error in hod-attendance-overview.php: " . $e->getMessage());
-    $error_message = "Database connection error. Please try again later. Error: " . $e->getMessage();
+if (!$auth_result['success']) {
+    // Show error message instead of redirect for better UX
+    $error_message = $auth_result['error_message'];
+    $department_name = 'No Department Assigned';
+    $department_id = null;
+    $user = ['name' => $_SESSION['username'] ?? 'User'];
+} else {
+    $department_name = $auth_result['department_name'];
+    $department_id = $auth_result['department_id'];
+    $user = $auth_result['user'];
+    $lecturer_id = $auth_result['lecturer_id'];
 }
 
 // Get attendance statistics with enhanced backend processing
@@ -96,33 +27,34 @@ $sessions = [];
 $trends_data = [];
 $alerts = [];
 
-try {
-    // Overall department attendance with enhanced metrics
-    $stmt = $pdo->prepare("
-        SELECT
-            COUNT(ar.id) as total_records,
-            COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
-            COUNT(CASE WHEN ar.status = 'absent' THEN 1 END) as absent_count,
-            COUNT(CASE WHEN ar.status = 'late' THEN 1 END) as late_count,
-            COUNT(DISTINCT DATE(ar.recorded_at)) as total_days,
-            COUNT(DISTINCT CASE WHEN ar.status = 'present' THEN DATE(ar.recorded_at) END) as present_days,
-            COUNT(CASE WHEN DATE(ar.recorded_at) = CURDATE() THEN 1 END) as today_total,
-            COUNT(CASE WHEN ar.status = 'present' AND DATE(ar.recorded_at) = CURDATE() THEN 1 END) as today_present,
-            COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 END) as week_total,
-            COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 END) as week_present,
-            COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as month_total,
-            COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as month_present,
-            COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 END) as quarter_total,
-            COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 END) as quarter_present,
-            MIN(ar.recorded_at) as first_record_date,
-            MAX(ar.recorded_at) as last_record_date
-        FROM attendance_records ar
-        JOIN students s ON ar.student_id = s.reg_no
-        JOIN options o ON s.option_id = o.id
-        WHERE o.department_id = ?
-    ");
-    $stmt->execute([$department_id]);
-    $attendance_stats = $stmt->fetch(PDO::FETCH_ASSOC);
+if ($department_id) {
+    try {
+        // Overall department attendance with enhanced metrics - Fixed JOIN
+        $stmt = $pdo->prepare("
+            SELECT
+                COUNT(ar.id) as total_records,
+                COUNT(CASE WHEN ar.status = 'present' THEN 1 END) as present_count,
+                COUNT(CASE WHEN ar.status = 'absent' THEN 1 END) as absent_count,
+                COUNT(CASE WHEN ar.status = 'late' THEN 1 END) as late_count,
+                COUNT(DISTINCT DATE(ar.recorded_at)) as total_days,
+                COUNT(DISTINCT CASE WHEN ar.status = 'present' THEN DATE(ar.recorded_at) END) as present_days,
+                COUNT(CASE WHEN DATE(ar.recorded_at) = CURDATE() THEN 1 END) as today_total,
+                COUNT(CASE WHEN ar.status = 'present' AND DATE(ar.recorded_at) = CURDATE() THEN 1 END) as today_present,
+                COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 END) as week_total,
+                COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 END) as week_present,
+                COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as month_total,
+                COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as month_present,
+                COUNT(CASE WHEN ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 END) as quarter_total,
+                COUNT(CASE WHEN ar.status = 'present' AND ar.recorded_at >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 END) as quarter_present,
+                MIN(ar.recorded_at) as first_record_date,
+                MAX(ar.recorded_at) as last_record_date
+            FROM attendance_records ar
+            JOIN students s ON ar.student_id = s.id
+            JOIN options o ON s.option_id = o.id
+            WHERE o.department_id = ?
+        ");
+        $stmt->execute([$department_id]);
+        $attendance_stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
     // Calculate enhanced percentages and metrics
     $attendance_stats['overall_rate'] = $attendance_stats['total_records'] > 0 ?

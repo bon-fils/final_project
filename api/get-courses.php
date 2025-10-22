@@ -24,7 +24,7 @@ if (!$option_id && !$department_id) {
 }
 
 try {
-    $sql = "SELECT id, name, code, credits FROM courses WHERE 1=1";
+    $sql = "SELECT id, name, course_code, credits FROM courses WHERE 1=1";
     $params = [];
     
     if ($department_id) {
