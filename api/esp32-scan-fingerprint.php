@@ -248,20 +248,13 @@ try {
     // Step 5: Mark attendance
     $insert_stmt = $pdo->prepare("
         INSERT INTO attendance_records 
-        (session_id, student_id, status, recorded_at, verification_method, biometric_data)
-        VALUES (?, ?, 'present', NOW(), 'fingerprint', ?)
+        (session_id, student_id, status, recorded_at)
+        VALUES (?, ?, 'present', NOW())
     ");
-    
-    $biometric_data = json_encode([
-        'fingerprint_id' => $fingerprint_id,
-        'confidence' => $confidence,
-        'scan_timestamp' => date('Y-m-d H:i:s')
-    ]);
     
     $insert_stmt->execute([
         $session_id,
-        $student['id'],
-        $biometric_data
+        $student['id']
     ]);
     
     error_log("✅ Attendance marked - Student: {$student['name']} ({$student['reg_no']}), Session: $session_id");

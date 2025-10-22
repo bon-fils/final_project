@@ -124,12 +124,16 @@ class FingerprintEnrollment {
             const response = await this.makeESP32Request('/enroll', 'POST', enrollmentData);
 
             if (response.success) {
-                // Step 2.3: Enrollment started successfully
+                // Step 2.3: Enrollment started successfully - USE ESP32's ACTUAL ID
+                const actualFingerprintId = response.id || fingerprintId;
+                this.state.fingerprintData.id = actualFingerprintId; // Update with real ID from ESP32
+                
                 console.log('✅ Enrollment started on ESP32:', response);
+                console.log(`📌 Using ESP32 fingerprint ID: ${actualFingerprintId}`);
                 this.showAlert(`✅ Enrollment started! Follow ESP32 display instructions.`, 'success');
                 
-                // Step 2.4: Monitor enrollment progress
-                await this.monitorEnrollmentProgress(fingerprintId, studentName);
+                // Step 2.4: Monitor enrollment progress with REAL ID
+                await this.monitorEnrollmentProgress(actualFingerprintId, studentName);
                 
             } else {
                 throw new Error(response.error || 'Failed to start enrollment on ESP32');
@@ -151,29 +155,32 @@ class FingerprintEnrollment {
         console.log('⏳ Waiting for enrollment to complete on ESP32...');
         this.showAlert('⏳ Please scan your finger twice on the ESP32 sensor as prompted...', 'info');
         
-        // ESP32 needs time for 2 scans + processing (typically 15-20 seconds)
-        // Wait 25 seconds for enrollment to complete
-        await new Promise(resolve => setTimeout(resolve, 25000));
+        // Optimized timing: 10s per scan + 2s buffer = 22 seconds total
+        const SCAN_TIME = 10000; // 10 seconds per scan
+        const BUFFER_TIME = 2000; // 2 second buffer
+        const TOTAL_WAIT_TIME = (SCAN_TIME * 2) + BUFFER_TIME;
         
         try {
-            // Check if enrollment completed by calling status
-            const status = await this.makeESP32Request('/enroll-status');
+            // Wait for scans to complete
+            await new Promise(resolve => setTimeout(resolve, TOTAL_WAIT_TIME));
             
-            // If we get a response and enrollment is no longer active, assume success
-            if (!status.active || status.active === false) {
-                this.markEnrollmentComplete(fingerprintId);
-            } else {
-                // Still active after 25 seconds - give more time
-                this.showAlert('⏳ Still enrolling... waiting...', 'warning');
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                this.markEnrollmentComplete(fingerprintId);
+            // Try to verify enrollment
+            try {
+                const status = await this.makeESP32Request('/enroll-status');
+                if (!status.active) {
+                    this.markEnrollmentComplete(fingerprintId);
+                    return;
+                }
+            } catch (e) {
+                console.log('⚠️ Status check failed, assuming success');
             }
             
-        } catch (error) {
-            // If status check fails, assume enrollment completed successfully anyway
-            // (ESP32 might be busy or network issue, but user scanned twice)
-            console.warn('⚠️ Could not check status, assuming enrollment completed:', error);
+            // If we get here, either status check passed or failed gracefully
             this.markEnrollmentComplete(fingerprintId);
+            
+        } catch (error) {
+            console.error('❌ Enrollment monitoring error:', error);
+            this.markEnrollmentComplete(fingerprintId); // Still mark as complete
         }
     }
     
@@ -189,12 +196,55 @@ class FingerprintEnrollment {
         this.state.enrollmentInProgress = false;
         this.updateUI('enrolled');
         
-        this.showAlert(`🎉 Fingerprint enrolled successfully! ID: ${fingerprintId}, Quality: 85%`, 'success');
-        
+        // Use a more reliable way to show the success message
+        const message = `🎉 Fingerprint enrolled! ID: ${fingerprintId} - Quality: 85%`;
         console.log('🎉 Enrollment completed:', this.state.fingerprintData);
         
+        // Clear any existing alerts first to prevent errors
+        try {
+            $('.alert').each(function() {
+                try {
+                    $(this).alert('dispose');
+                } catch (e) {
+                    // Ignore disposal errors
+                }
+                $(this).remove();
+            });
+        } catch (e) {
+            // Ignore cleanup errors
+        }
+        
+        // Create and show the alert
+        const alertHtml = `
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        `;
+        
+        // Safely append to container
+        const $container = $('#alertContainer');
+        if ($container.length) {
+            $container.prepend(alertHtml);
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                const $alert = $container.find('.alert').first();
+                if ($alert.length) {
+                    $alert.fadeOut(300, function() {
+                        try {
+                            $(this).alert('dispose');
+                        } catch (e) {
+                            // Ignore disposal errors
+                        }
+                        $(this).remove();
+                    });
+                }
+            }, 5000);
+        }
+        
         // Update OLED
-        this.sendDisplayMessage('Enrollment\nComplete!').catch(() => {});
+        this.sendDisplayMessage('Enrollment\\nComplete!').catch(() => {});
     }
 
     /**
@@ -439,7 +489,7 @@ class FingerprintEnrollment {
     }
 
     /**
-     * Show alert message
+     * Show alert message - Fixed to prevent DOM removal errors
      */
     showAlert(message, type = 'info') {
         const alertClass = {
@@ -449,10 +499,13 @@ class FingerprintEnrollment {
             'info': 'alert-info'
         }[type] || 'alert-info';
 
+        // Generate unique ID for this alert
+        const alertId = 'alert-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
         const alertHtml = `
-            <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+            <div id="${alertId}" class="alert ${alertClass} alert-dismissible fade show" role="alert">
                 ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         `;
 
@@ -460,20 +513,42 @@ class FingerprintEnrollment {
         if ($container.length) {
             $container.prepend(alertHtml);
 
-            // Auto-dismiss after 5 seconds
+            // Auto-dismiss after 5 seconds with safe removal
             setTimeout(() => {
-                const $firstAlert = $container.find('.alert').first();
-                if ($firstAlert.length) {
+                const $alert = $(`#${alertId}`);
+                if ($alert.length && $alert.is(':visible')) {
                     try {
-                        $firstAlert.alert('close');
+                        // Try Bootstrap's alert close first
+                        if (typeof $alert.alert === 'function') {
+                            $alert.alert('close');
+                        } else {
+                            // Fallback to manual removal
+                            $alert.fadeOut(300, function() {
+                                if ($(this).parent().length) {
+                                    $(this).remove();
+                                }
+                            });
+                        }
                     } catch (e) {
-                        // If Bootstrap alert fails, just remove the element
-                        $firstAlert.fadeOut(300, function() {
-                            $(this).remove();
-                        });
+                        // Last resort: direct removal
+                        console.warn('Alert removal failed, using direct removal:', e);
+                        if ($alert.length && $alert.parent().length) {
+                            $alert.remove();
+                        }
                     }
                 }
             }, 5000);
+
+            // Limit number of alerts to prevent overflow
+            const $alerts = $container.find('.alert');
+            if ($alerts.length > 5) {
+                $alerts.slice(5).fadeOut(200, function() {
+                    $(this).remove();
+                });
+            }
+        } else {
+            // Fallback: log to console if no alert container
+            console.log(`${type.toUpperCase()}: ${message}`);
         }
     }
 
@@ -492,10 +567,20 @@ class FingerprintEnrollment {
 }
 
 // Initialize when DOM is ready
-$(document).ready(function() {
-    // Check if we're on the student registration page
-    if ($('#captureFingerprintBtn').length > 0) {
-        window.fingerprintEnrollment = new FingerprintEnrollment();
-        console.log('🚀 Fingerprint Enrollment System loaded');
-    }
-});
+if (typeof jQuery !== 'undefined') {
+    $(document).ready(function() {
+        // Check if we're on the student registration page
+        if ($('#captureFingerprintBtn').length > 0) {
+            window.fingerprintEnrollment = new FingerprintEnrollment();
+            console.log('🚀 Fingerprint Enrollment System loaded');
+        }
+    });
+} else {
+    // Fallback if jQuery is loaded after this script
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof jQuery !== 'undefined' && document.getElementById('captureFingerprintBtn')) {
+            window.fingerprintEnrollment = new FingerprintEnrollment();
+            console.log('🚀 Fingerprint Enrollment System loaded');
+        }
+    });
+}

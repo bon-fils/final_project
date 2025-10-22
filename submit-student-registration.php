@@ -788,6 +788,16 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
             )
         ");
 
+        // Log student data before insert for debugging
+        $logger->info('StudentRegistration', 'Attempting to create student record', [
+            'user_id' => $userId,
+            'option_id' => $studentData['option_id'],
+            'department_id' => $studentData['department_id'],
+            'reg_no' => $studentData['reg_no'],
+            'fingerprint_id' => $fingerprintData['id'],
+            'fingerprint_status' => $fingerprintData['enrolled'] ? 'enrolled' : 'not_enrolled'
+        ]);
+
         $insertStudent->execute([
             ':user_id' => $userId,
             ':option_id' => $studentData['option_id'],
@@ -807,6 +817,13 @@ function createStudentRecords($pdo, $studentData, $faceImagePaths, $fingerprintD
         ]);
 
         $studentId = $pdo->lastInsertId();
+
+        // Log successful student creation
+        $logger->info('StudentRegistration', 'Student record created successfully', [
+            'student_id' => $studentId,
+            'user_id' => $userId,
+            'reg_no' => $studentData['reg_no']
+        ]);
 
 
         // Create guardian record if guardian data provided (normalized)

@@ -935,10 +935,30 @@ const FingerprintSystem = {
                 // Show success animation
                 this.showSuccessAnimation(result.student);
                 
-            } else if (result.status === 'scan_failed' || result.status === 'not_recognized') {
-                // No finger detected or not recognized - just waiting
-                this.updateScanStatus('waiting', 'Place finger on sensor...');
-                console.log('⏳ Waiting for fingerprint...');
+            } else if (result.status === 'scan_failed') {
+                // No finger detected - show brief message
+                this.updateScanStatus('waiting', result.message || 'No finger detected');
+                console.log('⏳ Scan failed:', result.message);
+                
+                // Show subtle notification for scan failures
+                if (result.details && result.details !== 'Please place finger on sensor') {
+                    Utils.showNotification(
+                        `⚠️ ${result.message}\n${result.details}`,
+                        'warning',
+                        3000
+                    );
+                }
+                
+            } else if (result.status === 'not_recognized') {
+                // Fingerprint not recognized - show clear message
+                this.updateScanStatus('warning', '⚠️ Fingerprint not recognized');
+                console.log('⚠️ Fingerprint not recognized');
+                
+                Utils.showNotification(
+                    `⚠️ ${result.message}\n\n${result.guidance || 'Please try again or contact administrator'}`,
+                    'warning',
+                    4000
+                );
                 
             } else if (result.status === 'already_marked') {
                 // Already marked - show warning briefly

@@ -237,14 +237,23 @@
             }
         }
 
-        // Override the showAlert method to use our custom alert container
-        if (window.fingerprintEnrollment) {
-            const originalShowAlert = window.fingerprintEnrollment.showAlert;
-            window.fingerprintEnrollment.showAlert = function(message, type = 'info') {
-                log(message.replace(/[🔍✅❌⚠️🗑️🎉]/g, '').trim(), type);
-                originalShowAlert.call(this, message, type);
-            };
-        }
+        // Override the showAlert method to use our custom alert container and prevent errors
+        $(document).ready(function() {
+            if (window.fingerprintEnrollment) {
+                const originalShowAlert = window.fingerprintEnrollment.showAlert;
+                window.fingerprintEnrollment.showAlert = function(message, type = 'info') {
+                    log(message.replace(/[🔍✅❌⚠️🗑️🎉]/g, '').trim(), type);
+                    
+                    // Call original method safely
+                    try {
+                        originalShowAlert.call(this, message, type);
+                    } catch (e) {
+                        console.warn('Alert display failed:', e);
+                        log(`Alert: ${message}`, type);
+                    }
+                };
+            }
+        });
 
         // Enable get data button when enrollment is complete
         $(document).on('DOMSubtreeModified', '#fingerprintStatus', function() {

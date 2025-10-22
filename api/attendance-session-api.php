@@ -273,19 +273,17 @@ function handleRecordAttendance() {
         // Record attendance
         $stmt = $pdo->prepare("
             INSERT INTO attendance_records
-            (session_id, student_id, method, status, recorded_at)
-            VALUES (?, ?, ?, 'present', NOW())
+            (session_id, student_id, status, recorded_at)
+            VALUES (?, ?, 'present', NOW())
         ");
         $stmt->execute([
             $input['session_id'],
-            $student['id'],
-            $input['method']
+            $student['id']
         ]);
 
         $logger->info('Attendance Recorded', 'Student attendance marked', [
             'session_id' => $input['session_id'],
-            'student_id' => $input['student_id'],
-            'method' => $input['method']
+            'student_id' => $input['student_id']
         ]);
 
         echo json_encode([

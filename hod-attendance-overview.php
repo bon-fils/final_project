@@ -613,6 +613,12 @@ if ($department_id) {
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
+    <?php
+    // Prepare data for JavaScript to avoid PHP functions inside JS
+    $program_labels = array_map(function($p) { return addslashes($p['program_name']); }, $program_stats);
+    $program_rates = array_column($program_stats, 'attendance_rate');
+    ?>
+    
     <script>
         // Attendance Breakdown Chart
         const attendanceCtx = document.getElementById('attendanceChart').getContext('2d');
@@ -656,10 +662,10 @@ if ($department_id) {
         new Chart(programCtx, {
             type: 'bar',
             data: {
-                labels: [<?= implode(',', array_map(function($p) { return '"' . addslashes($p['program_name']) . '"'; }, $program_stats)) ?>],
+                labels: [<?= '"' . implode('","', $program_labels) . '"' ?>],
                 datasets: [{
                     label: 'Attendance Rate (%)',
-                    data: [<?= implode(',', array_column($program_stats, 'attendance_rate')) ?>],
+                    data: [<?= implode(',', $program_rates) ?>],
                     backgroundColor: 'rgba(54, 162, 235, 0.8)',
                     borderColor: 'rgba(54, 162, 235, 1)',
                     borderWidth: 1

@@ -1946,6 +1946,23 @@ class StudentRegistration {
     }
 
     showSuccess(response) {
+        // Log full response for debugging
+        console.log('✅ Registration Success Response:', response);
+        console.log('📊 Student ID:', response.student_id);
+        console.log('📝 Registration Number:', response.reg_no);
+        console.log('👤 Student Name:', response.student_name);
+        console.log('🔐 Fingerprint Enrolled:', response.fingerprint_enrolled);
+        console.log('📈 Biometric Complete:', response.biometric_complete);
+        
+        // Also log what was sent
+        if (this.fingerprintData) {
+            console.log('📤 Fingerprint data that was sent:', {
+                fingerprint_id: this.fingerprintData.fingerprint_id || this.fingerprintData.id,
+                quality: this.fingerprintData.quality,
+                enrolled: this.fingerprintData.enrolled
+            });
+        }
+        
         // Show success alert prominently at the top
         this.showAlert(`🎉 SUCCESS: ${response.message}`, 'success', false);
 
@@ -2005,7 +2022,7 @@ class StudentRegistration {
                                 <div class="text-center w-100 mb-3">
                                     <div class="alert alert-info mb-3">
                                         <i class="fas fa-clock me-2"></i>
-                                        <strong>Auto-refresh:</strong> Page will refresh in <span id="refreshCountdown">5</span> seconds
+                                        <strong>Auto-refresh:</strong> Page will refresh in <span id="refreshCountdown">90</span> seconds
                                     </div>
                                 </div>
                                 <button type="button" class="btn btn-success btn-lg px-4" id="continueButton">
@@ -2032,8 +2049,8 @@ class StudentRegistration {
         });
         modal.show();
 
-        // Auto-refresh functionality
-        let refreshCountdown = 5;
+        // Auto-refresh functionality - INCREASED TO 30 SECONDS FOR DEBUGGING
+        let refreshCountdown = 90;
         let refreshInterval;
         
         const countdownElement = document.getElementById('refreshCountdown');
@@ -2591,28 +2608,34 @@ class StudentRegistration {
             });
 
             // Include fingerprint data if captured and enrolled
-            const fingerprintEnrollment = window.fingerprintEnrollment;
-            if (fingerprintEnrollment) {
-                const fingerprintData = fingerprintEnrollment.getFingerprintData();
+            // Check for fingerprint data from THIS page's enrollment system
+            if (this.fingerprintData && this.fingerprintData.enrolled) {
+                console.log('📤 Including fingerprint data from page enrollment:', this.fingerprintData);
                 
-                // Add all fingerprint data to form
-                Object.keys(fingerprintData).forEach(key => {
-                    formData.append(key, fingerprintData[key] || '');
-                });
+                // Add fingerprint enrollment status
+                formData.append('fingerprint_enrolled', 'true');
+                formData.append('fingerprint_id', this.fingerprintData.fingerprint_id || this.fingerprintData.id);
+                formData.append('fingerprint_quality', this.fingerprintData.quality || 85);
+                formData.append('fingerprint_confidence', this.fingerprintData.confidence || this.fingerprintData.quality || 85);
+                formData.append('fingerprint_template', this.fingerprintData.template || '');
+                formData.append('fingerprint_hash', this.fingerprintData.hash || '');
+                formData.append('fingerprint_enrolled_at', this.fingerprintData.enrolled_at || new Date().toISOString());
 
-                // Include canvas visualization for reference if enrolled
-                if (fingerprintData.fingerprint_enrolled === 'true') {
-                    const canvas = document.getElementById('fingerprintCanvas');
-                    if (canvas) {
-                        const fingerprintImageData = canvas.toDataURL('image/png');
-                        formData.append('fingerprint_image', fingerprintImageData);
-                    }
+                // Include canvas visualization for reference if available
+                const canvas = document.getElementById('fingerprintCanvas');
+                if (canvas) {
+                    const fingerprintImageData = canvas.toDataURL('image/png');
+                    formData.append('fingerprint_image', fingerprintImageData);
                 }
 
-                console.log('Including fingerprint data:', fingerprintData);
+                console.log('✅ Fingerprint data added to form:', {
+                    fingerprint_id: this.fingerprintData.fingerprint_id || this.fingerprintData.id,
+                    quality: this.fingerprintData.quality,
+                    enrolled: true
+                });
             } else {
                 formData.append('fingerprint_enrolled', 'false');
-                console.log('No fingerprint enrollment system found - not enrolled');
+                console.log('⚠️ No fingerprint data found - not enrolled');
             }
 
             // Use fetch API instead of jQuery AJAX for better error handling
@@ -3066,12 +3089,16 @@ class StudentRegistration {
             });
 
             if (enrollResponse.success) {
-                // Step 4: Store enrollment data with correct property names for form submission
+                // Step 4: USE THE ACTUAL ID FROM ESP32 RESPONSE (not the generated one)
+                const actualFingerprintId = enrollResponse.id || fingerprintId;
+                console.log(`📌 ESP32 returned fingerprint ID: ${actualFingerprintId} (sent: ${fingerprintId})`);
+                
+                // Store enrollment data with correct property names for form submission
                 this.fingerprintData = {
-                    fingerprint_id: fingerprintId,  // Form expects fingerprint_id
-                    id: fingerprintId,               // Keep for compatibility
-                    template: enrollResponse.template || `template_${fingerprintId}_${Date.now()}`,
-                    hash: enrollResponse.hash || `hash_${fingerprintId}_${Date.now()}`,
+                    fingerprint_id: actualFingerprintId,  // Use REAL ID from ESP32
+                    id: actualFingerprintId,               // Use REAL ID from ESP32
+                    template: enrollResponse.template || `template_${actualFingerprintId}_${Date.now()}`,
+                    hash: enrollResponse.hash || `hash_${actualFingerprintId}_${Date.now()}`,
                     quality: 85,  // Default quality (will be updated from ESP32 if available)
                     confidence: 85,  // Form expects confidence
                     enrolled: true,

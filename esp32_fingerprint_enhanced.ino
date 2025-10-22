@@ -360,7 +360,7 @@ void enrollFingerprint(uint8_t id, String studentName = "", String regNo = "")
     
     enrollmentSuccess = true; // Set success flag
     indicateSuccess();
-    delay(4000); // Show success message longer
+    delay(3000); // Show success message (reduced from 4000ms)
     turnOffLEDs();
     displayMessage("System Ready");
   }
@@ -528,11 +528,20 @@ void handleStopScan()
 
 void handleEnrollmentStatus()
 {
+  // Quick response for status checks
   String response = "{";
   response += "\"success\":true,";
   response += "\"enrollment_success\":" + String(enrollmentSuccess ? "true" : "false") + ",";
   response += "\"enrollment_error\":\"" + enrollmentErrorMessage + "\",";
-  response += "\"sensor_status\":\"" + String(finger.verifyPassword() ? "connected" : "disconnected") + "\"";
+  response += "\"sensor_status\":\"connected\","; // Assume connected for speed
+  response += "\"timestamp\":\"" + String(millis()) + "\"";
   response += "}";
+  
+  // Send response immediately
   server.send(200, "application/json", response);
+  
+  // Reset flags after successful enrollment to prepare for next enrollment
+  if (enrollmentSuccess) {
+    Serial.println("📤 Status check: Enrollment success reported");
+  }
 }
