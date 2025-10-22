@@ -8,29 +8,9 @@
 // INITIALIZATION & CONFIGURATION
 // ================================
 
-// Enable error reporting for debugging
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Debug: Confirm file is loading
-echo "<!-- DEBUG: admin-register-lecturer.php is loading -->\n";
-
 require_once "config.php";
 require_once "session_check.php";
-
-// Check if user is logged in and has admin role
-if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php?error=not_logged_in');
-    exit('Not logged in. Please login first.');
-}
-
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
-    header('Location: login.php?error=insufficient_permissions');
-    exit('Access denied. Admin role required.');
-}
-
-// Debug: Confirm user has admin access
-echo "<!-- DEBUG: User has admin access, user_id: " . ($_SESSION['user_id'] ?? 'unknown') . ", role: " . ($_SESSION['role'] ?? 'unknown') . " -->\n";
+require_role(['admin']);
 
 // Initialize CSRF token if not exists
 if (!isset($_SESSION['csrf_token'])) {
@@ -43,6 +23,21 @@ header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+
+// ================================
+// INCLUDE BACKEND CLASSES
+// ================================
+
+require_once "backend/classes/DatabaseManager.php";
+require_once "backend/classes/InputValidator.php";
+require_once "backend/classes/LecturerRegistrationManager.php";
+require_once "backend/classes/DepartmentManager.php";
+
+// Initialize managers
+$dbManager = new DatabaseManager($pdo);
+$validator = new InputValidator();
+$lecturerManager = new LecturerRegistrationManager($pdo, $dbManager, $validator);
+$departmentManager = new DepartmentManager($pdo);
 
 // ================================
 // DATA LOADING FUNCTIONS
@@ -94,6 +89,8 @@ function validateLecturerData($data) {
             $errors[] = 'Email address contains consecutive dots which is invalid';
         }
     }
+
+
 
     // Enhanced phone validation (optional but must be valid if provided)
     if (!empty($data['phone'])) {
@@ -184,64 +181,29 @@ function validateLecturerData($data) {
 }
 
 /**
- * Handle photo upload with validation
- */
-function handlePhotoUpload($file) {
-    $upload_dir = 'uploads/lecturer_photos/';
-    $max_file_size = 2 * 1024 * 1024; // 2MB
-    $allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-
-    // Create upload directory if it doesn't exist
-    if (!is_dir($upload_dir)) {
-        mkdir($upload_dir, 0755, true);
-    }
-
-    // Validate file type using finfo for more reliable MIME detection
-    $finfo = finfo_open(FILEINFO_MIME_TYPE);
-    $mime_type = finfo_file($finfo, $file['tmp_name']);
-    finfo_close($finfo);
-
-    if (!in_array($mime_type, $allowed_types)) {
-        throw new Exception('Invalid file type. Only JPG, PNG, and GIF files are allowed.');
-    }
-
-    // Validate file size
-    if ($file['size'] > $max_file_size) {
-        throw new Exception('File size too large. Maximum size is 2MB.');
-    }
-
-    // Generate unique filename
-    $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-    $unique_filename = 'lecturer_' . time() . '_' . uniqid() . '.' . $file_extension;
-    $target_path = $upload_dir . $unique_filename;
-
-    // Move uploaded file
-    if (!move_uploaded_file($file['tmp_name'], $target_path)) {
-        throw new Exception('Failed to upload photo. Please try again.');
-    }
-
-    return $target_path;
-}
-
-/**
  * Check for duplicate records
  */
 function checkDuplicates($email, $id_number) {
     global $pdo;
     $errors = [];
 
-    // Check ID number uniqueness
+    // Check ID number uniqueness in lecturers table
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM lecturers WHERE id_number = ?");
     $stmt->execute([$id_number]);
     if ($stmt->fetchColumn() > 0) {
-        $errors[] = 'ID Number already exists';
+        $errors[] = 'ID Number already exists in the system';
     }
 
-    // Check email uniqueness
+    // Check email uniqueness in users table
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = ?");
     $stmt->execute([$email]);
     if ($stmt->fetchColumn() > 0) {
-        $errors[] = 'Email already exists in the system';
+        $errors[] = 'Email address is already registered in the system';
+    }
+
+    // Additional check: Ensure ID number is exactly 16 digits
+    if (strlen($id_number) !== 16 || !ctype_digit($id_number)) {
+        $errors[] = 'ID Number must be exactly 16 numeric digits';
     }
 
     return $errors;
@@ -270,6 +232,9 @@ function generateUniqueUsername($first_name, $last_name) {
     return $username;
 }
 
+
+
+
 /**
  * Process lecturer registration
  */
@@ -290,15 +255,8 @@ function processLecturerRegistration($post_data) {
         'selected_options' => is_array($post_data['selected_options'] ?? []) ?
             array_map('intval', $post_data['selected_options']) : [],
         'selected_courses' => is_array($post_data['selected_courses'] ?? []) ?
-            array_map('intval', $post_data['selected_courses']) : [],
-        'lecturer_photo' => $_FILES['lecturer_photo'] ?? null
+            array_map('intval', $post_data['selected_courses']) : []
     ];
-
-    // Handle photo upload if provided
-    $photo_path = null;
-    if ($data['lecturer_photo'] && $data['lecturer_photo']['error'] === UPLOAD_ERR_OK) {
-        $photo_path = handlePhotoUpload($data['lecturer_photo']);
-    }
 
     // Validate data
     $validation_errors = validateLecturerData($data);
@@ -319,8 +277,10 @@ function processLecturerRegistration($post_data) {
         $username = generateUniqueUsername($data['first_name'], $data['last_name']);
         $password_plain = '12345';
 
-        // Insert into users table - include photo path
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, status, created_at, updated_at, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+
+        // Insert into users table
+        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, role, first_name, last_name, phone, sex, dob, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $username,
             $data['email'],
@@ -333,16 +293,13 @@ function processLecturerRegistration($post_data) {
             $data['dob'],
             'active',
             date('Y-m-d H:i:s'),
-            date('Y-m-d H:i:s'),
-            $photo_path // Store photo path in users table
+            date('Y-m-d H:i:s')
         ]);
 
         $user_id = (int)$pdo->lastInsertId();
 
-        // Insert into lecturers table - remove photo_path
-        $stmt = $pdo->prepare("INSERT INTO lecturers
-            (user_id, gender, dob, id_number, department_id, education_level, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        // Insert into lecturers table (aligned with schema: id, gender, dob, id_number, department_id, education_level, created_at, updated_at, user_id)
+        $stmt = $pdo->prepare("INSERT INTO lecturers (user_id, gender, dob, id_number, department_id, education_level, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $user_id,
             $data['gender'],
@@ -361,7 +318,34 @@ function processLecturerRegistration($post_data) {
 
         $pdo->commit();
 
-        // Clear cache if cache utilities are available
+        // Log the registration activity (matching existing activity_logs structure)
+        try {
+            $activity_details = "Registered new lecturer: {$data['first_name']} {$data['last_name']} (ID: {$lecturer_id}) in department {$data['department_id']}";
+            
+            if ($assignment_result['courses_assigned'] > 0) {
+                $activity_details .= " with {$assignment_result['courses_assigned']} course(s) assigned";
+            }
+            
+            if ($assignment_result['options_assigned'] > 0) {
+                $activity_details .= " and {$assignment_result['options_assigned']} option(s) assigned";
+                if (!empty($data['selected_option_names'])) {
+                    $activity_details .= " (" . implode(', ', $data['selected_option_names']) . ")";
+                }
+            }
+            
+            $log_stmt = $pdo->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, ?, ?, ?)");
+            $log_stmt->execute([
+                $_SESSION['user_id'],
+                'lecturer_registration',
+                $activity_details,
+                date('Y-m-d H:i:s')
+            ]);
+        } catch (Exception $log_error) {
+            // Log error but don't fail the registration
+            error_log("Failed to log lecturer registration activity: " . $log_error->getMessage());
+        }
+
+        // Clear cache if available
         if (file_exists("cache_utils.php")) {
             require_once "cache_utils.php";
             if (function_exists('cache_delete')) {
@@ -395,17 +379,27 @@ function handleAssignments($lecturer_id, $data) {
     $courses_assigned = 0;
     $options_assigned = 0;
 
-    // Validate option assignments
+    // Handle option assignments (options define what programs lecturer can access)
     $selected_options = is_array($data['selected_options']) ? array_filter(array_map('intval', $data['selected_options'])) : [];
 
     if (!empty($selected_options)) {
-        // Validate options belong to department (though this should be handled client-side)
+        // Validate options belong to department and are active
         $placeholders = str_repeat('?,', count($selected_options) - 1) . '?';
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE id IN ($placeholders) AND department_id = ?");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM options WHERE id IN ($placeholders) AND department_id = ? AND status = 'active'");
         $stmt->execute(array_merge($selected_options, [$data['department_id']]));
 
         if ($stmt->fetchColumn() == count($selected_options)) {
+            // Note: In this system, options seem to be program types that lecturers can access
+            // The actual assignment might be handled differently, but we count them as assigned for tracking
             $options_assigned = count($selected_options);
+            
+            // Log which specific options were selected for this lecturer
+            $option_names_stmt = $pdo->prepare("SELECT name FROM options WHERE id IN ($placeholders)");
+            $option_names_stmt->execute($selected_options);
+            $option_names = $option_names_stmt->fetchAll(PDO::FETCH_COLUMN);
+            
+            // Store this information for logging
+            $data['selected_option_names'] = $option_names;
         }
     }
 
@@ -414,28 +408,17 @@ function handleAssignments($lecturer_id, $data) {
 
     if (!empty($selected_courses)) {
         // Validate courses belong to department and are unassigned
-        $placeholders = str_repeat('?,', count($selected_courses) - 1) . '?';
-        $stmt = $pdo->prepare("
-            SELECT COUNT(*) FROM courses
-            WHERE id IN ($placeholders) AND department_id = ? AND (lecturer_id IS NULL OR lecturer_id = 0)
-        ");
-        $stmt->execute(array_merge($selected_courses, [$data['department_id']]));
-
-        if ($stmt->fetchColumn() == count($selected_courses)) {
-            // Assign courses
-            $stmt = $pdo->prepare("UPDATE courses SET lecturer_id = ? WHERE id IN ($placeholders)");
-            $stmt->execute(array_merge([$lecturer_id], $selected_courses));
-            $courses_assigned = count($selected_courses);
-
-            // Log assignment
-            $log_stmt = $pdo->prepare("
-                INSERT INTO activity_logs (user_id, action, details, created_at)
-                VALUES (?, 'course_assignment_registration', ?, NOW())
-            ");
-            $log_stmt->execute([
-                $_SESSION['user_id'],
-                "Assigned $courses_assigned courses to newly registered lecturer (ID: $lecturer_id)"
-            ]);
+        foreach ($selected_courses as $course_id) {
+            $check_stmt = $pdo->prepare("SELECT id FROM courses WHERE id = ? AND (lecturer_id IS NULL OR lecturer_id = 0) AND department_id = ?");
+            $check_stmt->execute([$course_id, $data['department_id']]);
+            
+            if ($check_stmt->fetch()) {
+                $stmt = $pdo->prepare("UPDATE courses SET lecturer_id = ? WHERE id = ?");
+                $stmt->execute([$lecturer_id, $course_id]);
+                if ($stmt->rowCount() > 0) {
+                    $courses_assigned++;
+                }
+            }
         }
     }
 
@@ -481,78 +464,47 @@ function checkFormSubmissionRateLimit() {
 
 // ================================
 // MAIN PROCESSING LOGIC
+// ================================
 
 $formError = '';
 $successMessage = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    echo "<!-- DEBUG: POST request received -->\n";
-    
-    // Debug: Show POST data
-    error_log("POST data received: " . print_r($_POST, true));
-    error_log("FILES data received: " . print_r($_FILES, true));
-    
-    // Enhanced validation
-    $validation_errors = [];
-    
-    // Check CSRF token
-    if (!isset($_POST['csrf_token'])) {
-        $validation_errors[] = 'CSRF token missing. Please refresh the page and try again.';
-        echo "<!-- DEBUG: CSRF token missing -->\n";
-    } elseif (!isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
-        $validation_errors[] = 'Security validation failed. Please refresh the page and try again.';
-        echo "<!-- DEBUG: CSRF token mismatch -->\n";
-    }
-    
-    // Check required fields
-    $required_fields = ['first_name', 'last_name', 'gender', 'dob', 'id_number', 'email', 'department_id', 'education_level'];
-    foreach ($required_fields as $field) {
-        if (empty(trim($_POST[$field] ?? ''))) {
-            $validation_errors[] = ucfirst(str_replace('_', ' ', $field)) . ' is required.';
-        }
-    }
-    
-    // If no validation errors, proceed
-    if (empty($validation_errors)) {
-        echo "<!-- DEBUG: Starting registration process -->\n";
+    // Rate limiting check using new manager
+    if (!$lecturerManager->checkRateLimit()) {
+        $formError = 'Too many registration attempts. Please wait before trying again.';
+    } elseif (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $formError = 'Security validation failed. Please refresh the page and try again.';
+    } else {
         try {
             // Log the registration attempt
             error_log("Lecturer registration attempt by user ID: " . ($_SESSION['user_id'] ?? 'unknown') .
-                     " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+                      " from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 
-            $result = processLecturerRegistration($_POST);
-            echo "<!-- DEBUG: Registration processed, result: " . print_r($result, true) . " -->\n";
-            
+            $result = $lecturerManager->registerLecturer($_POST);
             if ($result['success']) {
                 $_SESSION['success_message'] = $result['message'];
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
                 // Clear form submission tracking on success
-                unset($_SESSION['form_submissions']);
+                unset($_SESSION['lecturer_reg_submissions']);
 
-                echo "<!-- DEBUG: Registration successful, redirecting -->\n";
                 header("Location: admin-register-lecturer.php");
                 exit;
-            } else {
-                $formError = 'Registration failed: Unknown error occurred';
-                echo "<!-- DEBUG: Registration failed with no success flag -->\n";
             }
         } catch (Exception $e) {
             error_log('Lecturer registration error: ' . $e->getMessage() .
-                     ' | User ID: ' . ($_SESSION['user_id'] ?? 'unknown') .
-                     ' | IP: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
-            $formError = 'Registration failed: ' . $e->getMessage();
-            echo "<!-- DEBUG: Exception caught: " . htmlspecialchars($e->getMessage()) . " -->\n";
+                      ' | User ID: ' . ($_SESSION['user_id'] ?? 'unknown') .
+                      ' | IP: ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+
+            $formError = 'Registration failed: ' . htmlspecialchars($e->getMessage());
         }
-    } else {
-        // Display validation errors
-        $formError = 'Please fix the following errors: ' . implode(', ', $validation_errors);
-        echo "<!-- DEBUG: Validation errors: " . htmlspecialchars(implode(', ', $validation_errors)) . " -->\n";
     }
 }
 
-// Load data for form
-$departments = getDepartments();
+// Load data for form using new manager
+$departmentsResult = $lecturerManager->getDepartments();
+$departments = $departmentsResult['success'] ? $departmentsResult['data'] : [];
 
 // Handle success message from redirect
 if (isset($_SESSION['success_message'])) {
@@ -828,70 +780,6 @@ if (isset($_SESSION['success_message'])) {
             font-size: 1.1rem;
         }
 
-        /* Enhanced Photo Upload Styling */
-        .photo-upload-container {
-            background: #f8f9ff;
-            border: 2px solid #e3f2fd;
-            border-radius: var(--border-radius);
-            padding: 2rem;
-            transition: all 0.3s ease;
-            position: relative;
-        }
-
-        .photo-upload-container:hover {
-            border-color: #667eea;
-            background: #f0f4ff;
-        }
-
-        .photo-preview-wrapper {
-            position: relative;
-            display: inline-block;
-        }
-
-        .photo-preview {
-            width: 200px;
-            height: 200px;
-            border-radius: 15px;
-            overflow: hidden;
-            margin: 0 auto;
-            border: 3px solid #e3f2fd;
-            background: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-
-        .photo-preview:hover {
-            transform: scale(1.02);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-        }
-
-        .photo-preview img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transition: all 0.3s ease;
-        }
-
-        .photo-placeholder {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: #999;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-
-        .photo-placeholder:hover {
-
-        .photo-controls .btn {
-            margin: 0.25rem;
-        }
-
         .section-header i {
             color: #667eea;
             margin-right: 0.5rem;
@@ -1120,11 +1008,6 @@ if (isset($_SESSION['success_message'])) {
             to { opacity: 1; transform: translateY(0); }
         }
 
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
         .slide-in {
             animation: slideIn 0.3s ease-out;
         }
@@ -1191,7 +1074,7 @@ if (isset($_SESSION['success_message'])) {
     </button>
 
     <!-- Loading Overlay -->
-    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+    <!-- <div class="loading-overlay" id="loadingOverlay"> -->
         <div class="loading-content">
             <div class="spinner-border loading-spinner mb-3" role="status">
                 <span class="visually-hidden">Loading...</span>
@@ -1228,241 +1111,162 @@ if (isset($_SESSION['success_message'])) {
                     </div>
                 <?php endif; ?>
 
-                <form id="lecturerRegistrationForm" method="POST" enctype="multipart/form-data">
+                <form id="lecturerRegistrationForm" method="POST">
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token'] ?? bin2hex(random_bytes(32)); ?>">
                     <input type="hidden" name="role" value="lecturer">
 
-                    <!-- Enhanced Photo Upload Section -->
-                    <div class="row g-3 mb-4 fade-in">
-                         <div class="col-12 section-header">
-                             <h6>
-                                 <i class="fas fa-camera me-2"></i>Profile Photo
-                                 <span class="badge bg-secondary ms-2">Optional</span>
-                             </h6>
-                             <small class="text-muted">Upload a professional photo for the lecturer's profile</small>
-                         </div>
-                         <div class="col-12">
-                             <div class="photo-upload-container">
-                                 <div class="row align-items-center">
-                                     <div class="col-md-4">
-                                         <div class="photo-preview-wrapper">
-                                             <div class="photo-preview" id="photoPreviewContainer">
-                                                 <img id="photoPreview" src="" alt="Profile Photo Preview" style="display: none;">
-                                                 <div id="photoPlaceholder" class="photo-placeholder">
-                                                     <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
-                                                     <p class="text-muted mb-2 fw-bold">No photo selected</p>
-                                                     <small class="text-muted">Click "Choose Photo" to upload</small>
-                                                 </div>
-                                             </div>
-                                             <div class="photo-overlay" id="photoOverlay" style="display: none;">
-                                                 <button type="button" class="btn btn-sm btn-light" onclick="document.getElementById('lecturer_photo').click()">
-                                                     <i class="fas fa-edit me-1"></i>Change
-                                                 </button>
-                                                 <button type="button" class="btn btn-sm btn-danger ms-1" onclick="clearPhoto()">
-                                                     <i class="fas fa-trash me-1"></i>Remove
-                                                 </button>
-                                             </div>
-                                         </div>
-                                     </div>
-                                     <div class="col-md-8">
-                                         <div class="photo-controls">
-                                             <input type="file" id="lecturer_photo" name="lecturer_photo" class="form-control d-none"
-                                                    accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" onchange="previewPhoto(this)">
-                                             
-                                             <div class="d-grid gap-2 d-md-flex">
-                                                 <button type="button" class="btn btn-primary btn-lg" onclick="document.getElementById('lecturer_photo').click()">
-                                                     <i class="fas fa-camera me-2"></i>Choose Photo
-                                                 </button>
-                                                 <button type="button" class="btn btn-outline-secondary" onclick="clearPhoto()" id="clearPhotoBtn" style="display: none;">
-                                                     <i class="fas fa-trash me-2"></i>Clear Photo
-                                                 </button>
-                                             </div>
-                                             
-                                             <div class="mt-3">
-                                                 <div class="photo-requirements">
-                                                     <h6 class="text-primary mb-2">
-                                                         <i class="fas fa-info-circle me-1"></i>Photo Requirements:
-                                                     </h6>
-                                                     <ul class="list-unstyled small text-muted">
-                                                         <li><i class="fas fa-check text-success me-2"></i>Professional passport-style photo</li>
-                                                         <li><i class="fas fa-check text-success me-2"></i>Clear face visibility</li>
-                                                         <li><i class="fas fa-check text-success me-2"></i>Maximum file size: 2MB</li>
-                                                         <li><i class="fas fa-check text-success me-2"></i>Formats: JPG, PNG, GIF, WebP</li>
-                                                         <li><i class="fas fa-check text-success me-2"></i>Recommended: 300x300 pixels or larger</li>
-                                                     </ul>
-                                                 </div>
-                                             </div>
-                                             
-                                             <div class="photo-info mt-3" id="photoInfo" style="display: none;">
-                                                 <div class="alert alert-success border-0 py-2">
-                                                     <div class="d-flex align-items-center">
-                                                         <i class="fas fa-check-circle text-success me-2"></i>
-                                                         <div>
-                                                             <strong>Photo uploaded successfully!</strong><br>
-                                                             <small id="photoDetails" class="text-muted"></small>
-                                                         </div>
-                                                     </div>
-                                                 </div>
-                                             </div>
-                                         </div>
-                                     </div>
-                                 </div>
-                             </div>
-                         </div>
-                     </div>
-
                     <!-- Personal Information Section -->
                     <div class="row g-3 mb-4 fade-in">
-                         <div class="col-12 section-header">
-                             <h6>
-                                 <i class="fas fa-user me-2"></i>Personal Information
-                             </h6>
-                         </div>
-                         <div class="col-md-6">
-                              <label class="form-label" for="first_name">
-                                   <i class="fas fa-user me-1"></i>First Name <span class="text-danger">*</span>
-                               </label>
-                               <input type="text" id="first_name" name="first_name" class="form-control"
-                                      required aria-required="true" maxlength="50" minlength="2"
-                                      pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
-                                      placeholder="Enter first name">
-                               <div class="invalid-feedback">
-                                   Please enter a valid first name (2-50 characters, letters only).
-                               </div>
-                           </div>
-                           <div class="col-md-6">
-                               <label class="form-label" for="last_name">
-                                   <i class="fas fa-user me-1"></i>Last Name <span class="text-danger">*</span>
-                               </label>
-                               <input type="text" id="last_name" name="last_name" class="form-control"
-                                      required aria-required="true" maxlength="50" minlength="2"
-                                      pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
-                                      placeholder="Enter last name">
-                               <div class="invalid-feedback">
-                                   Please enter a valid last name (2-50 characters, letters only).
-                               </div>
-                           </div>
-                           <div class="col-md-6">
-                               <label class="form-label" for="gender">
-                                   <i class="fas fa-venus-mars me-1"></i>Gender <span class="text-danger">*</span>
-                               </label>
-                               <select id="gender" name="gender" class="form-select" required aria-required="true">
-                                   <option value="">Select Gender</option>
-                                   <option value="Male">Male</option>
-                                   <option value="Female">Female</option>
-                                   <option value="Other">Other</option>
-                               </select>
-                               <div class="invalid-feedback">
-                                   Please select a gender.
-                               </div>
-                           </div>
-                          <div class="col-md-6">
-                              <label class="form-label" for="dob">
-                                  <i class="fas fa-calendar me-1"></i>Date of Birth <span class="text-danger">*</span>
-                              </label>
-                              <input type="date" id="dob" name="dob" class="form-control"
-                                     required aria-required="true"
-                                     max="<?php echo date('Y-m-d', strtotime('-21 years')); ?>"
-                                     min="<?php echo date('Y-m-d', strtotime('-100 years')); ?>">
-                              <small class="form-text text-muted">
-                                  <i class="fas fa-info-circle me-1"></i>Must be at least 21 years old and not more than 100 years ago.
-                              </small>
-                              <div class="invalid-feedback">
-                                  Please enter a valid date of birth.
-                              </div>
-                          </div>
-                          <div class="col-md-6">
-                              <label class="form-label" for="id_number">
-                                  <i class="fas fa-id-card me-1"></i>ID Number <span class="text-danger">*</span>
-                              </label>
-                              <input type="text" id="id_number" name="id_number" class="form-control"
-                                    required aria-required="true" maxlength="16" minlength="16"
-                                    pattern="\d{16}" inputmode="numeric"
-                                    placeholder="1234567890123456"
-                                    onkeypress="return isNumberKey(event)"
-                                    oninput="validateIdNumber(this)"
-                                    title="Must be exactly 16 digits">
-                              <div class="d-flex justify-content-between">
-                                  <small class="form-text text-muted">
-                                      <i class="fas fa-info-circle me-1"></i>Must be exactly 16 digits (numbers only).
-                                  </small>
-                                  <small id="id-counter" class="form-text text-info fw-bold" style="display: none;">0/16</small>
-                              </div>
-                              <div class="invalid-feedback">
-                                  ID Number must be exactly 16 digits.
-                              </div>
-                          </div>
-                          <div class="col-md-6">
-                              <label for="education_level" class="form-label">
-                                  <i class="fas fa-graduation-cap me-1"></i>Education Level <span class="text-danger">*</span>
-                              </label>
-                              <select id="education_level" name="education_level" class="form-select" required aria-required="true">
-                                  <option value="">Select Level</option>
-                                  <option value="Bachelor's">Bachelor's Degree</option>
-                                  <option value="Master's">Master's Degree</option>
-                                  <option value="PhD">PhD</option>
-                                  <option value="Other">Other</option>
-                              </select>
-                          </div>
-                          <div class="col-md-6">
-                              <label class="form-label" for="phone">Phone</label>
-                              <input type="text" id="phone" name="phone" class="form-control" placeholder="0781234567" onkeypress="return isNumberKey(event)" oninput="validatePhoneNumber(this)">
-                              <small class="form-text text-muted">Optional. Must be exactly 10 digits only.</small>
-                          </div>
-                     </div>
-
-                    <!-- Contact & Academic Information Section -->
-                    <div class="row g-3 mb-4 fade-in">
-                         <div class="col-12 section-header">
-                             <h6>
-                                 <i class="fas fa-address-card me-2"></i>Contact & Academic Information
-                             </h6>
-                         </div>
-                         <div class="col-md-6">
-                             <label class="form-label" for="email">
-                                 <i class="fas fa-envelope me-1"></i>Email <span class="text-danger">*</span>
+                        <div class="col-12 section-header">
+                            <h6>
+                                <i class="fas fa-user me-2"></i>Personal Information
+                            </h6>
+                        </div>
+                        <div class="col-md-6">
+                             <label class="form-label" for="first_name">
+                                 <i class="fas fa-user me-1"></i>First Name <span class="text-danger">*</span>
                              </label>
-                             <input type="email" id="email" name="email" class="form-control"
-                                    required aria-required="true" maxlength="100"
-                                    placeholder="lecturer@university.edu"
-                                    pattern="[^\s@]+@[^\s@]+\.[^\s@]+">
-                             <small class="form-text text-muted">
-                                 <i class="fas fa-info-circle me-1"></i>Valid email address required for account creation.
-                             </small>
+                             <input type="text" id="first_name" name="first_name" class="form-control"
+                                    required aria-required="true" maxlength="50" minlength="2"
+                                    pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
+                                    placeholder="Enter first name">
                              <div class="invalid-feedback">
-                                 Please enter a valid email address.
+                                 Please enter a valid first name (2-50 characters, letters only).
                              </div>
                          </div>
                          <div class="col-md-6">
-                             <label for="education_level" class="form-label">
-                                 <i class="fas fa-graduation-cap me-1"></i>Education Level <span class="text-danger">*</span>
+                             <label class="form-label" for="last_name">
+                                 <i class="fas fa-user me-1"></i>Last Name <span class="text-danger">*</span>
                              </label>
-                             <select id="education_level" name="education_level" class="form-select" required aria-required="true">
-                                 <option value="">Select Level</option>
-                                 <option value="Bachelor's">Bachelor's Degree</option>
-                                 <option value="Master's">Master's Degree</option>
-                                 <option value="PhD">PhD</option>
+                             <input type="text" id="last_name" name="last_name" class="form-control"
+                                    required aria-required="true" maxlength="50" minlength="2"
+                                    pattern="[A-Za-z\s]+" title="Only letters and spaces allowed"
+                                    placeholder="Enter last name">
+                             <div class="invalid-feedback">
+                                 Please enter a valid last name (2-50 characters, letters only).
+                             </div>
+                         </div>
+                         <div class="col-md-6">
+                             <label class="form-label" for="gender">
+                                 <i class="fas fa-venus-mars me-1"></i>Gender <span class="text-danger">*</span>
+                             </label>
+                             <select id="gender" name="gender" class="form-select" required aria-required="true">
+                                 <option value="">Select Gender</option>
+                                 <option value="Male">Male</option>
+                                 <option value="Female">Female</option>
                                  <option value="Other">Other</option>
                              </select>
+                             <div class="invalid-feedback">
+                                 Please select a gender.
+                             </div>
                          </div>
-                         <div class="col-md-12">
-                             <label for="department_id" class="form-label">
-                                 <i class="fas fa-building me-1"></i>Department <span class="text-danger">*</span>
+                         <div class="col-md-6">
+                             <label class="form-label" for="dob">
+                                 <i class="fas fa-calendar me-1"></i>Date of Birth <span class="text-danger">*</span>
                              </label>
-                             <select id="department_id" name="department_id" class="form-select" required aria-required="true">
-                                 <option value="">Select Department</option>
-                                 <?php foreach ($departments as $dept): ?>
-                                     <option value="<?= htmlspecialchars($dept['id']) ?>">
-                                         <?= htmlspecialchars($dept['name']) ?>
-                                     </option>
-                                 <?php endforeach; ?>
-                             </select>
+                             <input type="date" id="dob" name="dob" class="form-control"
+                                    required aria-required="true"
+                                    max="<?php echo date('Y-m-d', strtotime('-21 years')); ?>"
+                                    min="<?php echo date('Y-m-d', strtotime('-100 years')); ?>">
                              <small class="form-text text-muted">
-                                 <i class="fas fa-info-circle me-1"></i>
-                                 Selecting a department will load available courses and options below
+                                 <i class="fas fa-info-circle me-1"></i>Must be at least 21 years old and not more than 100 years ago.
                              </small>
+                             <div class="invalid-feedback">
+                                 Please enter a valid date of birth.
+                             </div>
                          </div>
-                     </div>
+                    </div>
+
+                    <!-- Department & Education Section -->
+                    <div class="row g-3 mb-4 fade-in">
+                        <div class="col-12 section-header">
+                            <h6>
+                                <i class="fas fa-building me-2"></i>Department & Education
+                            </h6>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="department_id" class="form-label">
+                                Department <span class="text-danger">*</span>
+                            </label>
+                            <select id="department_id" name="department_id" class="form-select" required aria-required="true">
+                                <option value="">Select Department</option>
+                                <?php foreach ($departments as $dept): ?>
+                                    <option value="<?= htmlspecialchars($dept['id']) ?>">
+                                        <?= htmlspecialchars($dept['name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>
+                                Selecting a department will load available courses below
+                            </small>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="education_level" class="form-label">
+                                Education Level <span class="text-danger">*</span>
+                            </label>
+                            <select id="education_level" name="education_level" class="form-select" required aria-required="true">
+                                <option value="">Select Level</option>
+                                <option value="Certificate">Certificate</option>
+                                <option value="Diploma">Diploma</option>
+                                <option value="Bachelor's">Bachelor's Degree</option>
+                                <option value="Master's">Master's Degree</option>
+                                <option value="PhD">PhD (Doctorate)</option>
+                                <option value="Postdoctoral">Postdoctoral</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Contact & Identification Section -->
+                    <div class="row g-3 mb-4 fade-in">
+                        <div class="col-12 section-header">
+                            <h6>
+                                <i class="fas fa-id-card me-2"></i>Contact & Identification
+                            </h6>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="id_number">
+                                <i class="fas fa-id-card me-1"></i>ID Number <span class="text-danger">*</span>
+                            </label>
+                            <input type="text" id="id_number" name="id_number" class="form-control"
+                                   required aria-required="true" maxlength="16" minlength="16"
+                                   pattern="\d{16}" inputmode="numeric"
+                                   placeholder="1234567890123456"
+                                   onkeypress="return isNumberKey(event)"
+                                   oninput="validateIdNumber(this)"
+                                   title="Must be exactly 16 digits">
+                            <div class="d-flex justify-content-between">
+                                <small class="form-text text-muted">
+                                    <i class="fas fa-info-circle me-1"></i>Must be exactly 16 digits (numbers only).
+                                </small>
+                                <small id="id-counter" class="form-text text-info fw-bold" style="display: none;">0/16</small>
+                            </div>
+                            <div class="invalid-feedback">
+                                ID Number must be exactly 16 digits.
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="email">
+                                <i class="fas fa-envelope me-1"></i>Email <span class="text-danger">*</span>
+                            </label>
+                            <input type="email" id="email" name="email" class="form-control"
+                                   required aria-required="true" maxlength="100"
+                                   placeholder="lecturer@university.edu"
+                                   pattern="[^\s@]+@[^\s@]+\.[^\s@]+">
+                            <small class="form-text text-muted">
+                                <i class="fas fa-info-circle me-1"></i>Valid email address required for account creation.
+                            </small>
+                            <div class="invalid-feedback">
+                                Please enter a valid email address.
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="phone">Phone</label>
+                            <input type="text" id="phone" name="phone" class="form-control" placeholder="1234567890" onkeypress="return isNumberKey(event)" oninput="validatePhoneNumber(this)">
+                            <small class="form-text text-muted">Optional. Must be exactly 10 digits only.</small>
+                        </div>
+                    </div>
 
                     <!-- Course and Option Assignment Section -->
                     <div class="row g-3 mt-3">
@@ -1475,76 +1279,64 @@ if (isset($_SESSION['success_message'])) {
                                 </div>
                                 <div class="card-body">
                                     <!-- Option Assignment Section -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <label class="form-label">
-                                <i class="fas fa-list me-2"></i>Option Access
-                                <span class="badge bg-primary ms-2">Required</span>
-                                <small class="text-muted fw-normal d-block mt-1">Select options this lecturer can access based on department</small>
-                            </label>
-                            <div class="option-selection-container border rounded p-3 bg-light">
-                                <div id="optionsContainer" class="text-center py-4">
-                                    <div class="alert alert-info border-0">
-                                        <i class="fas fa-info-circle me-2"></i>
-                                        <strong>Please select a department first</strong><br>
-                                        <small>Choose a department above to view available options</small>
+                                    <div class="row mb-4">
+                                        <div class="col-12">
+                                            <label class="form-label">
+                                                <i class="fas fa-list me-2"></i>Option Access (Required)
+                                                <small class="text-muted fw-normal">- Select options this lecturer can access based on department you selected</small>
+                                            </label>
+                                            <div class="option-selection-container border-0 bg-light">
+                                                <div id="optionsContainer" class="text-center py-4">
+                                                    <div class="spinner-border text-primary mb-3" role="status" style="width: 2rem; height: 2rem;">
+                                                        <span class="visually-hidden">Loading options...</span>
+                                                    </div>
+                                                    <h6 class="text-primary mb-2">Loading Available Options</h6>
+                                                    <p class="text-muted mb-0">Fetching options for the selected department...</p>
+                                                    <div class="progress mt-3" style="height: 4px;">
+                                                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 100%"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                                <small class="form-text text-muted">
+                                                    <i class="fas fa-info-circle me-1"></i>
+                                                    Select at least one option for the lecturer to access based on department permissions.
+                                                </small>
+                                                <div class="selection-counter">
+                                                    <i class="fas fa-check-circle"></i>
+                                                    <span id="selectedOptionsCount">0</span> options selected
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mt-3">
-                                <div class="d-flex align-items-center">
-                                    <button type="button" class="btn btn-sm btn-outline-primary me-2" onclick="selectAllOptions()">
-                                        <i class="fas fa-check-double me-1"></i>Select All
-                                    </button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllOptions()">
-                                        <i class="fas fa-times me-1"></i>Clear All
-                                    </button>
-                                </div>
-                                <div class="selection-counter badge bg-success fs-6">
-                                    <i class="fas fa-check-circle me-1"></i>
-                                    <span id="selectedOptionsCount">0</span> selected
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
                                     <!-- Course Assignment Section -->
-                    <div class="row">
-                        <div class="col-12">
-                            <label class="form-label">
-                                <i class="fas fa-book me-2"></i>Course Assignment
-                                <span class="badge bg-secondary ms-2">Optional</span>
-                                <small class="text-muted fw-normal d-block mt-1">Assign specific courses to this lecturer</small>
-                            </label>
-                            <div class="course-selection-container border rounded p-3 bg-light">
-                                <div id="coursesContainer" class="text-center py-4">
-                                    <div class="alert alert-info border-0">
-                                        <i class="fas fa-book-open me-2"></i>
-                                        <strong>Select a department first</strong><br>
-                                        <small>Choose a department above to view available courses</small>
+                                    <div class="row">
+                                        <div class="col-12">
+                                            <label class="form-label">
+                                                <i class="fas fa-book me-2"></i>Course Assignment (Optional)
+                                                <small class="text-warning fw-bold">- Only unassigned courses are displayed for selection</small>
+                                            </label>
+                                            <div class="course-selection-container border-0 bg-light">
+                                                <div id="coursesContainer" class="text-center py-4">
+                                                    <i class="fas fa-book-open fa-3x text-muted mb-3"></i>
+                                                    <h6 class="text-muted mb-2">Course Assignment</h6>
+                                                    <p class="text-muted mb-1">Select a department above to view available courses</p>
+                                                    <small class="text-muted">Only unassigned courses will be shown for assignment</small>
+                                                </div>
+                                            </div>
+                                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                                <div class="alert alert-warning py-2 px-3 mb-0" style="font-size: 0.85rem;">
+                                                    <i class="fas fa-exclamation-triangle me-1"></i>
+                                                    <strong>Important:</strong> Only courses that are not currently assigned to any lecturer are shown here.
+                                                </div>
+                                                <div class="selection-counter">
+                                                    <i class="fas fa-graduation-cap"></i>
+                                                    <span id="selectedCoursesCount">0</span> courses selected
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mt-3">
-                                <div class="d-flex align-items-center">
-                                    <button type="button" class="btn btn-sm btn-outline-primary me-2" onclick="selectAllCourses()">
-                                        <i class="fas fa-check-double me-1"></i>Select All
-                                    </button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllCourses()">
-                                        <i class="fas fa-times me-1"></i>Clear All
-                                    </button>
-                                    <small class="text-warning ms-3">
-                                        <i class="fas fa-info-circle me-1"></i>Only unassigned courses shown
-                                    </small>
-                                </div>
-                                <div class="selection-counter badge bg-info fs-6">
-                                    <i class="fas fa-graduation-cap me-1"></i>
-                                    <span id="selectedCoursesCount">0</span> selected
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
                                 </div>
                             </div>
                         </div>
@@ -1555,23 +1347,12 @@ if (isset($_SESSION['success_message'])) {
                     <div id="selectedCoursesInputs" style="display: none;"></div>
 
                     <div class="text-center mt-4">
-                        <div class="d-grid gap-2 d-md-flex justify-content-md-center">
-                            <button type="submit" class="btn btn-primary btn-lg px-5" id="addBtn">
-                                <i class="fas fa-user-plus me-2"></i>Register Lecturer
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary btn-lg" onclick="resetForm()">
-                                <i class="fas fa-undo me-2"></i>Reset Form
-                            </button>
-                            <a href="admin-dashboard.php" class="btn btn-secondary btn-lg">
-                                <i class="fas fa-arrow-left me-2"></i>Cancel
-                            </a>
-                        </div>
-                        <div class="mt-3">
-                            <small class="text-muted">
-                                <i class="fas fa-info-circle me-1"></i>
-                                Default password will be <strong>12345</strong> - advise lecturer to change on first login
-                            </small>
-                        </div>
+                        <button type="submit" class="btn btn-primary btn-lg" id="addBtn">
+                            <i class="fas fa-plus me-2"></i>Register Lecturer
+                        </button>
+                        <a href="admin-dashboard.php" class="btn btn-secondary ms-2">
+                            <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
+                        </a>
                     </div>
                 </form>
             </div>
@@ -1622,6 +1403,7 @@ if (isset($_SESSION['success_message'])) {
         return true;
     }
 
+
     // Validate ID number field
     function validateIdNumber(input) {
         // Remove any non-numeric characters
@@ -1633,9 +1415,11 @@ if (isset($_SESSION['success_message'])) {
         }
     }
 
-    // Load options for registration form
+
+    // Load options for registration form with caching and error handling
     function loadOptionsForRegistration(departmentId = null) {
         const optionsContainer = document.getElementById('optionsContainer');
+        const cacheKey = `options_dept_${departmentId}`;
 
         if (!departmentId) {
             optionsContainer.innerHTML = `
@@ -1648,6 +1432,17 @@ if (isset($_SESSION['success_message'])) {
             availableOptions = [];
             renderOptionsForRegistration();
             return;
+        }
+
+        // Check cache first
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+            const parsed = JSON.parse(cachedData);
+            if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
+                availableOptions = parsed.data;
+                renderOptionsForRegistration();
+                return;
+            }
         }
 
         // Show enhanced loading state
@@ -1665,18 +1460,39 @@ if (isset($_SESSION['success_message'])) {
             </div>
         `;
 
-        fetch(`api/department-option-api.php?action=get_options&department_id=${departmentId}`)
-            .then(response => response.json())
+        // Add timeout to fetch request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+        fetch(`get-options.php?department_id=${departmentId}`, {
+            signal: controller.signal,
+            headers: {
+                'Cache-Control': 'no-cache',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+            .then(response => {
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
-                if (data.success && data.data && data.data.length > 0) {
-                    availableOptions = data.data;
+                if (data.success && data.options && data.options.length > 0) {
+                    availableOptions = data.options;
+                    // Cache the result
+                    sessionStorage.setItem(cacheKey, JSON.stringify({
+                        data: availableOptions,
+                        timestamp: Date.now()
+                    }));
                     renderOptionsForRegistration();
                 } else {
                     optionsContainer.innerHTML = `
                         <div class="alert alert-warning">
-                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            <i class="fas fa-info-circle me-2"></i>
                             <strong>No Options Available</strong><br>
-                            ${data.message || 'There are no options in this department.'}<br>
+                            ${data.message || 'There are no options available in this department.'}<br>
                             <small class="text-muted">You can still register the lecturer and assign options later through the option management system.</small>
                         </div>
                     `;
@@ -1685,12 +1501,21 @@ if (isset($_SESSION['success_message'])) {
                 }
             })
             .catch(error => {
+                clearTimeout(timeoutId);
                 console.error('Error loading options:', error);
+
+                let errorMessage = 'There was an error loading options for this department.';
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Request timed out. Please check your connection.';
+                } else if (error.message.includes('HTTP')) {
+                    errorMessage = `Server error: ${error.message}`;
+                }
+
                 optionsContainer.innerHTML = `
                     <div class="alert alert-danger">
                         <i class="fas fa-exclamation-triangle me-2"></i>
                         <strong>Failed to Load Options</strong><br>
-                        <small>There was an error loading options for this department. Please try refreshing the page or contact support if the problem persists.</small><br>
+                        <small>${errorMessage}</small><br>
                         <button class="btn btn-sm btn-outline-danger mt-2" onclick="loadOptionsForRegistration(${departmentId})">
                             <i class="fas fa-refresh me-1"></i>Try Again
                         </button>
@@ -1701,9 +1526,10 @@ if (isset($_SESSION['success_message'])) {
             });
     }
 
-    // Load courses for registration form
+    // Load courses for registration form with caching and error handling
     function loadCoursesForRegistration(departmentId = null) {
         const coursesContainer = document.getElementById('coursesContainer');
+        const cacheKey = `courses_dept_${departmentId}`;
 
         // If no department specified, try to get from form
         if (!departmentId) {
@@ -1722,6 +1548,17 @@ if (isset($_SESSION['success_message'])) {
             return;
         }
 
+        // Check cache first
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+            const parsed = JSON.parse(cachedData);
+            if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
+                availableCourses = parsed.data;
+                renderCoursesForRegistration();
+                return;
+            }
+        }
+
         // Show enhanced loading state with better messaging
         coursesContainer.innerHTML = `
             <div class="text-center py-4">
@@ -1737,31 +1574,61 @@ if (isset($_SESSION['success_message'])) {
             </div>
         `;
 
-        fetch(`api/assign-courses-api.php?action=get_courses&department_id=${departmentId}`)
-            .then(response => response.json())
+        // Add timeout to fetch request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+        fetch(`get-courses.php?department_id=${departmentId}`, {
+            signal: controller.signal,
+            headers: {
+                'Cache-Control': 'no-cache',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+            .then(response => {
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
             .then(data => {
-                if (data.success && data.data) {
-                    availableCourses = data.data;
+                if (data.success && data.courses) {
+                    availableCourses = data.courses;
+                    // Cache the result
+                    sessionStorage.setItem(cacheKey, JSON.stringify({
+                        data: availableCourses,
+                        timestamp: Date.now()
+                    }));
                     renderCoursesForRegistration();
                 } else {
                     coursesContainer.innerHTML = `
                         <div class="alert alert-warning">
-                            <i class="fas fa-exclamation-triangle me-2"></i>
-                            <strong>No Courses Available</strong><br>
-                            ${data.message || 'There are no unassigned courses in this department.'}<br>
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>No Unassigned Courses Available</strong><br>
+                            ${data.message || 'All courses in this department are already assigned to lecturers.'}<br>
                             <small class="text-muted">You can still register the lecturer and assign courses later through the course management system.</small>
                         </div>
                     `;
                 }
             })
             .catch(error => {
+                clearTimeout(timeoutId);
                 console.error('Error loading courses:', error);
+
+                let errorMessage = 'There was an error loading courses for this department.';
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Request timed out. Please check your connection.';
+                } else if (error.message.includes('HTTP')) {
+                    errorMessage = `Server error: ${error.message}`;
+                }
+
                 coursesContainer.innerHTML = `
                     <div class="alert alert-danger">
                         <i class="fas fa-exclamation-triangle me-2"></i>
                         <strong>Failed to Load Courses</strong><br>
-                        <small>There was an error loading courses for this department. Please try refreshing the page or contact support if the problem persists.</small><br>
-                        <button class="btn btn-sm btn-outline-danger mt-2" onclick="loadCoursesForRegistration()">
+                        <small>${errorMessage}</small><br>
+                        <button class="btn btn-sm btn-outline-danger mt-2" onclick="loadCoursesForRegistration(${departmentId})">
                             <i class="fas fa-refresh me-1"></i>Try Again
                         </button>
                     </div>
@@ -1819,77 +1686,98 @@ if (isset($_SESSION['success_message'])) {
     function renderCoursesForRegistration() {
         const coursesContainer = document.getElementById('coursesContainer');
 
-        if (availableCourses.length === 0) {
+        if (!availableCourses || availableCourses.length === 0) {
             coursesContainer.innerHTML = `
                 <div class="alert alert-info text-center">
                     <i class="fas fa-info-circle me-2"></i>
                     <h6>No Unassigned Courses Available</h6>
-                    <p class="mb-0">All courses are already assigned to lecturers.</p>
+                    <p class="mb-0">All courses in this department are already assigned to lecturers.</p>
                     <small class="text-muted">You can assign courses later using the course assignment feature.</small>
                 </div>
             `;
             return;
         }
 
-        // Display courses in table format
+        // Display courses in a simple card format for better mobile experience
         let html = `
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead class="table-dark">
-                        <tr>
-                            <th scope="col" style="width: 50px;">
-                                <input type="checkbox" id="selectAllCourses" onchange="toggleAllCourses(this.checked)">
-                            </th>
-                            <th scope="col">Course Code</th>
-                            <th scope="col">Course Name</th>
-                            <th scope="col">Credits</th>
-                            <th scope="col">Duration (Hours)</th>
-                            <th scope="col">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+            <div class="row g-3">
+                <div class="col-12">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0">
+                            <i class="fas fa-book me-2"></i>Available Courses (${availableCourses.length})
+                        </h6>
+                        <div>
+                            <button type="button" class="btn btn-sm btn-outline-primary me-2" onclick="selectAllCourses()">
+                                <i class="fas fa-check-double me-1"></i>Select All
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearAllCourses()">
+                                <i class="fas fa-times me-1"></i>Clear All
+                            </button>
+                        </div>
+                    </div>
+                </div>
         `;
 
         availableCourses.forEach(course => {
             const isActive = course.status === 'active';
             html += `
-                <tr class="${!isActive ? 'table-secondary opacity-75' : ''}">
-                    <td>
-                        <input class="form-check-input course-checkbox" type="checkbox"
-                               value="${course.id}" id="course_reg_${course.id}"
-                               onchange="updateSelectedCourses()"
-                               ${!isActive ? 'disabled' : ''}>
-                    </td>
-                    <td>
-                        <label class="form-check-label fw-bold" for="course_reg_${course.id}">
-                            ${course.course_code}
-                        </label>
-                    </td>
-                    <td>
-                        <strong>${course.course_name || course.name}</strong>
-                        ${!isActive ? '<small class="text-muted ms-2">(Inactive)</small>' : ''}
-                        ${course.description ? `<br><small class="text-muted">${course.description}</small>` : ''}
-                    </td>
-                    <td>${course.credits || 'N/A'}</td>
-                    <td>${course.duration_hours || 'N/A'}</td>
-                    <td>
-                        <span class="badge bg-${isActive ? 'success' : 'secondary'}">
-                            ${course.status || 'unknown'}
-                        </span>
-                    </td>
-                </tr>
+                <div class="col-md-6">
+                    <div class="card h-100 ${!isActive ? 'opacity-75' : ''}">
+                        <div class="card-body">
+                            <div class="form-check">
+                                <input class="form-check-input course-checkbox" type="checkbox"
+                                       value="${course.id}" id="course_reg_${course.id}"
+                                       onchange="updateSelectedCourses()"
+                                       ${!isActive ? 'disabled' : ''}>
+                                <label class="form-check-label w-100" for="course_reg_${course.id}">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <h6 class="card-title mb-1">${course.course_code}</h6>
+                                            <p class="card-text mb-2">${course.course_name || course.name}</p>
+                                            ${course.description ? `<small class="text-muted">${course.description}</small>` : ''}
+                                        </div>
+                                        <span class="badge bg-${isActive ? 'success' : 'secondary'}">
+                                            ${course.status || 'active'}
+                                        </span>
+                                    </div>
+                                    <div class="mt-2">
+                                        ${course.credits ? `<small class="text-muted me-3"><i class="fas fa-star me-1"></i>${course.credits} credits</small>` : ''}
+                                        ${course.duration_hours ? `<small class="text-muted"><i class="fas fa-clock me-1"></i>${course.duration_hours} hours</small>` : ''}
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             `;
         });
 
         html += `
-                    </tbody>
-                </table>
             </div>
         `;
 
         coursesContainer.innerHTML = html;
         updateSelectedCourses();
     }
+
+    function selectAllCourses() {
+        const checkboxes = document.querySelectorAll('.course-checkbox:not([disabled])');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = true;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedCourses();
+    }
+
+    function clearAllCourses() {
+        const checkboxes = document.querySelectorAll('.course-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+        updateSelectedCourses();
+    }
+
 
     function updateSelectedOptions() {
         const checkboxes = document.querySelectorAll('.option-checkbox:checked');
@@ -2178,6 +2066,7 @@ if (isset($_SESSION['success_message'])) {
             });
         }
 
+
         // Load options on page load
         loadOptionsForRegistration();
 
@@ -2203,14 +2092,75 @@ if (isset($_SESSION['success_message'])) {
         }
 
         // Load courses and options if department is already selected (on page refresh)
-        if (departmentSelect && departmentSelect.value) {
-            loadCoursesForRegistration(departmentSelect.value);
-            loadOptionsForRegistration(departmentSelect.value);
-        } else {
-            // Load options with no department selected initially
-            loadOptionsForRegistration();
-        }
+            if (departmentSelect && departmentSelect.value) {
+                loadCoursesForRegistration(departmentSelect.value);
+                loadOptionsForRegistration(departmentSelect.value);
+            } else {
+                // Load options with no department selected initially
+                loadOptionsForRegistration();
+            }
+    
+            // Add form reset functionality
+            const resetBtn = document.querySelector('button[type="reset"]') || document.createElement('button');
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+    
+                    // Confirm reset
+                    if (confirm('Are you sure you want to reset the form? All entered data will be cleared.')) {
+                        const form = document.getElementById('lecturerRegistrationForm');
+                        if (form) {
+                            form.reset();
+                            form.dataset.submitting = 'false';
+    
+                            // Clear selections
+                            updateSelectedOptions();
+                            updateSelectedCourses();
+    
+                            // Clear validation messages
+                            const feedbackElements = form.querySelectorAll('.validation-message');
+                            feedbackElements.forEach(el => el.textContent = '');
+    
+                            // Remove validation classes
+                            const inputs = form.querySelectorAll('input, select');
+                            inputs.forEach(input => {
+                                input.classList.remove('is-valid', 'is-invalid');
+                            });
+    
+                            // Reset department-dependent content
+                            const coursesContainer = document.getElementById('coursesContainer');
+                            const optionsContainer = document.getElementById('optionsContainer');
+    
+                            if (coursesContainer) {
+                                coursesContainer.innerHTML = `
+                                    <div class="alert alert-info">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        Please select a department first to load available courses.
+                                    </div>
+                                `;
+                            }
+    
+                            if (optionsContainer) {
+                                optionsContainer.innerHTML = `
+                                    <div class="alert alert-info">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        Please select a department first to load available options.
+                                    </div>
+                                `;
+                            }
+    
+                            // Re-enable form
+                            reEnableForm();
+    
+                            showAlert('Form has been reset successfully.', 'info', 3000);
+                        }
+                    }
+                });
+            }
     });
+
+
+
 
     // Helper function to create feedback elements
     function createFeedbackElement(fieldName) {
@@ -2293,20 +2243,6 @@ if (isset($_SESSION['success_message'])) {
         // Enhanced comprehensive field validation with better error messages
         const validationErrors = [];
 
-        // Photo validation (optional but must be valid if provided)
-        const photoInput = document.getElementById('lecturer_photo');
-        if (photoInput && photoInput.files.length > 0) {
-            const file = photoInput.files[0];
-            const maxSize = 2 * 1024 * 1024; // 2MB
-            const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-
-            if (file.size > maxSize) {
-                validationErrors.push('Photo file size must be less than 2MB');
-            } else if (!allowedTypes.includes(file.type)) {
-                validationErrors.push('Photo must be a valid image file (JPG, PNG, or GIF)');
-            }
-        }
-
         // Required field validation with detailed feedback
         if (!firstName.trim()) {
             validationErrors.push('First name is required and cannot be empty');
@@ -2370,120 +2306,46 @@ if (isset($_SESSION['success_message'])) {
         // Show validation errors with improved formatting
         if (validationErrors.length > 0) {
             const errorMessage = '<strong>Please correct the following errors:</strong><br>' +
-                               '<ul class="mb-0 mt-2" style="text-align: left;">' +
-                               validationErrors.map(error => `<li>${error}</li>`).join('') +
-                               '</ul>';
-
-            const placeholder = document.getElementById('photoPlaceholder');
-
-            if (input.files && input.files[0]) {
-                const file = input.files[0];
-
-                // Validate file size (2MB max)
-                if (file.size > 2 * 1024 * 1024) {
-                    showAlert('File size must be less than 2MB', 'error');
-                    clearPhoto();
-                    return;
-                }
-
-                // Validate file type
-                const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-                if (!validTypes.includes(file.type)) {
-                    showAlert('Please select a valid image file (JPG, PNG, or GIF)', 'error');
-                    clearPhoto();
-                    return;
-                }
-
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    preview.src = e.target.result;
-                    preview.style.display = 'block';
-                    placeholder.style.display = 'none';
-                };
-                reader.readAsDataURL(file);
-            } else {
-                clearPhoto();
-            }
-            checkbox.dispatchEvent(new Event('change'));
-        });
-        updateSelectedOptions();
-        showAlert('All available options selected', 'success', 2000);
-    }
-
-    function clearAllOptions() {
-        const checkboxes = document.querySelectorAll('.option-checkbox');
-        checkboxes.forEach(checkbox => {
-            checkbox.checked = false;
-            checkbox.dispatchEvent(new Event('change'));
-        });
-        updateSelectedOptions();
-        showAlert('All options cleared', 'info', 2000);
-    }
-
-    function selectAllCourses() {
-        const checkboxes = document.querySelectorAll('.course-checkbox');
-        checkboxes.forEach(checkbox => {
-            checkbox.checked = true;
-            checkbox.dispatchEvent(new Event('change'));
-        });
-        updateSelectedCourses();
-        showAlert('All available courses selected', 'success', 2000);
-    }
-
-    function clearAllCourses() {
-        const checkboxes = document.querySelectorAll('.course-checkbox');
-        checkboxes.forEach(checkbox => {
-            checkbox.checked = false;
-            checkbox.dispatchEvent(new Event('change'));
-        });
-        updateSelectedCourses();
-        showAlert('All courses cleared', 'info', 2000);
-    }
-
-    function resetForm() {
-        if (confirm('Are you sure you want to reset the form? All entered data will be lost.')) {
-            document.getElementById('lecturerRegistrationForm').reset();
-            clearPhoto();
-            clearAllOptions();
-            clearAllCourses();
-            
-            // Reset department-dependent sections
-            const optionsContainer = document.getElementById('optionsContainer');
-            const coursesContainer = document.getElementById('coursesContainer');
-            
-            optionsContainer.innerHTML = `
-                <div class="alert alert-info border-0">
-                    <i class="fas fa-info-circle me-2"></i>
-                    <strong>Please select a department first</strong><br>
-                    <small>Choose a department above to view available options</small>
-                </div>
-            `;
-            
-            coursesContainer.innerHTML = `
-                <div class="alert alert-info border-0">
-                    <i class="fas fa-book-open me-2"></i>
-                    <strong>Select a department first</strong><br>
-                    <small>Choose a department above to view available courses</small>
-                </div>
-            `;
-            
-            showAlert('Form has been reset', 'info', 2000);
+                                '<ul class="mb-0 mt-2" style="text-align: left;">' +
+                                validationErrors.map(error => `<li>${error}</li>`).join('') +
+                                '</ul>';
+            showAlert(errorMessage, 'danger', 8000); // Show longer for detailed errors
+            e.preventDefault();
+            return false;
         }
-    }
 
-    // Enhanced alert function with better styling
+        // Show loading state and disable form
+        const addBtn = document.getElementById('addBtn');
+        const form = this;
+
+        if (addBtn) {
+            addBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Registering Lecturer...';
+            addBtn.disabled = true;
+        }
+
+        // Disable all form inputs
+        const inputs = form.querySelectorAll('input, select, button');
+        inputs.forEach(input => input.disabled = true);
+
+        // Mark form as submitting to prevent double submission
+        this.dataset.submitting = 'true';
+
+        return true;
+    });
+
+    // Enhanced alert function with better styling and positioning
     function showAlert(message, type = 'info', duration = 5000) {
         // Remove existing alerts
         const existingAlerts = document.querySelectorAll('.alert.position-fixed');
         existingAlerts.forEach(alert => alert.remove());
 
         const icon = type === 'success' ? 'check-circle' :
-                     type === 'error' || type === 'danger' ? 'exclamation-triangle' :
-                     type === 'warning' ? 'exclamation-circle' : 'info-circle';
+                      type === 'error' || type === 'danger' ? 'exclamation-triangle' :
+                      type === 'warning' ? 'exclamation-circle' : 'info-circle';
 
         const alertDiv = document.createElement('div');
         alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 450px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border: none; border-radius: 1rem;';
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 500px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); border: none; border-radius: 1rem;';
         alertDiv.innerHTML = `
             <i class="fas fa-${icon} me-2"></i>
             <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
@@ -2508,160 +2370,28 @@ if (isset($_SESSION['success_message'])) {
         }
     }
 
-    // Enhanced photo preview functionality with drag and drop
-    function previewPhoto(input) {
-        const preview = document.getElementById('photoPreview');
-        const placeholder = document.getElementById('photoPlaceholder');
-        const photoInfo = document.getElementById('photoInfo');
-        const photoDetails = document.getElementById('photoDetails');
-        const clearBtn = document.getElementById('clearPhotoBtn');
-        const photoOverlay = document.getElementById('photoOverlay');
+    // Function to re-enable form after submission
+    function reEnableForm() {
+        const form = document.getElementById('lecturerRegistrationForm');
+        const addBtn = document.getElementById('addBtn');
 
-        if (input.files && input.files[0]) {
-            const file = input.files[0];
+        if (form) {
+            form.dataset.submitting = 'false';
+            const inputs = form.querySelectorAll('input, select, button');
+            inputs.forEach(input => input.disabled = false);
+        }
 
-            // Enhanced validation
-            const maxSize = 2 * 1024 * 1024; // 2MB
-            const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-
-            if (file.size > maxSize) {
-                showAlert(`File size too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum allowed: 2MB`, 'error');
-                clearPhoto();
-                return;
-            }
-
-            if (!validTypes.includes(file.type)) {
-                showAlert('Please select a valid image file (JPG, PNG, GIF, or WebP)', 'error');
-                clearPhoto();
-                return;
-            }
-
-            // Show loading state
-            placeholder.innerHTML = `
-                <div class="spinner-border text-primary mb-2" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                <p class="text-muted mb-0">Processing image...</p>
-            `;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                // Create image to get dimensions
-                const img = new Image();
-                img.onload = function() {
-                    preview.src = e.target.result;
-                    preview.style.display = 'block';
-                    placeholder.style.display = 'none';
-                    if (photoOverlay) photoOverlay.style.display = 'flex';
-                    if (clearBtn) clearBtn.style.display = 'inline-block';
-
-                    // Show photo info
-                    if (photoDetails && photoInfo) {
-                        const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
-                        photoDetails.textContent = `${file.name} • ${img.width}×${img.height}px • ${fileSizeMB}MB`;
-                        photoInfo.style.display = 'block';
-                    }
-
-                    showAlert('Photo uploaded successfully!', 'success', 3000);
-                };
-                img.src = e.target.result;
-            };
-
-            reader.onerror = function() {
-                showAlert('Error reading file. Please try again.', 'error');
-                clearPhoto();
-            };
-
-            reader.readAsDataURL(file);
-        } else {
-            clearPhoto();
+        if (addBtn) {
+            addBtn.innerHTML = '<i class="fas fa-plus me-2"></i>Register Lecturer';
+            addBtn.disabled = false;
         }
     }
 
-    function clearPhoto() {
-        const input = document.getElementById('lecturer_photo');
-        const preview = document.getElementById('photoPreview');
-        const placeholder = document.getElementById('photoPlaceholder');
-        const photoInfo = document.getElementById('photoInfo');
-        const clearBtn = document.getElementById('clearPhotoBtn');
-        const photoOverlay = document.getElementById('photoOverlay');
-
-        if (input) input.value = '';
-        if (preview) {
-            preview.src = '';
-            preview.style.display = 'none';
-        }
-        if (placeholder) placeholder.style.display = 'flex';
-        if (photoInfo) photoInfo.style.display = 'none';
-        if (clearBtn) clearBtn.style.display = 'none';
-        if (photoOverlay) photoOverlay.style.display = 'none';
-
-        // Reset placeholder content
-        if (placeholder) {
-            placeholder.innerHTML = `
-                <i class="fas fa-user-circle fa-4x text-muted mb-3"></i>
-                <p class="text-muted mb-2 fw-bold">No photo selected</p>
-                <small class="text-muted">Click "Choose Photo" to upload</small>
-            `;
-        }
-
-        showAlert('Photo removed', 'info', 2000);
-    }
-
-    // Initialize drag and drop functionality when page loads
-    document.addEventListener('DOMContentLoaded', function() {
-        const photoContainer = document.querySelector('.photo-upload-container');
-        const fileInput = document.getElementById('lecturer_photo');
-        const photoPlaceholder = document.getElementById('photoPlaceholder');
-
-        // Make placeholder clickable
-        if (photoPlaceholder && fileInput) {
-            photoPlaceholder.addEventListener('click', function() {
-                fileInput.click();
-            });
-        }
-
-        if (photoContainer && fileInput) {
-            // Prevent default drag behaviors
-            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-                photoContainer.addEventListener(eventName, preventDefaults, false);
-                document.body.addEventListener(eventName, preventDefaults, false);
-            });
-
-            // Highlight drop area when item is dragged over it
-            ['dragenter', 'dragover'].forEach(eventName => {
-                photoContainer.addEventListener(eventName, highlight, false);
-            });
-
-            ['dragleave', 'drop'].forEach(eventName => {
-                photoContainer.addEventListener(eventName, unhighlight, false);
-            });
-
-            // Handle dropped files
-            photoContainer.addEventListener('drop', handleDrop, false);
-
-            function preventDefaults(e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-
-            function highlight(e) {
-                photoContainer.classList.add('drag-over');
-            }
-
-            function unhighlight(e) {
-                photoContainer.classList.remove('drag-over');
-            }
-
-            function handleDrop(e) {
-                const dt = e.dataTransfer;
-                const files = dt.files;
-
-                if (files.length > 0) {
-                    fileInput.files = files;
-                    previewPhoto(fileInput);
-                }
-            }
+    // Handle page visibility change to re-enable form if needed
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            // Re-enable form when user returns to page
+            setTimeout(reEnableForm, 1000);
         }
     });
     </script>

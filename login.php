@@ -199,11 +199,20 @@ function loadRoleSpecificData($pdo, $user, $selectedRole = null) {
                     // Set personal info
                     setPersonalInfo($data);
                     
-                    // Handle HOD users who login as lecturers
-                    if ($user['role'] === 'hod' && $selectedRole === 'lecturer') {
-                        return "lecturer-dashboard.php";
+                    // Enhanced redirect logic for HOD and lecturer roles
+                    if ($user['role'] === 'hod') {
+                        // HOD users can access both dashboards based on selected role
+                        if ($selectedRole === 'lecturer') {
+                            error_log("HOD user {$user['username']} accessing lecturer dashboard");
+                            return "lecturer-dashboard.php";
+                        } else {
+                            error_log("HOD user {$user['username']} accessing HOD dashboard");
+                            return "hod-dashboard.php";
+                        }
                     } else {
-                        return ($user['role'] === 'hod') ? "hod-dashboard.php" : "lecturer-dashboard.php";
+                        // Regular lecturers only access lecturer dashboard
+                        error_log("Lecturer user {$user['username']} accessing lecturer dashboard");
+                        return "lecturer-dashboard.php";
                     }
                 }
                 break;
@@ -355,13 +364,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // Log successful authentication
                         error_log("Successful login: User {$user['username']} ({$user['role']}) from IP {$_SERVER['REMOTE_ADDR']}");
 
-                        // Set session variables
+                        // Set session variables with enhanced role management
                         $_SESSION['user_id'] = $user['id'];
                         $_SESSION['username'] = $user['username'];
                         $_SESSION['email'] = $user['email'];
-                        // For HOD users logging in as lecturers, set session role to lecturer
-                        $_SESSION['role'] = ($user['role'] === 'hod' && $role === 'lecturer') ? 'lecturer' : $user['role'];
-                        $_SESSION['actual_role'] = $user['role']; // Store the actual database role
+                        $_SESSION['actual_role'] = $user['role']; // Always store the actual database role
+                        
+                        // Enhanced session role management for HOD dual access
+                        if ($user['role'] === 'hod' && $role === 'lecturer') {
+                            $_SESSION['role'] = 'lecturer'; // HOD accessing lecturer functionality
+                            $_SESSION['access_mode'] = 'lecturer_mode'; // Track access mode
+                            error_log("HOD user {$user['username']} logging in as lecturer");
+                        } else {
+                            $_SESSION['role'] = $user['role']; // Standard role assignment
+                            $_SESSION['access_mode'] = 'standard_mode';
+                            error_log("User {$user['username']} logging in as {$user['role']}");
+                        }
+                        
                         $_SESSION['login_time'] = time();
                         $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'] ?? '';
                         $_SESSION['ip_address'] = $_SERVER['REMOTE_ADDR'] ?? '';
@@ -792,6 +811,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="invalid-feedback">
           Please select your role.
         </div>
+        <small class="form-text text-muted mt-1">
+          <i class="fas fa-info-circle me-1"></i>
+          <strong>HOD users:</strong> Select "Lecturer" to access lecturer features, or "Head of Department" for HOD dashboard.
+        </small>
       </div>
 
       <div class="mb-3">
