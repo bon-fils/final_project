@@ -729,14 +729,39 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
                     <div class="biometric-icon">
                         <i class="fas fa-fingerprint"></i>
                     </div>
-                    <div class="biometric-title">Fingerprint Scanner Ready</div>
+                    <div class="biometric-title">Automatic Fingerprint Scanning</div>
                     <div class="biometric-text">
-                        Fingerprint scanner is connected and ready. Click the button below to scan fingerprints.
+                        Scanner automatically detects fingerprints. Students place finger on sensor to mark attendance.
                     </div>
 
-                    <button class="btn btn-primary btn-lg" onclick="scanFingerprint()">
-                        <i class="fas fa-fingerprint me-2"></i>Scan Fingerprint
+                    <!-- Scanner Status Display -->
+                    <div class="mb-3 p-3 bg-light rounded">
+                        <div class="d-flex align-items-center justify-content-center">
+                            <div class="fingerprint-status" id="fingerprint-status">
+                                <i class="fas fa-spinner fa-spin me-1"></i>Initializing scanner...
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Scanner Info -->
+                    <div class="alert alert-info mb-3" role="alert">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Instructions:</strong> Students should place their registered finger firmly on the sensor.
+                        Attendance will be marked automatically.
+                    </div>
+
+                    <!-- Control Button -->
+                    <button class="btn btn-primary btn-lg" id="scanFingerprintBtn" disabled>
+                        <i class="fas fa-fingerprint me-2"></i>Initializing...
                     </button>
+
+                    <!-- ESP32 Connection Info -->
+                    <div class="mt-3">
+                        <small class="text-muted">
+                            <i class="fas fa-network-wired me-1"></i>
+                            Scanner IP: <code><?php echo ESP32_IP; ?>:<?php echo ESP32_PORT; ?></code>
+                        </small>
+                    </div>
                 </div>
             </div>
         </div>

@@ -135,8 +135,7 @@ try {
         JOIN courses c ON ats.course_id = c.id
         JOIN options o ON ats.option_id = o.id
         JOIN departments d ON ats.department_id = d.id
-        JOIN lecturers l ON ats.lecturer_id = l.id
-        JOIN users u ON l.user_id = u.id
+        JOIN users u ON ats.lecturer_id = u.id
         WHERE ats.id = ?
     ");
     $session_stmt->execute([$session_id]);

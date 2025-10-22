@@ -158,6 +158,8 @@ const API = {
 
 // Form handlers
 const FormHandlers = {
+    isCreatingSession: false, // Flag to prevent double submission
+    
     initialize: function() {
         console.log('🚀 Initializing form handlers...');
         this.setupEventListeners();
@@ -261,6 +263,31 @@ const FormHandlers = {
         );
     },
 
+    async loadExistingSessionById(sessionId) {
+        console.log('🔍 Fetching existing session data for ID:', sessionId);
+        
+        try {
+            // Fetch full session data from server
+            const response = await fetch(`api/get-session-details.php?session_id=${sessionId}`);
+            const result = await response.json();
+            
+            if (result.status === 'success' && result.session) {
+                console.log('✅ Session data loaded:', result.session);
+                this.loadExistingSession(result.session);
+            } else {
+                throw new Error(result.message || 'Failed to load session details');
+            }
+        } catch (error) {
+            console.error('❌ Failed to load existing session:', error);
+            Utils.showNotification('❌ Failed to load existing session. Please refresh the page.', 'error');
+            
+            // Fallback: just reload the page
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        }
+    },
+
     async handleDepartmentChange(departmentId) {
         console.log('🏫 Department changed:', departmentId);
         AttendanceState.selectedDepartment = departmentId;
@@ -349,6 +376,12 @@ const FormHandlers = {
     async handleStartSession(e) {
         e.preventDefault();
 
+        // Prevent double submission
+        if (this.isCreatingSession) {
+            console.log('⚠️ Session creation already in progress, ignoring duplicate request');
+            return;
+        }
+
         if (!Utils.validateForm()) {
             Utils.showNotification('❌ Please complete all form fields', 'error');
             return;
@@ -366,18 +399,24 @@ const FormHandlers = {
         const startBtn = document.getElementById('start-session');
         Utils.showLoading(startBtn, 'Starting Session...');
 
+        // Set flag to prevent double submission
+        this.isCreatingSession = true;
+
         try {
+            console.log('📤 Sending session creation request with data:', sessionData);
             const response = await API.startSession(sessionData);
             console.log('📡 Session creation response:', response);
 
             if (response.status === 'success') {
+                console.log('✅ NEW SESSION CREATED SUCCESSFULLY - ID:', response.session.id);
                 AttendanceState.setSession(response.session);
                 Utils.showNotification('✅ Session started successfully!', 'success');
                 this.showActiveSession(response.session);
             } else {
                 // Check if there's an existing session
                 if (response.existing_session_id) {
-                    console.warn('⚠️ Active session already exists:', response.existing_session_id);
+                    console.warn('⚠️ EXISTING SESSION DETECTED - ID:', response.existing_session_id);
+                    console.warn('This means there was ALREADY an active session before we tried to create new one');
                     
                     const endExisting = confirm(
                         '⚠️ You already have an active session (ID: ' + response.existing_session_id + ')\n\n' +
@@ -391,7 +430,9 @@ const FormHandlers = {
                         await this.endExistingAndRetry(response.existing_session_id, sessionData);
                         return;
                     } else {
-                        Utils.showNotification('⚠️ Please end your active session before starting a new one', 'warning');
+                        // User wants to keep existing session - load it
+                        Utils.showNotification('⚠️ Loading existing active session...', 'info');
+                        await this.loadExistingSessionById(response.existing_session_id);
                         return;
                     }
                 }
@@ -426,6 +467,8 @@ const FormHandlers = {
             alert(displayMessage + '\n\nCheck the browser console (F12) for technical details.');
         } finally {
             Utils.hideLoading(startBtn, '<i class="fas fa-play me-2"></i>Start Attendance Session');
+            // Reset flag to allow future submissions
+            this.isCreatingSession = false;
         }
     },
 
@@ -782,52 +825,231 @@ const FaceRecognitionSystem = {
 // Fingerprint Scanner System
 const FingerprintSystem = {
     isScanning: false,
+    autoScanInterval: null,
+    scanInProgress: false,
+    lastScanTime: 0,
+    scanDelay: 2000, // 2 seconds between scans
 
     async initializeScanner() {
         console.log('👆 Initializing fingerprint scanner...');
-        Utils.showNotification('👆 Fingerprint scanner ready. Click to scan.', 'info');
+        
+        // Show scanner status
+        const statusEl = document.getElementById('fingerprint-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<i class="fas fa-circle text-success me-1"></i>Scanner Ready';
+        }
+        
+        // Start automatic scanning
+        this.startAutoScan();
+        
+        Utils.showNotification('👆 Fingerprint scanner active! Place finger on sensor.', 'info');
+    },
+
+    startAutoScan() {
+        console.log('🔄 Starting automatic fingerprint scanning...');
+        
+        // Clear any existing interval
+        this.stopAutoScan();
+        
+        // Update UI to show scanning mode
+        const scanBtn = document.getElementById('scanFingerprintBtn');
+        if (scanBtn) {
+            scanBtn.innerHTML = '<i class="fas fa-fingerprint fa-pulse me-2"></i>Scanning Active...';
+            scanBtn.disabled = true;
+            scanBtn.classList.add('btn-success');
+            scanBtn.classList.remove('btn-primary');
+        }
+        
+        // Start continuous scanning
+        this.autoScanInterval = setInterval(() => {
+            this.scanAndVerify();
+        }, this.scanDelay);
+        
+        // Do first scan immediately
+        setTimeout(() => {
+            this.scanAndVerify();
+        }, 500);
+    },
+
+    stopAutoScan() {
+        if (this.autoScanInterval) {
+            clearInterval(this.autoScanInterval);
+            this.autoScanInterval = null;
+            console.log('🛑 Automatic scanning stopped');
+        }
     },
 
     async scanAndVerify() {
-        if (this.isScanning) return;
+        // Prevent overlapping scans
+        if (this.scanInProgress) {
+            console.log('⏳ Scan already in progress, skipping...');
+            return;
+        }
         
-        this.isScanning = true;
+        // Check session
+        if (!window.currentSession || !window.currentSession.id) {
+            console.log('⚠️ No active session, stopping auto-scan');
+            this.stopAutoScan();
+            return;
+        }
+        
+        this.scanInProgress = true;
+        const scanStartTime = Date.now();
         
         try {
-            console.log('👆 Scanning fingerprint...');
+            console.log('👆 Requesting fingerprint scan from ESP32...');
             
-            // Send request to fingerprint scanner API
-            const response = await fetch('api/scan-fingerprint.php', {
+            // Update status
+            this.updateScanStatus('scanning', 'Scanning...');
+            
+            // Send request to ESP32 scanner API
+            const response = await fetch('api/esp32-scan-fingerprint.php', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    session_id: window.currentSession ? window.currentSession.id : null
+                    session_id: window.currentSession.id
                 })
             });
             
             const result = await response.json();
             console.log('📡 Scan result:', result);
             
-            if (result.status === 'success' && result.student) {
+            // Handle different statuses
+            if (result.status === 'success') {
+                // Success - attendance marked
+                this.updateScanStatus('success', `✅ ${result.student.name}`);
+                
                 Utils.showNotification(
-                    `✅ Attendance marked for ${result.student.name} (${result.student.reg_no})`,
+                    `✅ Attendance marked!\n${result.student.name} (${result.student.reg_no})\nConfidence: ${result.confidence}%`,
                     'success'
                 );
+                
+                // Play success sound (optional)
+                this.playSuccessSound();
+                
+                // Update statistics
                 FaceRecognitionSystem.updateAttendanceStats();
-            } else {
+                
+                // Show success animation
+                this.showSuccessAnimation(result.student);
+                
+            } else if (result.status === 'scan_failed' || result.status === 'not_recognized') {
+                // No finger detected or not recognized - just waiting
+                this.updateScanStatus('waiting', 'Place finger on sensor...');
+                console.log('⏳ Waiting for fingerprint...');
+                
+            } else if (result.status === 'already_marked') {
+                // Already marked - show warning briefly
+                this.updateScanStatus('warning', `⚠️ Already marked: ${result.student.name}`);
+                
                 Utils.showNotification(
-                    result.message || '❌ Fingerprint not recognized.',
+                    `⚠️ ${result.student.name} already marked at ${result.details}`,
                     'warning'
                 );
+                
+                setTimeout(() => {
+                    this.updateScanStatus('waiting', 'Place finger on sensor...');
+                }, 3000);
+                
+            } else if (result.status === 'wrong_class') {
+                // Wrong class
+                this.updateScanStatus('error', result.message);
+                
+                Utils.showNotification(
+                    `❌ ${result.message}\n${result.details}\n\n${result.guidance}`,
+                    'error'
+                );
+                
+                setTimeout(() => {
+                    this.updateScanStatus('waiting', 'Place finger on sensor...');
+                }, 5000);
+                
+            } else {
+                // Other errors
+                this.updateScanStatus('error', result.message);
+                
+                if (result.guidance) {
+                    console.error('❌ Scanner error:', result.message);
+                    console.error('Guidance:', result.guidance);
+                }
+                
+                // Show error briefly, then back to waiting
+                setTimeout(() => {
+                    this.updateScanStatus('waiting', 'Place finger on sensor...');
+                }, 3000);
             }
             
         } catch (error) {
             console.error('❌ Fingerprint scan error:', error);
-            Utils.showNotification('❌ Failed to scan fingerprint.', 'error');
+            this.updateScanStatus('error', 'Connection error');
+            
+            // Check if scanner is offline
+            if (error.message && error.message.includes('Failed to fetch')) {
+                Utils.showNotification(
+                    '❌ Cannot connect to scanner.\nPlease check:\n1. ESP32 is powered on\n2. Connected to WiFi\n3. Network connection',
+                    'error'
+                );
+            }
+            
+            // Back to waiting after error
+            setTimeout(() => {
+                this.updateScanStatus('waiting', 'Place finger on sensor...');
+            }, 3000);
+            
         } finally {
-            this.isScanning = false;
+            this.scanInProgress = false;
+            this.lastScanTime = Date.now();
+        }
+    },
+
+    updateScanStatus(type, message) {
+        const statusEl = document.getElementById('fingerprint-status');
+        if (!statusEl) return;
+        
+        const icons = {
+            scanning: '<i class="fas fa-spinner fa-spin text-primary me-1"></i>',
+            waiting: '<i class="fas fa-hand-point-up text-info me-1"></i>',
+            success: '<i class="fas fa-check-circle text-success me-1"></i>',
+            warning: '<i class="fas fa-exclamation-triangle text-warning me-1"></i>',
+            error: '<i class="fas fa-times-circle text-danger me-1"></i>'
+        };
+        
+        statusEl.innerHTML = (icons[type] || '') + message;
+    },
+
+    showSuccessAnimation(student) {
+        // Create success flash
+        const container = document.querySelector('.biometric-card');
+        if (container) {
+            container.style.backgroundColor = '#d4edda';
+            setTimeout(() => {
+                container.style.backgroundColor = '';
+            }, 1000);
+        }
+    },
+
+    playSuccessSound() {
+        // Optional: Play success beep
+        try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.2);
+        } catch (e) {
+            // Audio not supported or blocked
         }
     }
 };
@@ -859,6 +1081,9 @@ async function startNewSession() {
     try {
         // Stop camera if active
         FaceRecognitionSystem.stopCamera();
+        
+        // Stop fingerprint scanner if active
+        FingerprintSystem.stopAutoScan();
         
         // End the current session
         const response = await fetch('api/end-session.php', {
@@ -905,6 +1130,9 @@ async function endSession() {
     try {
         // Stop camera if active
         FaceRecognitionSystem.stopCamera();
+        
+        // Stop fingerprint scanner if active
+        FingerprintSystem.stopAutoScan();
         
         // Call API to end session
         const response = await fetch('api/end-session.php', {
