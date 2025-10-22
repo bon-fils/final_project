@@ -506,6 +506,22 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
         .fade-in {
             animation: fadeIn 0.5s ease-out;
         }
+        
+        /* Notification Toast Animation */
+        @keyframes slideInRight {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        #notification-container .alert {
+            animation: slideInRight 0.3s ease-out;
+        }
     </style>
 </head>
 

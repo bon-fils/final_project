@@ -173,10 +173,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 } else {
                     // Record new attendance
                     $stmt = $pdo->prepare("
-                        INSERT INTO attendance_records (session_id, student_id, status, method, recorded_at, confidence)
-                        VALUES (?, ?, 'present', 'face_recognition', NOW(), ?)
+                        INSERT INTO attendance_records (session_id, student_id, status, recorded_at)
+                        VALUES (?, ?, 'present', NOW())
                     ");
-                    $stmt->execute([$session_id, $student_id, $result['confidence'] ?? 0]);
+                    $stmt->execute([$session_id, $student_id]);
 
                     echo json_encode([
                         'status' => 'success',

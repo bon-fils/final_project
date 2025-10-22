@@ -43,9 +43,75 @@ const AttendanceState = {
 
 // Utility functions
 const Utils = {
-    showNotification: function(message, type = 'info') {
+    showNotification: function(message, type = 'info', duration = 3000) {
         console.log(`${type.toUpperCase()}: ${message}`);
-        // You can add actual notification UI here
+        
+        // Create notification container if it doesn't exist
+        let container = document.getElementById('notification-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'notification-container';
+            container.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 9999;
+                max-width: 400px;
+            `;
+            document.body.appendChild(container);
+        }
+        
+        // Create notification element
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${this.getBootstrapType(type)} alert-dismissible fade show`;
+        notification.style.cssText = `
+            margin-bottom: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            animation: slideInRight 0.3s ease-out;
+        `;
+        
+        // Get icon based on type
+        const icon = this.getNotificationIcon(type);
+        
+        // Set notification content
+        notification.innerHTML = `
+            <i class="fas ${icon} me-2"></i>
+            <span style="white-space: pre-line;">${message}</span>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        // Add to container
+        container.appendChild(notification);
+        
+        // Auto-remove after duration
+        setTimeout(() => {
+            notification.classList.remove('show');
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, duration);
+    },
+    
+    getBootstrapType: function(type) {
+        const typeMap = {
+            'success': 'success',
+            'error': 'danger',
+            'warning': 'warning',
+            'info': 'info'
+        };
+        return typeMap[type] || 'info';
+    },
+    
+    getNotificationIcon: function(type) {
+        const iconMap = {
+            'success': 'fa-check-circle',
+            'error': 'fa-exclamation-circle',
+            'warning': 'fa-exclamation-triangle',
+            'info': 'fa-info-circle'
+        };
+        return iconMap[type] || 'fa-info-circle';
     },
 
     showLoading: function(element, text = 'Loading...') {
@@ -696,6 +762,9 @@ const FaceRecognitionSystem = {
     video: null,
     canvas: null,
     isCapturing: false,
+    autoScanInterval: null,
+    lastScanTime: 0,
+    scanCooldown: 3000, // 3 seconds between scans
 
     async initializeCamera() {
         console.log('📷 Initializing camera for face recognition...');
@@ -721,17 +790,23 @@ const FaceRecognitionSystem = {
             this.video.style.display = 'block';
             placeholder.style.display = 'none';
             
-            // Enable mark attendance button
+            // Hide manual button (auto-scan will handle it)
             if (markBtn) {
-                markBtn.disabled = false;
+                markBtn.style.display = 'none';
             }
             
             if (statusEl) {
-                statusEl.innerHTML = '<i class="fas fa-circle text-success me-1"></i>Camera Active';
+                statusEl.innerHTML = '<i class="fas fa-circle text-success me-1"></i>Camera Active - Auto-scanning...';
             }
             
             console.log('✅ Camera initialized successfully');
-            Utils.showNotification('✅ Camera is ready! You can now mark attendance.', 'success');
+            Utils.showNotification('✅ Camera is ready! Auto-scanning for faces...', 'success');
+            
+            // Start automatic face detection after video is ready
+            this.video.addEventListener('loadeddata', () => {
+                console.log('📹 Video stream ready, starting auto-scan...');
+                this.startAutoScan();
+            });
             
         } catch (error) {
             console.error('❌ Camera access denied:', error);
@@ -746,6 +821,47 @@ const FaceRecognitionSystem = {
             
             Utils.showNotification('❌ Camera access denied. Please allow camera permissions.', 'error');
         }
+    },
+    
+    startAutoScan() {
+        console.log('🔄 Starting automatic face detection...');
+        
+        // Clear any existing interval
+        if (this.autoScanInterval) {
+            clearInterval(this.autoScanInterval);
+        }
+        
+        // Scan every 2 seconds
+        this.autoScanInterval = setInterval(() => {
+            this.autoDetectAndRecognize();
+        }, 2000);
+        
+        // Also do first scan immediately
+        setTimeout(() => this.autoDetectAndRecognize(), 500);
+    },
+    
+    stopAutoScan() {
+        if (this.autoScanInterval) {
+            clearInterval(this.autoScanInterval);
+            this.autoScanInterval = null;
+            console.log('⏸️ Auto face detection stopped');
+        }
+    },
+    
+    async autoDetectAndRecognize() {
+        // Skip if already capturing or in cooldown
+        const now = Date.now();
+        if (this.isCapturing || (now - this.lastScanTime) < this.scanCooldown) {
+            return;
+        }
+        
+        // Skip if video not ready
+        if (!this.video || !this.video.videoWidth || !this.video.videoHeight) {
+            return;
+        }
+        
+        console.log('👁️ Auto-detecting face...');
+        await this.captureAndRecognize();
     },
 
     async captureAndRecognize() {
@@ -792,30 +908,71 @@ const FaceRecognitionSystem = {
             const result = await response.json();
             console.log('📡 Recognition result:', result);
             
+            // Update last scan time
+            this.lastScanTime = Date.now();
+            
             if (result.status === 'success' && result.student) {
+                console.log('✅ SUCCESS: Face recognized!', result.student.name);
+                
                 Utils.showNotification(
-                    `✅ Attendance marked for ${result.student.name} (${result.student.reg_no})`,
+                    `✅ Attendance marked!\n${result.student.name} (${result.student.reg_no})\nConfidence: ${result.confidence || 'N/A'}%`,
                     'success'
                 );
                 
                 // Update attendance count
                 this.updateAttendanceStats();
+                
+                // Play success sound
+                FingerprintSystem.playSuccessSound();
+                
+                // Show success animation
+                this.showSuccessAnimation(result.student);
+                
+            } else if (result.status === 'already_marked') {
+                console.log('⚠️ Already marked:', result.message);
+                
+                // Show notification with student info if available
+                let message = `⚠️ ${result.message}`;
+                if (result.student && result.student.name) {
+                    message += `\n${result.student.name} (${result.student.reg_no})`;
+                }
+                if (result.details) {
+                    message += `\n${result.details}`;
+                }
+                
+                Utils.showNotification(message, 'warning', 4000);
+                
+            } else if (result.status === 'not_recognized') {
+                console.log('⏳ No face detected or not recognized');
+                // Silent - just keep scanning
+            } else if (result.status === 'error') {
+                console.log('⚠️ Recognition error:', result.message);
+                // Silent for auto-scan - don't spam warnings
             } else {
-                Utils.showNotification(
-                    result.message || '❌ Face not recognized. Please try again.',
-                    'warning'
-                );
+                console.log('⚠️ Recognition failed:', result.message);
+                // Silent for auto-scan - don't spam warnings
             }
             
         } catch (error) {
             console.error('❌ Face recognition error:', error);
-            Utils.showNotification('❌ Failed to process image. Please try again.', 'error');
+            // Silent for auto-scan errors
         } finally {
             this.isCapturing = false;
             if (markBtn) {
                 markBtn.disabled = false;
                 markBtn.innerHTML = '<i class="fas fa-user-check me-2"></i>Mark Attendance';
             }
+        }
+    },
+    
+    showSuccessAnimation(student) {
+        // Flash green on video container
+        const videoContainer = document.querySelector('.card-body');
+        if (videoContainer) {
+            videoContainer.style.backgroundColor = '#d4edda';
+            setTimeout(() => {
+                videoContainer.style.backgroundColor = '';
+            }, 1000);
         }
     },
 
@@ -836,10 +993,19 @@ const FaceRecognitionSystem = {
     },
 
     stopCamera() {
+        // Stop auto-scanning
+        this.stopAutoScan();
+        
+        // Stop camera stream
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
             console.log('📷 Camera stopped');
+        }
+        
+        // Reset video element
+        if (this.video) {
+            this.video.srcObject = null;
         }
     }
 };

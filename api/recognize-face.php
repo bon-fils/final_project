@@ -110,10 +110,12 @@ try {
         ");
         $check_stmt->execute([$session_id, $recognizedStudent['id']]);
         
-        if ($check_stmt->fetch()) {
+        $existing = $check_stmt->fetch();
+        if ($existing) {
             echo json_encode([
-                "status" => "error",
-                "message" => "Attendance already marked for this student",
+                "status" => "already_marked",
+                "message" => "Attendance already recorded",
+                "details" => "This student's attendance is already marked for this session",
                 "student" => [
                     "name" => $recognizedStudent['name'],
                     "reg_no" => $recognizedStudent['reg_no']
@@ -125,13 +127,12 @@ try {
         // Mark attendance
         $insert_stmt = $pdo->prepare("
             INSERT INTO attendance_records 
-            (session_id, student_id, status, recorded_at, verification_method, biometric_data)
-            VALUES (?, ?, 'present', NOW(), 'face_recognition', ?)
+            (session_id, student_id, status, recorded_at)
+            VALUES (?, ?, 'present', NOW())
         ");
         $insert_stmt->execute([
             $session_id,
-            $recognizedStudent['id'],
-            $confidence // Store confidence as biometric_data
+            $recognizedStudent['id']
         ]);
         
         error_log("Attendance marked: Session $session_id, Student {$recognizedStudent['reg_no']}, Confidence: $confidence%");
