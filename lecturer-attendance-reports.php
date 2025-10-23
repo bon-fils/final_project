@@ -878,6 +878,26 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         </div>
     </div>
 
+    <!-- Student Details Modal -->
+    <div class="modal fade" id="studentDetailsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-user-check me-2"></i><span id="modalStudentTitle">Student Attendance Details</span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="studentDetailsContent">
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-2">Loading session details...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -984,6 +1004,9 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
 
         // View course attendance records
         function viewCourseAttendance(courseId, courseCode, courseName) {
+            // Store course ID for student details
+            currentCourseId = courseId;
+            
             // Update modal title
             document.getElementById('modalCourseTitle').textContent = `${courseCode} - ${courseName}`;
             
@@ -1057,6 +1080,7 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                                 <th>Absent</th>
                                 <th>Attendance %</th>
                                 <th>Status</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1097,6 +1121,11 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                             </div>
                         </td>
                         <td><span class="badge bg-${statusClass}">${statusText}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-info" onclick="viewStudentDetails(${student.student_id}, '${student.student_name}', '${student.reg_no}')">
+                                <i class="fas fa-list me-1"></i>Details
+                            </button>
+                        </td>
                     </tr>
                 `;
             });
@@ -1147,6 +1176,137 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
             `;
             
             document.getElementById('courseAttendanceContent').innerHTML = html;
+        }
+        
+        // Store current course ID for student details
+        let currentCourseId = null;
+        let currentCourseSessions = [];
+        
+        // View student session-by-session details
+        function viewStudentDetails(studentId, studentName, regNo) {
+            // Update modal title
+            document.getElementById('modalStudentTitle').textContent = `${studentName} (${regNo})`;
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('studentDetailsModal'));
+            modal.show();
+            
+            // Reset content to loading state
+            document.getElementById('studentDetailsContent').innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading session details...</p>
+                </div>
+            `;
+            
+            // Fetch student session details
+            fetch(`get-student-session-details.php?student_id=${studentId}&course_id=${currentCourseId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        displayStudentSessionDetails(data.data);
+                    } else {
+                        document.getElementById('studentDetailsContent').innerHTML = `
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>
+                                ${data.message || 'No session details found.'}
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('studentDetailsContent').innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-circle me-2"></i>
+                            Error loading session details. Please try again.
+                        </div>
+                    `;
+                });
+        }
+        
+        // Display student session details
+        function displayStudentSessionDetails(data) {
+            const sessions = data.sessions || [];
+            const student = data.student || {};
+            
+            if (sessions.length === 0) {
+                document.getElementById('studentDetailsContent').innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        No sessions found for this course.
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = `
+                <div class="mb-3">
+                    <h6><i class="fas fa-info-circle me-2"></i>Summary</h6>
+                    <div class="row">
+                        <div class="col-md-3">
+                            <strong>Total Sessions:</strong> ${sessions.length}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Present:</strong> <span class="badge bg-success">${data.present_count || 0}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Absent:</strong> <span class="badge bg-danger">${data.absent_count || 0}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Attendance:</strong> <strong>${data.attendance_percentage || 0}%</strong>
+                        </div>
+                    </div>
+                </div>
+                
+                <h6><i class="fas fa-calendar-alt me-2"></i>Session Details</h6>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Session Date</th>
+                                <th>Time</th>
+                                <th>Status</th>
+                                <th>Marked At</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            sessions.forEach((session, index) => {
+                const statusBadge = session.status === 'present' 
+                    ? '<span class="badge bg-success"><i class="fas fa-check me-1"></i>Present</span>'
+                    : '<span class="badge bg-danger"><i class="fas fa-times me-1"></i>Absent</span>';
+                
+                const markedAt = session.marked_at 
+                    ? new Date(session.marked_at).toLocaleString()
+                    : '<span class="text-muted">Not marked</span>';
+                
+                const sessionTime = session.start_time && session.end_time
+                    ? `${session.start_time} - ${session.end_time}`
+                    : '<span class="text-muted">N/A</span>';
+                
+                html += `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td><strong>${new Date(session.session_date).toLocaleDateString()}</strong></td>
+                        <td>${sessionTime}</td>
+                        <td>${statusBadge}</td>
+                        <td><small>${markedAt}</small></td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            document.getElementById('studentDetailsContent').innerHTML = html;
         }
 
         // Show success message on page load
