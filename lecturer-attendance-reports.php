@@ -352,12 +352,14 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         .btn-primary {
             background: #000000;
             border: none;
+            color: white;
         }
 
         .btn-primary:hover {
             background: #333333;
             transform: translateY(-2px);
             box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+            color: white;
         }
 
         .form-control, .form-select {
@@ -618,6 +620,90 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                 z-index: 1001;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.2);
             }
+
+            /* Table responsiveness */
+            .table-responsive {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: thin;
+                scrollbar-color: var(--primary-color) transparent;
+            }
+
+            .table-responsive::-webkit-scrollbar {
+                height: 6px;
+            }
+
+            .table-responsive::-webkit-scrollbar-track {
+                background: rgba(0,0,0,0.05);
+                border-radius: 3px;
+            }
+
+            .table-responsive::-webkit-scrollbar-thumb {
+                background: var(--primary-color);
+                border-radius: 3px;
+            }
+
+            .table-responsive::-webkit-scrollbar-thumb:hover {
+                background: var(--primary-dark);
+            }
+
+            .table {
+                min-width: 1400px; /* Ensure table doesn't compress too much */
+                font-size: 0.875rem;
+            }
+
+            .table th, .table td {
+                white-space: nowrap;
+                padding: 8px 4px;
+            }
+
+            .table th {
+                font-size: 0.75rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .btn {
+                padding: 6px 8px;
+                font-size: 0.75rem;
+                margin-bottom: 2px;
+            }
+
+            .btn i {
+                margin-right: 4px;
+            }
+
+            .badge {
+                font-size: 0.7rem;
+                padding: 3px 6px;
+            }
+
+            .attendance-bar {
+                width: 60px;
+                height: 6px;
+            }
+
+            /* Stack buttons vertically on very small screens */
+            @media (max-width: 480px) {
+                .table th, .table td {
+                    padding: 6px 2px;
+                    font-size: 0.8rem;
+                }
+
+                .btn {
+                    display: block;
+                    width: 100%;
+                    margin-bottom: 2px;
+                    text-align: center;
+                }
+
+                .btn-group-mobile {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                }
+            }
         }
 
         /* Custom scrollbar */
@@ -790,8 +876,8 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                         </button>
                     </div>
                     <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped table-hover">
+                        <div class="table-responsive" style="max-height: 70vh; overflow: auto;">
+                            <table class="table table-striped table-hover" style="min-width: 1400px;">
                                 <thead class="table-dark">
                                     <tr>
                                         <th>#</th>
@@ -803,6 +889,7 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                                         <th>Sessions</th>
                                         <th>Avg Attendance</th>
                                         <th>Status</th>
+                                        <th>View Attendance Details</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -846,9 +933,18 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                                             </td>
                                             <td><span class="status-badge <?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
                                             <td>
-                                                <button class="btn btn-sm btn-primary" onclick="viewCourseAttendance(<?php echo $course['id']; ?>, '<?php echo htmlspecialchars($course['course_code']); ?>', '<?php echo htmlspecialchars($course['course_name']); ?>')">
-                                                    <i class="fas fa-eye me-1"></i>View Attendance
-                                                </button>
+                                                <div class="btn-group-mobile">
+                                                    <button class="btn btn-sm btn-primary" onclick="viewCourseAttendance(<?php echo $course['id']; ?>, '<?php echo htmlspecialchars($course['course_code']); ?>', '<?php echo htmlspecialchars($course['course_name']); ?>')">
+                                                        <i class="fas fa-eye me-1"></i>View Attendance
+                                                    </button>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div class="btn-group-mobile">
+                                                    <button class="btn btn-sm btn-success" onclick="exportCourseAttendance('pdf', <?php echo $course['id']; ?>, '<?php echo htmlspecialchars($course['course_code']); ?>', '<?php echo htmlspecialchars($course['course_name']); ?>')">
+                                                        <i class="fas fa-file-pdf me-1"></i>Export PDF
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -954,7 +1050,7 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                 const courseCode = row.cells[1].textContent.toLowerCase();
                 const courseName = row.cells[2].textContent.toLowerCase();
                 const year = row.cells[4].textContent.replace('Year ', '');
-                const avgPercent = parseFloat(row.cells[7].querySelector('.fw-bold').textContent);
+                const avgPercent = parseFloat(row.cells[8].querySelector('.fw-bold').textContent);
                 
                 // Check search text
                 const matchesSearch = !searchText || 
@@ -1313,15 +1409,16 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         }
         
         // Export course attendance (CSV or PDF)
-        function exportCourseAttendance(format) {
-            if (!currentCourseId) {
+        function exportCourseAttendance(format, courseId = null, courseCode = null, courseName = null) {
+            const exportCourseId = courseId || currentCourseId;
+            if (!exportCourseId) {
                 showAlert('No course selected', 'warning');
                 return;
             }
-            
-            const url = `export-attendance.php?type=course&course_id=${currentCourseId}&format=${format}`;
+
+            const url = `export-attendance.php?type=course&course_id=${exportCourseId}&format=${format}`;
             window.open(url, '_blank');
-            showAlert(`Exporting ${format.toUpperCase()}...`, 'success');
+            showAlert(`Exporting ${format.toUpperCase()} for ${courseCode || 'selected course'}...`, 'success');
         }
         
         // Export all courses (CSV or PDF)
