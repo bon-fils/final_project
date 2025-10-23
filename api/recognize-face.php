@@ -58,51 +58,46 @@ try {
     }
     file_put_contents($temp_path, $decodedImage);
     
-    // Get students for this session
-    $students_stmt = $pdo->prepare("
-        SELECT s.id, s.user_id, s.reg_no, s.student_photos,
-               CONCAT(u.first_name, ' ', u.last_name) as name
-        FROM students s
-        JOIN users u ON s.user_id = u.id
-        WHERE s.option_id = ? AND s.year_level = ? AND s.status = 'active'
-    ");
-    $students_stmt->execute([$session['option_id'], $session['year_level']]);
-    $students = $students_stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Call Python face recognition script
+    $pythonScript = __DIR__ . '/../face_recognition_compare.py';
+    $command = sprintf(
+        'python "%s" "%s" %d 2>&1',
+        $pythonScript,
+        $temp_path,
+        $session_id
+    );
     
-    // Face recognition algorithm (simplified version)
-    // TODO: Implement actual face recognition library (e.g., face-api.js, OpenCV, or external service)
+    error_log("Executing face recognition: $command");
+    $output = shell_exec($command);
+    error_log("Face recognition output: $output");
     
-    $recognizedStudent = null;
-    $confidence = 0;
+    // Parse JSON output from Python script
+    $recognitionResult = json_decode($output, true);
     
-    foreach ($students as $student) {
-        // Check if student has a photo
-        if (!empty($student['student_photos'])) {
-            // In a real implementation, you would:
-            // 1. Load student's photo from database or file system
-            // 2. Use face recognition library to compare faces
-            // 3. Calculate confidence score
-            // 4. If confidence > threshold, mark as recognized
-            
-            // For now, using a mock implementation
-            // Simulate face matching with random confidence
-            $mockConfidence = rand(0, 100);
-            
-            if ($mockConfidence > 80 && $mockConfidence > $confidence) {
-                $recognizedStudent = $student;
-                $confidence = $mockConfidence;
-            }
-        }
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        error_log("Failed to parse Python output: $output");
+        error_log("JSON Error: " . json_last_error_msg());
+        echo json_encode([
+            "status" => "error",
+            "message" => "Face recognition service error",
+            "debug" => "Failed to parse recognition result",
+            "raw_output" => substr($output, 0, 500),  // First 500 chars for debugging
+            "json_error" => json_last_error_msg()
+        ]);
+        exit;
     }
     
-    // For development/testing: Use first student if no match found
-    if (!$recognizedStudent && !empty($students)) {
-        error_log("DEVELOPMENT MODE: Auto-selecting first student for testing");
-        $recognizedStudent = $students[0];
-        $confidence = 85; // Mock confidence
+    // Check recognition result
+    if ($recognitionResult['status'] !== 'success') {
+        echo json_encode($recognitionResult);
+        exit;
     }
     
-    if ($recognizedStudent) {
+    // Get recognized student details
+    $recognizedStudent = $recognitionResult['student'];
+    $confidence = $recognitionResult['confidence'];
+    
+    if ($recognizedStudent && isset($recognizedStudent['id'])) {
         // Check if already marked present
         $check_stmt = $pdo->prepare("
             SELECT id FROM attendance_records 
@@ -135,7 +130,7 @@ try {
             $recognizedStudent['id']
         ]);
         
-        error_log("Attendance marked: Session $session_id, Student {$recognizedStudent['reg_no']}, Confidence: $confidence%");
+        error_log("✅ REAL FACE MATCH: Session $session_id, Student {$recognizedStudent['reg_no']}, Confidence: $confidence%, Distance: {$recognitionResult['face_distance']}");
         
         echo json_encode([
             "status" => "success",
@@ -151,9 +146,10 @@ try {
         
     } else {
         echo json_encode([
-            "status" => "error",
-            "message" => "Face not recognized. Please ensure you are registered and try again.",
-            "debug" => "No matching face found in database"
+            "status" => "not_recognized",
+            "message" => "Face not recognized",
+            "details" => "No matching face found in database. Please ensure you are registered with a photo.",
+            "debug" => $recognitionResult
         ]);
     }
     

@@ -802,6 +802,9 @@ const FaceRecognitionSystem = {
             console.log('✅ Camera initialized successfully');
             Utils.showNotification('✅ Camera is ready! Auto-scanning for faces...', 'success');
             
+            // Create status overlay on video
+            this.createStatusOverlay();
+            
             // Start automatic face detection after video is ready
             this.video.addEventListener('loadeddata', () => {
                 console.log('📹 Video stream ready, starting auto-scan...');
@@ -892,6 +895,7 @@ const FaceRecognitionSystem = {
             const imageData = this.canvas.toDataURL('image/jpeg', 0.8);
             
             console.log('📸 Image captured, sending for recognition...');
+            this.updateStatusOverlay('Analyzing face...', 'scanning');
             
             // Send to server for face recognition
             const response = await fetch('api/recognize-face.php', {
@@ -914,6 +918,8 @@ const FaceRecognitionSystem = {
             if (result.status === 'success' && result.student) {
                 console.log('✅ SUCCESS: Face recognized!', result.student.name);
                 
+                this.updateStatusOverlay(`✅ ${result.student.name}`, 'success');
+                
                 Utils.showNotification(
                     `✅ Attendance marked!\n${result.student.name} (${result.student.reg_no})\nConfidence: ${result.confidence || 'N/A'}%`,
                     'success'
@@ -931,6 +937,8 @@ const FaceRecognitionSystem = {
             } else if (result.status === 'already_marked') {
                 console.log('⚠️ Already marked:', result.message);
                 
+                this.updateStatusOverlay('Already marked', 'warning');
+                
                 // Show notification with student info if available
                 let message = `⚠️ ${result.message}`;
                 if (result.student && result.student.name) {
@@ -944,13 +952,66 @@ const FaceRecognitionSystem = {
                 
             } else if (result.status === 'not_recognized') {
                 console.log('⏳ No face detected or not recognized');
-                // Silent - just keep scanning
+                
+                this.updateStatusOverlay('No match found', 'info');
+                
+                // Show helpful message occasionally (not every scan to avoid spam)
+                if (!this.lastNotRecognizedTime || (Date.now() - this.lastNotRecognizedTime) > 10000) {
+                    let message = '🔍 No matching face found';
+                    if (result.matches_checked) {
+                        message += `\nChecked ${result.matches_checked} students`;
+                    }
+                    if (result.best_distance) {
+                        message += `\nClosest match: ${Math.round((1 - result.best_distance) * 100)}% confidence`;
+                    }
+                    message += '\n\nTip: Ensure you are registered with a photo';
+                    
+                    Utils.showNotification(message, 'info', 5000);
+                    this.lastNotRecognizedTime = Date.now();
+                }
+                
             } else if (result.status === 'error') {
                 console.log('⚠️ Recognition error:', result.message);
-                // Silent for auto-scan - don't spam warnings
+                
+                // Show error notification for important errors
+                const importantErrors = [
+                    'No face detected',
+                    'Multiple faces detected',
+                    'Face recognition service error',
+                    'Database error'
+                ];
+                
+                const isImportant = importantErrors.some(err => result.message.includes(err));
+                
+                if (isImportant) {
+                    // Update overlay
+                    if (result.message.includes('No face detected')) {
+                        this.updateStatusOverlay('No face detected', 'error');
+                    } else if (result.message.includes('Multiple faces')) {
+                        this.updateStatusOverlay('Multiple faces detected', 'error');
+                    } else {
+                        this.updateStatusOverlay('Error', 'error');
+                    }
+                    
+                    // Show error but throttle to avoid spam
+                    if (!this.lastErrorTime || (Date.now() - this.lastErrorTime) > 5000) {
+                        let errorMessage = `⚠️ ${result.message}`;
+                        
+                        // Add helpful tips based on error type
+                        if (result.message.includes('No face detected')) {
+                            errorMessage += '\n\n💡 Tips:\n• Ensure good lighting\n• Face the camera directly\n• Move closer to camera';
+                        } else if (result.message.includes('Multiple faces')) {
+                            errorMessage += '\n\n💡 Tip: Ensure only one person is in frame';
+                        }
+                        
+                        Utils.showNotification(errorMessage, 'warning', 6000);
+                        this.lastErrorTime = Date.now();
+                    }
+                }
+                
             } else {
                 console.log('⚠️ Recognition failed:', result.message);
-                // Silent for auto-scan - don't spam warnings
+                // Silent for other failures
             }
             
         } catch (error) {
@@ -962,6 +1023,71 @@ const FaceRecognitionSystem = {
                 markBtn.disabled = false;
                 markBtn.innerHTML = '<i class="fas fa-user-check me-2"></i>Mark Attendance';
             }
+        }
+    },
+    
+    createStatusOverlay() {
+        // Create status overlay on video
+        const videoContainer = this.video.parentElement;
+        if (!videoContainer) return;
+        
+        // Remove existing overlay if any
+        const existing = videoContainer.querySelector('.face-status-overlay');
+        if (existing) existing.remove();
+        
+        const overlay = document.createElement('div');
+        overlay.className = 'face-status-overlay';
+        overlay.style.cssText = `
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 10;
+            display: none;
+        `;
+        overlay.innerHTML = '<i class="fas fa-circle-notch fa-spin me-2"></i>Scanning...';
+        
+        videoContainer.style.position = 'relative';
+        videoContainer.appendChild(overlay);
+        
+        this.statusOverlay = overlay;
+    },
+    
+    updateStatusOverlay(message, type = 'info') {
+        if (!this.statusOverlay) return;
+        
+        const icons = {
+            'scanning': 'fa-circle-notch fa-spin',
+            'success': 'fa-check-circle',
+            'error': 'fa-exclamation-circle',
+            'warning': 'fa-exclamation-triangle',
+            'info': 'fa-info-circle'
+        };
+        
+        const colors = {
+            'scanning': 'rgba(0, 123, 255, 0.9)',
+            'success': 'rgba(40, 167, 69, 0.9)',
+            'error': 'rgba(220, 53, 69, 0.9)',
+            'warning': 'rgba(255, 193, 7, 0.9)',
+            'info': 'rgba(23, 162, 184, 0.9)'
+        };
+        
+        this.statusOverlay.innerHTML = `<i class="fas ${icons[type]} me-2"></i>${message}`;
+        this.statusOverlay.style.background = colors[type];
+        this.statusOverlay.style.display = 'block';
+        
+        // Auto-hide after 3 seconds for non-scanning messages
+        if (type !== 'scanning') {
+            setTimeout(() => {
+                if (this.statusOverlay) {
+                    this.statusOverlay.style.display = 'none';
+                }
+            }, 3000);
         }
     },
     

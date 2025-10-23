@@ -1,0 +1,8 @@
+# Minimal requirements for face recognition only
+# Compatible with Python 3.13
+
+face-recognition>=1.3.0
+opencv-python>=4.8.0
+Pillow>=10.3.0
+numpy>=1.24.0
+mysql-connector-python>=8.0.0
