@@ -783,8 +783,11 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
             <?php else: ?>
                 <!-- Courses Table -->
                 <div class="card">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center">
                         <h6 class="mb-0"><i class="fas fa-table me-2"></i>All Courses Overview</h6>
+                        <button class="btn btn-sm btn-danger" onclick="exportAllCourses('pdf')">
+                            <i class="fas fa-file-pdf me-1"></i>Export PDF
+                        </button>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
@@ -1165,8 +1168,8 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
                         <div class="col-md-3">
                             <div class="card text-center">
                                 <div class="card-body py-2">
-                                    <button class="btn btn-sm btn-success" onclick="exportAttendance()">
-                                        <i class="fas fa-download me-1"></i>Export
+                                    <button class="btn btn-sm btn-danger" onclick="exportCourseAttendance('pdf')">
+                                        <i class="fas fa-file-pdf me-1"></i>Export PDF
                                     </button>
                                 </div>
                             </div>
@@ -1307,6 +1310,25 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
             `;
             
             document.getElementById('studentDetailsContent').innerHTML = html;
+        }
+        
+        // Export course attendance (CSV or PDF)
+        function exportCourseAttendance(format) {
+            if (!currentCourseId) {
+                showAlert('No course selected', 'warning');
+                return;
+            }
+            
+            const url = `export-attendance.php?type=course&course_id=${currentCourseId}&format=${format}`;
+            window.open(url, '_blank');
+            showAlert(`Exporting ${format.toUpperCase()}...`, 'success');
+        }
+        
+        // Export all courses (CSV or PDF)
+        function exportAllCourses(format) {
+            const url = `export-attendance.php?type=all&format=${format}`;
+            window.open(url, '_blank');
+            showAlert(`Exporting all courses as ${format.toUpperCase()}...`, 'success');
         }
 
         // Show success message on page load
