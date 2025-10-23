@@ -29,6 +29,8 @@ if (!$user_id || !$lecturer_id) {
 
 // Get lecturer information
 try {
+    global $pdo;
+    error_log("PDO object in lecturer info: " . (isset($pdo) ? 'YES' : 'NO'));
     $stmt = $pdo->prepare("
         SELECT u.username, u.email, u.first_name, u.last_name,
                l.department_id, d.name as department_name
@@ -58,6 +60,9 @@ try {
 
 // Get courses assigned to this lecturer
 try {
+    global $pdo;
+    error_log("PDO object in courses section: " . (isset($pdo) ? 'YES' : 'NO'));
+    error_log("PDO type: " . (isset($pdo) ? get_class($pdo) : 'NULL'));
     $courses = [];
 
     error_log("Querying courses for lecturer_id: " . $lecturer_id);
@@ -67,41 +72,87 @@ try {
         SELECT
             c.id as course_id,
             c.course_code,
-            c.name as course_name,
+            c.course_name,
             c.description,
+            c.option_id,
+            c.year,
             d.name as department_name,
+            o.name as option_name,
             c.credits,
-            c.duration_hours,
-            c.created_at,
-            COUNT(DISTINCT st.id) as student_count,
-            COUNT(DISTINCT s.id) as total_sessions,
-            ROUND(
-                CASE
-                    WHEN COUNT(DISTINCT st.id) > 0 AND COUNT(DISTINCT s.id) > 0
-                    THEN (COUNT(ar.id) * 100.0) / (COUNT(DISTINCT st.id) * COUNT(DISTINCT s.id))
-                    ELSE 0
-                END, 1
-            ) as avg_attendance_rate,
-            COUNT(DISTINCT CASE WHEN DATE(s.session_date) = CURDATE() THEN s.id END) as today_sessions
+            c.duration_hours
         FROM courses c
         INNER JOIN departments d ON c.department_id = d.id
         LEFT JOIN options o ON c.option_id = o.id
-        LEFT JOIN students st ON o.id = st.option_id
-        LEFT JOIN attendance_sessions s ON c.id = s.course_id
-        LEFT JOIN attendance_records ar ON s.id = ar.session_id
-        WHERE c.lecturer_id = :lecturer_id
-        GROUP BY c.id, c.course_code, c.name, c.description, d.name, c.credits, c.duration_hours, c.created_at
-        ORDER BY c.created_at DESC
+        WHERE c.lecturer_id = :lecturer_id AND c.status = 'active'
+        ORDER BY c.course_code ASC
     ");
-    $stmt->execute(['lecturer_id' => $lecturer_id]);
+    
+    if (!$stmt) {
+        error_log("Failed to prepare statement: " . print_r($pdo->errorInfo(), true));
+        throw new Exception("Failed to prepare courses query");
+    }
+    
+    $result = $stmt->execute(['lecturer_id' => $lecturer_id]);
+    if (!$result) {
+        error_log("Failed to execute statement: " . print_r($stmt->errorInfo(), true));
+        throw new Exception("Failed to execute courses query");
+    }
+    
     $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    error_log("Fetch returned " . count($courses) . " courses");
 
     error_log("Found " . count($courses) . " courses for lecturer_id: " . $lecturer_id);
-    if (!empty($courses)) {
-        foreach ($courses as $course) {
-            error_log("Course: " . $course['course_code'] . " - " . $course['course_name']);
-        }
+    error_log("Courses data: " . print_r($courses, true));
+    
+    // Calculate stats for each course
+    foreach ($courses as &$course) {
+        // Count students enrolled in this course
+        $student_stmt = $pdo->prepare("
+            SELECT COUNT(DISTINCT s.id) as count
+            FROM students s
+            WHERE s.option_id = ? 
+              AND CAST(s.year_level AS UNSIGNED) = ? 
+              AND s.status = 'active'
+        ");
+        $student_stmt->execute([$course['option_id'], $course['year']]);
+        $course['student_count'] = $student_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+        
+        // Count sessions for this course
+        $session_stmt = $pdo->prepare("
+            SELECT COUNT(*) as count
+            FROM attendance_sessions
+            WHERE course_id = ?
+        ");
+        $session_stmt->execute([$course['course_id']]);
+        $course['total_sessions'] = $session_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+        
+        // Get attendance statistics
+        $attendance_stmt = $pdo->prepare("
+            SELECT 
+                SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present_count
+            FROM attendance_records ar
+            JOIN attendance_sessions ats ON ar.session_id = ats.id
+            WHERE ats.course_id = ?
+        ");
+        $attendance_stmt->execute([$course['course_id']]);
+        $present_count = intval($attendance_stmt->fetch(PDO::FETCH_ASSOC)['present_count'] ?? 0);
+        
+        // Calculate based on total possible records (students × sessions)
+        $total_possible_records = $course['student_count'] * $course['total_sessions'];
+        $course['avg_attendance_rate'] = $total_possible_records > 0 ? round(($present_count / $total_possible_records) * 100, 1) : 0;
+        
+        // Count today's sessions
+        $today_stmt = $pdo->prepare("
+            SELECT COUNT(*) as count
+            FROM attendance_sessions
+            WHERE course_id = ? AND DATE(session_date) = CURDATE()
+        ");
+        $today_stmt->execute([$course['course_id']]);
+        $course['today_sessions'] = $today_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+        
+        error_log("Course: " . $course['course_code'] . " - Students: " . $course['student_count'] . ", Sessions: " . $course['total_sessions'] . ", Attendance: " . $course['avg_attendance_rate'] . "%");
     }
+    unset($course); // Break reference
 
     // Calculate total statistics
     $total_courses = count($courses);
@@ -113,11 +164,23 @@ try {
 
 } catch (PDOException $e) {
     error_log("Courses query error: " . $e->getMessage());
+    error_log("Error trace: " . $e->getTraceAsString());
     $courses = [];
     $total_courses = 0;
     $total_students = 0;
     $avg_attendance = 0;
     $today_sessions = 0;
+}
+
+// DEBUG: Display raw data
+if (isset($_GET['debug'])) {
+    echo "<pre>";
+    echo "Lecturer ID: $lecturer_id\n";
+    echo "Total Courses: $total_courses\n";
+    echo "Courses Array:\n";
+    print_r($courses);
+    echo "</pre>";
+    exit;
 }
 
 // Handle AJAX requests for real-time updates
@@ -765,83 +828,64 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             </div>
         </div>
 
-    <!-- Statistics Overview -->
-    <div class="row g-4 mb-4">
-        <div class="col-md-3">
-            <div class="stats-card">
-                <div class="stats-icon text-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-                    <i class="fas fa-book"></i>
-                </div>
-                <div class="stat-value text-primary"><?= $total_courses ?></div>
-                <div class="stat-label">Total Courses</div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stats-card">
-                <div class="stats-icon text-success" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white;">
-                    <i class="fas fa-users"></i>
-                </div>
-                <div class="stat-value text-success"><?= $total_students ?></div>
-                <div class="stat-label">Total Students</div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stats-card">
-                <div class="stats-icon text-warning" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
-                    <i class="fas fa-chart-line"></i>
-                </div>
-                <div class="stat-value text-warning"><?= $avg_attendance ?>%</div>
-                <div class="stat-label">Avg Attendance</div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stats-card">
-                <div class="stats-icon text-info" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); color: white;">
-                    <i class="fas fa-calendar-day"></i>
-                </div>
-                <div class="stat-value text-info"><?= $today_sessions ?></div>
-                <div class="stat-label">Today's Sessions</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Search and Filters -->
-    <div class="search-container">
+    <!-- Compact Stats and Filters in One Row -->
+    <div class="search-container mb-4">
         <div class="row g-3 align-items-center">
-            <div class="col-md-8">
-                <input type="text" id="courseSearch" class="form-control search-input" placeholder="🔍 Search courses by name, code, or description...">
-            </div>
-            <div class="col-md-4">
-                <div class="d-flex gap-2 align-items-center">
-                    <div class="badge bg-primary fs-6 px-3 py-2">
-                        <i class="fas fa-clock me-1"></i>Live Updates
+            <!-- Summary Stats -->
+            <div class="col-lg-6">
+                <div class="row g-2">
+                    <div class="col-3">
+                        <div class="text-center p-2">
+                            <i class="fas fa-book text-primary mb-1" style="font-size: 1.5rem;"></i>
+                            <h4 class="mb-0" style="color: #667eea;"><?= $total_courses ?></h4>
+                            <small class="text-muted">Courses</small>
+                        </div>
                     </div>
-                    <button class="btn btn-outline-primary btn-sm" onclick="location.reload()" title="Refresh Courses">
-                        <i class="fas fa-sync-alt me-1"></i>Refresh
-                    </button>
+                    <div class="col-3">
+                        <div class="text-center p-2">
+                            <i class="fas fa-users text-success mb-1" style="font-size: 1.5rem;"></i>
+                            <h4 class="mb-0" style="color: #10b981;"><?= $total_students ?></h4>
+                            <small class="text-muted">Students</small>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="text-center p-2">
+                            <i class="fas fa-chart-line text-warning mb-1" style="font-size: 1.5rem;"></i>
+                            <h4 class="mb-0" style="color: #f59e0b;"><?= $avg_attendance ?>%</h4>
+                            <small class="text-muted">Avg</small>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="text-center p-2">
+                            <i class="fas fa-calendar-day text-info mb-1" style="font-size: 1.5rem;"></i>
+                            <h4 class="mb-0" style="color: #06b6d4;"><?= $today_sessions ?></h4>
+                            <small class="text-muted">Today</small>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-
-        <div class="filter-buttons">
-            <button class="filter-btn active" data-filter="all">
-                <i class="fas fa-th-large me-1"></i>All Courses (<?= $total_courses ?>)
-            </button>
-            <button class="filter-btn" data-filter="assigned">
-                <i class="fas fa-user-check me-1"></i>Assigned to Me
-            </button>
-            <button class="filter-btn" data-filter="department">
-                <i class="fas fa-building me-1"></i>Department Courses
-            </button>
-            <button class="filter-btn" data-filter="high-attendance">
-                <i class="fas fa-trophy me-1"></i>High Attendance (>80%)
-            </button>
-            <button class="filter-btn" data-filter="today-sessions">
-                <i class="fas fa-calendar-day me-1"></i>Today's Sessions
-            </button>
-            <button class="filter-btn" data-filter="recent">
-                <i class="fas fa-clock me-1"></i>Recently Added
-            </button>
+            
+            <!-- Search and Filters -->
+            <div class="col-lg-6">
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-6">
+                        <input type="text" id="courseSearch" class="form-control form-control-sm" placeholder="🔍 Search courses..." style="border-radius: 20px;">
+                    </div>
+                    <div class="col-md-6">
+                        <div class="d-flex gap-2 align-items-center justify-content-end">
+                            <button class="filter-btn active btn-sm" data-filter="all">
+                                <i class="fas fa-th-large me-1"></i>All
+                            </button>
+                            <button class="filter-btn btn-sm" data-filter="high-attendance">
+                                <i class="fas fa-trophy me-1"></i>High
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" onclick="location.reload()" title="Refresh">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -852,7 +896,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 <div class="col-lg-6 col-xl-4 course-card fade-in" data-course-id="<?= htmlspecialchars($course['course_id']) ?>"
                       data-attendance-rate="<?= htmlspecialchars($course['avg_attendance_rate']) ?>"
                       data-today-sessions="<?= htmlspecialchars($course['today_sessions']) ?>"
-                      data-created-at="<?= htmlspecialchars(strtotime($course['created_at'])) ?>"
                       style="animation-delay: <?= $index * 0.1 ?>s">
                     <div class="course-card">
                         <div class="course-header">
@@ -922,9 +965,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                 <a href="lecturer-attendance-reports.php?course_id=<?= htmlspecialchars($course['course_id']) ?>" class="btn btn-outline-secondary btn-action">
                                     <i class="fas fa-chart-bar me-1"></i> Reports
                                 </a>
-                                <button class="btn btn-outline-info btn-action" onclick="viewCourseDetails(<?= htmlspecialchars($course['course_id']) ?>)">
-                                    <i class="fas fa-info-circle me-1"></i> Details
-                                </button>
+                              
                             </div>
                         </div>
                     </div>
@@ -1191,10 +1232,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         });
     }
 
-    // View course details
+    // View course details - redirect to reports page
     function viewCourseDetails(courseId) {
-        showNotification(`Loading detailed information for course ${courseId}...`, 'info');
-        // Could implement modal or redirect to course details page
+        window.location.href = `lecturer-attendance-reports.php?course_id=${courseId}`;
     }
 
     // Enhanced notification system

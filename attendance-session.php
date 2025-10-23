@@ -85,6 +85,36 @@ $assigned_department_name = $user_info['department_name'];
 $lecturer_id = $user_info['lecturer_id'];
 $user_id_for_session = $user_info['user_id']; // This is the ID for foreign key
 
+// Check if course_id is provided in URL for auto-selection
+$preselected_course_id = $_GET['course_id'] ?? null;
+$preselected_course = null;
+
+if ($preselected_course_id) {
+    try {
+        $course_stmt = $pdo->prepare("
+            SELECT c.id, c.course_code, c.course_name, c.option_id, c.year,
+                   o.name as option_name, o.id as option_id
+            FROM courses c
+            LEFT JOIN options o ON c.option_id = o.id
+            WHERE c.id = ? AND c.lecturer_id = ?
+        ");
+        $course_stmt->execute([$preselected_course_id, $lecturer_id]);
+        $preselected_course = $course_stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($preselected_course) {
+            $logger->info('Attendance Session', 'Course pre-selected from URL', [
+                'course_id' => $preselected_course_id,
+                'course_code' => $preselected_course['course_code']
+            ]);
+        }
+    } catch (PDOException $e) {
+        $logger->error('Attendance Session', 'Error fetching preselected course', [
+            'course_id' => $preselected_course_id,
+            'error' => $e->getMessage()
+        ]);
+    }
+}
+
 // Check for existing active session
 $active_session = null;
 try {
@@ -828,6 +858,42 @@ $pageDescription = "Manage attendance sessions with face recognition and fingerp
             if (typeof FormHandlers !== 'undefined') {
                 console.log('✅ FormHandlers found - initializing...');
                 FormHandlers.initialize();
+                
+                // Auto-select course if provided in URL
+                <?php if ($preselected_course): ?>
+                setTimeout(function() {
+                    console.log('🎯 Auto-selecting course from URL...');
+                    
+                    // First select the option
+                    const optionSelect = document.getElementById('option');
+                    if (optionSelect) {
+                        optionSelect.value = '<?= $preselected_course['option_id'] ?>';
+                        
+                        // Trigger change event to load courses
+                        const changeEvent = new Event('change', { bubbles: true });
+                        optionSelect.dispatchEvent(changeEvent);
+                        
+                        // Wait for courses to load, then select the course
+                        setTimeout(function() {
+                            const courseSelect = document.getElementById('course');
+                            if (courseSelect) {
+                                courseSelect.value = '<?= $preselected_course_id ?>';
+                                
+                                // Trigger change event
+                                const courseChangeEvent = new Event('change', { bubbles: true });
+                                courseSelect.dispatchEvent(courseChangeEvent);
+                                
+                                console.log('✅ Course auto-selected:', '<?= $preselected_course['course_code'] ?>');
+                                
+                                // Show notification
+                                if (typeof showNotification === 'function') {
+                                    showNotification('Course <?= $preselected_course['course_code'] ?> - <?= $preselected_course['course_name'] ?> selected', 'success');
+                                }
+                            }
+                        }, 500);
+                    }
+                }, 1000);
+                <?php endif; ?>
             } else {
                 console.error('❌ FormHandlers not found - check attendance-session-clean.js');
             }
