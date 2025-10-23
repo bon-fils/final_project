@@ -22,33 +22,40 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 #define LED_YELLOW 18 // D18 -> Waiting / scanning
 
 // WiFi credentials
-const char *ssid = "CodeFusion";
-const char *password = "12345678";
+const char *ssid = "CAPTAIN";
+const char *password = "123456789";
 
 // PHP Server IP (where the attendance system is hosted)
-const char *serverIP = "192.168.1.127";
+const char *serverIP = "192.168.137.1";
 
 WebServer server(80);
 
 uint8_t enrollID = 1; // Default enrollment ID
 bool continuousScanMode = false; // Continuous scan flag
 
+// Global variables to track enrollment status
+bool enrollmentSuccess = false;
+String enrollmentErrorMessage = "";
+
 // Function Prototypes
 void showMessage(String msg);
-void enrollFingerprint(uint8_t id, String studentName = "", String regNo = "");
+void enrollFingerprint(uint8_t id);
 void waitForFinger();
 bool scanFingerprintOnce();
 void handleIdentify();
 void handleStatus();
 void handleDisplay();
 void handleEnroll();
-void handleEnrollmentStatus();
 void handleStartScan();
 void handleStopScan();
+void handleList();
+void handleDelete();
 void displayMessage(String message);
 void turnOffLEDs();
 void indicateError();
 void indicateSuccess();
+void indicateWaiting();
+void indicateProcessing();
 
 void setup()
 {
@@ -126,26 +133,40 @@ void setup()
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/display", HTTP_GET, handleDisplay);
   server.on("/enroll", HTTP_POST, handleEnroll);
-  server.on("/enrollment_status", HTTP_GET, handleEnrollmentStatus);
   server.on("/start_scan", HTTP_GET, handleStartScan);
   server.on("/stop_scan", HTTP_GET, handleStopScan);
+  server.on("/list", HTTP_GET, handleList);
+  server.on("/delete", HTTP_POST, handleDelete);
   
-  // Handle CORS preflight requests
+  // Handle CORS preflight
   server.onNotFound([]() {
     if (server.method() == HTTP_OPTIONS) {
       server.sendHeader("Access-Control-Allow-Origin", "*");
-      server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+      server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+      server.sendHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+      server.sendHeader("Access-Control-Max-Age", "86400"); // 24 hours
       server.send(204);
     } else {
-      server.send(404, "text/plain", "Not found");
+      Serial.println("404 - Not found: " + server.uri());
+      server.send(404, "text/plain", "Not found: " + server.uri());
     }
   });
 
   server.enableCORS(true);
   server.begin();
+  Serial.println("========================================");
   Serial.println("HTTP server started");
-  Serial.println("IP: " + WiFi.localIP().toString());
+  Serial.println("IP Address: " + WiFi.localIP().toString());
+  Serial.println("Available endpoints:");
+  Serial.println("  GET  /identify");
+  Serial.println("  GET  /status");
+  Serial.println("  GET  /display");
+  Serial.println("  POST /enroll");
+  Serial.println("  GET  /start_scan");
+  Serial.println("  GET  /stop_scan");
+  Serial.println("  GET  /list         <- NEW!");
+  Serial.println("  POST /delete       <- NEW!");
+  Serial.println("========================================");
 }
 
 void loop()
@@ -247,143 +268,110 @@ void waitForFinger()
   delay(400);
 }
 
-// Global variables to track enrollment status
-bool enrollmentSuccess = false;
-String enrollmentErrorMessage = "";
-
-// Enhanced enrollment logic with student details and quality assessment
-void enrollFingerprint(uint8_t id, String studentName = "", String regNo = "")
+// Enrollment logic with detailed error tracking
+void enrollFingerprint(uint8_t id)
 {
   enrollmentSuccess = false; // Reset flag
   enrollmentErrorMessage = ""; // Reset error message
   int p = -1;
-  int qualityScore = 0;
 
-  Serial.println("=== FINGERPRINT ENROLLMENT PROCESS ===");
-  Serial.println("Student: " + studentName);
-  Serial.println("Reg No: " + regNo);
-  Serial.println("Fingerprint ID: " + String(id));
-  Serial.println("======================================");
+  Serial.println("Starting fingerprint enrollment for ID: " + String(id));
 
   // Step 1: First scan
-  displayMessage("STEP 1/5\nPlace finger\n" + studentName);
   Serial.println("Step 1: Waiting for first finger scan...");
-  
   waitForFinger();
   p = finger.image2Tz(1);
   if (p != FINGERPRINT_OK)
   {
     enrollmentErrorMessage = "Failed to capture first fingerprint image";
-    displayMessage("Error reading finger!\nTry again");
+    displayMessage("Error reading finger!");
     Serial.println("Error reading first image: " + String(p));
     indicateError();
-    delay(3000);
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
     return;
   }
-  
-  // Get quality score for first image
-  qualityScore += 50; // Base score for successful capture
-  Serial.println("✅ First image captured successfully");
+  Serial.println("First image captured successfully");
 
   // Step 2: Remove finger
-  displayMessage("STEP 2/5\nLift finger\n" + studentName);
+  displayMessage("Remove finger");
   Serial.println("Step 2: Please remove finger...");
   delay(1500);
-  
   int removeAttempts = 0;
   while (finger.getImage() != FINGERPRINT_NOFINGER && removeAttempts < 50)
   {
     delay(100);
     removeAttempts++;
   }
-  
   if (removeAttempts >= 50)
   {
     enrollmentErrorMessage = "Finger not removed within timeout";
-    displayMessage("Remove finger timeout!\nTry again");
-    Serial.println("❌ Finger removal timeout");
+    displayMessage("Remove finger timeout!");
+    Serial.println("Finger removal timeout");
     indicateError();
-    delay(3000);
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
     return;
   }
-  Serial.println("✅ Finger removed successfully");
+  Serial.println("Finger removed successfully");
 
   // Step 3: Second scan
-  displayMessage("STEP 3/5\nPlace same finger\n" + studentName);
   Serial.println("Step 3: Waiting for second finger scan...");
-  
   waitForFinger();
   p = finger.image2Tz(2);
   if (p != FINGERPRINT_OK)
   {
     enrollmentErrorMessage = "Failed to capture second fingerprint image";
-    displayMessage("Error reading finger!\nTry again");
-    Serial.println("❌ Error reading second image: " + String(p));
+    displayMessage("Error reading finger!");
+    Serial.println("Error reading second image: " + String(p));
     indicateError();
-    delay(3000);
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
     return;
   }
-  
-  qualityScore += 30; // Additional score for second successful capture
-  Serial.println("✅ Second image captured successfully");
+  Serial.println("Second image captured successfully");
 
   // Step 4: Create model
-  displayMessage("STEP 4/5\nCreating model...\n" + studentName);
+  displayMessage("Creating model...");
   Serial.println("Step 4: Creating fingerprint model...");
-  
   p = finger.createModel();
   if (p != FINGERPRINT_OK)
   {
-    enrollmentErrorMessage = "Failed to create fingerprint model - images don't match";
-    displayMessage("Images don't match!\nTry again");
-    Serial.println("❌ Error creating model: " + String(p));
+    enrollmentErrorMessage = "Failed to create fingerprint model";
+    displayMessage("Error creating model!");
+    Serial.println("Error creating model: " + String(p));
     indicateError();
-    delay(3000);
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
     return;
   }
-  
-  qualityScore += 15; // Additional score for successful model creation
-  Serial.println("✅ Fingerprint model created successfully");
+  Serial.println("Fingerprint model created successfully");
 
   // Step 5: Store model
-  displayMessage("STEP 5/5\nStoring model...\n" + studentName);
+  displayMessage("Storing model...");
   Serial.println("Step 5: Storing fingerprint model...");
-  
   p = finger.storeModel(id);
   if (p == FINGERPRINT_OK)
   {
-    qualityScore += 5; // Final score for successful storage
-    
-    displayMessage("SUCCESS!\nEnrolled: " + studentName + "\nID: " + String(id) + "\nQuality: " + String(qualityScore) + "%");
-    
-    Serial.println("🎉 ENROLLMENT SUCCESS!");
-    Serial.println("Student: " + studentName);
-    Serial.println("Reg No: " + regNo);
-    Serial.println("Fingerprint ID: " + String(id));
-    Serial.println("Quality Score: " + String(qualityScore) + "%");
-    Serial.println("========================");
-    
+    displayMessage("Enrollment Success!");
+    Serial.println("Enrollment Success! Fingerprint stored with ID: " + String(id));
     enrollmentSuccess = true; // Set success flag
     indicateSuccess();
-    delay(3000); // Show success message (reduced from 4000ms)
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
   }
   else
   {
-    enrollmentErrorMessage = "Failed to store fingerprint model in sensor memory";
-    displayMessage("Storage failed!\nMemory full?");
-    Serial.println("❌ Error storing model: " + String(p));
+    enrollmentErrorMessage = "Failed to store fingerprint model";
+    displayMessage("Error storing model!");
+    Serial.println("Error storing model: " + String(p));
     indicateError();
-    delay(3000);
+    delay(2000);
     turnOffLEDs();
     displayMessage("System Ready");
   }
@@ -451,6 +439,11 @@ bool scanFingerprintOnce()
 // Web server handlers
 void handleIdentify()
 {
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   displayMessage("Scanning...");
   bool ok = scanFingerprintOnce();
   if (ok)
@@ -461,6 +454,11 @@ void handleIdentify()
 
 void handleStatus()
 {
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   String response = "{";
   response += "\"status\":\"ok\",";
   response += "\"fingerprint_sensor\":\"" + String(finger.verifyPassword() ? "connected" : "disconnected") + "\",";
@@ -472,6 +470,11 @@ void handleStatus()
 
 void handleDisplay()
 {
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   if (server.hasArg("message"))
   {
     String message = server.arg("message");
@@ -486,7 +489,11 @@ void handleDisplay()
 
 void handleEnroll()
 {
-  // Check required parameters
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   if (!server.hasArg("id"))
   {
     server.send(400, "application/json", "{\"success\":false,\"error\":\"No ID parameter\"}");
@@ -494,36 +501,42 @@ void handleEnroll()
   }
 
   uint8_t id = server.arg("id").toInt();
-  String studentName = server.hasArg("student_name") ? server.arg("student_name") : "Unknown Student";
-  String regNo = server.hasArg("reg_no") ? server.arg("reg_no") : "Unknown";
 
-  // Display enrollment start message with student details
-  displayMessage("Starting enrollment for:\n" + studentName + "\nReg: " + regNo);
-  Serial.println("=== ENROLLMENT START ===");
-  Serial.println("Student: " + studentName);
-  Serial.println("Reg No: " + regNo);
-  Serial.println("Fingerprint ID: " + String(id));
-  Serial.println("========================");
+  // Perform enrollment
+  enrollFingerprint(id);
 
-  // Send immediate response that enrollment has started
-  String startResponse = "{";
-  startResponse += "\"success\":true,";
-  startResponse += "\"message\":\"Enrollment started\",";
-  startResponse += "\"id\":" + String(id) + ",";
-  startResponse += "\"student_name\":\"" + studentName + "\",";
-  startResponse += "\"reg_no\":\"" + regNo + "\",";
-  startResponse += "\"status\":\"enrolling\"";
-  startResponse += "}";
-  
-  server.send(200, "application/json", startResponse);
+  // Check enrollment success using the global flag
+  if (enrollmentSuccess)
+  {
+    String response = "{";
+    response += "\"success\":true,";
+    response += "\"message\":\"Enrollment completed successfully\",";
+    response += "\"template\":\"template_" + String(id) + "_" + String(random(1000000, 9999999)) + "\",";
+    response += "\"hash\":\"hash_" + String(id) + "_" + String(random(1000000, 9999999)) + "\",";
+    response += "\"version\":\"v1.0\"";
+    response += "}";
 
-  // Start enrollment process in background
-  delay(500); // Small delay to ensure response is sent
-  enrollFingerprint(id, studentName, regNo);
+    server.send(200, "application/json", response);
+  }
+  else
+  {
+    String errorResponse = "{\"success\":false,\"error\":\"Fingerprint enrollment failed\"";
+    if (enrollmentErrorMessage != "")
+    {
+      errorResponse += ",\"details\":\"" + enrollmentErrorMessage + "\"";
+    }
+    errorResponse += "}";
+    server.send(200, "application/json", errorResponse);
+  }
 }
 
 void handleStartScan()
 {
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   continuousScanMode = true;
   displayMessage("Scan Mode ON\nPlace finger...");
   server.send(200, "application/json", "{\"success\":true,\"message\":\"Continuous scan mode started\"}");
@@ -532,6 +545,11 @@ void handleStartScan()
 
 void handleStopScan()
 {
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
   continuousScanMode = false;
   turnOffLEDs();
   displayMessage("Scan Mode OFF");
@@ -539,22 +557,113 @@ void handleStopScan()
   Serial.println("Continuous scan mode stopped");
 }
 
-void handleEnrollmentStatus()
+// List all stored fingerprints
+void handleList()
 {
-  // Quick response for status checks
+  Serial.println("========================================");
+  Serial.println("LIST ENDPOINT CALLED");
+  Serial.println("========================================");
+  displayMessage("Scanning\nMemory...");
+  
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
   String response = "{";
-  response += "\"success\":true,";
-  response += "\"enrollment_success\":" + String(enrollmentSuccess ? "true" : "false") + ",";
-  response += "\"enrollment_error\":\"" + enrollmentErrorMessage + "\",";
-  response += "\"sensor_status\":\"connected\","; // Assume connected for speed
-  response += "\"timestamp\":\"" + String(millis()) + "\"";
+  response += "\"status\":\"success\",";
+  response += "\"fingerprints\":[";
+  
+  int count = 0;
+  Serial.println("Scanning slots 1-127...");
+  
+  for (int id = 1; id <= 127; id++) {
+    uint8_t p = finger.loadModel(id);
+    if (p == FINGERPRINT_OK) {
+      if (count > 0) response += ",";
+      response += String(id);
+      count++;
+      Serial.println("  Found fingerprint at slot: " + String(id));
+    }
+    
+    // Yield to prevent watchdog timeout
+    if (id % 10 == 0) {
+      yield();
+      delay(10);
+    }
+  }
+  
+  response += "],";
+  response += "\"count\":" + String(count);
   response += "}";
   
-  // Send response immediately
   server.send(200, "application/json", response);
+  displayMessage("Found: " + String(count) + "\nFingerprints");
+  Serial.println("Total fingerprints found: " + String(count));
+  Serial.println("Response sent: " + response);
+  Serial.println("========================================");
+}
+
+// Delete a fingerprint by ID
+void handleDelete()
+{
+  Serial.println("========================================");
+  Serial.println("DELETE ENDPOINT CALLED");
+  Serial.println("========================================");
   
-  // Reset flags after successful enrollment to prepare for next enrollment
-  if (enrollmentSuccess) {
-    Serial.println("📤 Status check: Enrollment success reported");
+  // Add CORS headers
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  if (!server.hasArg("plain")) {
+    Serial.println("ERROR: No data received");
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No data received\"}");
+    return;
   }
+  
+  String body = server.arg("plain");
+  Serial.println("Request body: " + body);
+  
+  // Parse JSON manually (simple approach)
+  int idStart = body.indexOf("\"id\":") + 5;
+  int idEnd = body.indexOf(",", idStart);
+  if (idEnd == -1) idEnd = body.indexOf("}", idStart);
+  
+  String idStr = body.substring(idStart, idEnd);
+  idStr.trim();
+  int id = idStr.toInt();
+  
+  Serial.println("Parsed ID: " + String(id));
+  
+  if (id < 1 || id > 127) {
+    Serial.println("ERROR: Invalid ID range");
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid ID\"}");
+    return;
+  }
+  
+  displayMessage("Deleting\nID: " + String(id));
+  Serial.println("Attempting to delete fingerprint ID: " + String(id));
+  
+  uint8_t p = finger.deleteModel(id);
+  
+  String response = "{";
+  if (p == FINGERPRINT_OK) {
+    response += "\"status\":\"success\",";
+    response += "\"message\":\"Fingerprint deleted\",";
+    response += "\"id\":" + String(id);
+    displayMessage("Deleted!\nID: " + String(id));
+    Serial.println("SUCCESS: Fingerprint deleted");
+  } else {
+    response += "\"status\":\"error\",";
+    response += "\"message\":\"Failed to delete\",";
+    response += "\"error_code\":" + String(p);
+    displayMessage("Delete Failed\nID: " + String(id));
+    Serial.println("ERROR: Failed to delete, error code: " + String(p));
+  }
+  response += "}";
+  
+  server.send(200, "application/json", response);
+  Serial.println("Response sent: " + response);
+  Serial.println("========================================");
 }
