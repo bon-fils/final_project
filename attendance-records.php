@@ -38,15 +38,15 @@ try {
 $selected_course_id = $_GET['course_id'] ?? null;
 $view_type = $_GET['view'] ?? 'all'; // 'all' or 'under_85'
 
-// Get courses for this student's option
+// Get courses for this student's option and year level
 try {
     $stmt = $pdo->prepare("
         SELECT c.id, c.course_name, c.course_code
         FROM courses c
-        WHERE c.option_id = ?
+        WHERE c.option_id = ? AND c.year = ? AND c.status = 'active'
         ORDER BY c.course_name
     ");
-    $stmt->execute([$student['option_id']]);
+    $stmt->execute([$student['option_id'], $student['year_level']]);
     $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $courses = [];
@@ -65,37 +65,41 @@ $summary_stats = [
 try {
     if ($selected_course_id) {
         // Get attendance for specific course
+        // Logic: Get all sessions for the course, then check if student has attendance record
         $stmt = $pdo->prepare("
             SELECT
-                c.course_name, c.course_code,
-                ats.session_date, ats.start_time, ats.end_time,
+                c.course_name, c.course_code, c.id as course_id,
+                ats.id as session_id, ats.session_date, ats.start_time, ats.end_time,
                 ar.status, ar.recorded_at,
                 l.first_name as lecturer_fname, l.last_name as lecturer_lname
-            FROM attendance_sessions ats
-            LEFT JOIN courses c ON ats.course_id = c.id
+            FROM courses c
+            INNER JOIN attendance_sessions ats ON c.id = ats.course_id
             LEFT JOIN attendance_records ar ON ats.id = ar.session_id AND ar.student_id = ?
             LEFT JOIN lecturers l ON ats.lecturer_id = l.id
-            WHERE ats.course_id = ? AND c.option_id = ?
+            WHERE c.id = ? AND c.option_id = ? AND c.year = ?
             ORDER BY ats.session_date DESC, ats.start_time DESC
         ");
-        $stmt->execute([$student['id'], $selected_course_id, $student['option_id']]);
+        $stmt->execute([$student['id'], $selected_course_id, $student['option_id'], $student['year_level']]);
         $attendance_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } else {
-        // Get attendance for all courses in student's option
+        // Get attendance for all courses student is enrolled in
+        // Logic: 1. Get all courses for student's option
+        //        2. Get all attendance sessions for those courses
+        //        3. Check if student has attendance record for each session
         $stmt = $pdo->prepare("
             SELECT
-                c.course_name, c.course_code,
-                ats.session_date, ats.start_time, ats.end_time,
+                c.course_name, c.course_code, c.id as course_id,
+                ats.id as session_id, ats.session_date, ats.start_time, ats.end_time,
                 ar.status, ar.recorded_at,
                 l.first_name as lecturer_fname, l.last_name as lecturer_lname
-            FROM attendance_sessions ats
-            LEFT JOIN courses c ON ats.course_id = c.id
+            FROM courses c
+            INNER JOIN attendance_sessions ats ON c.id = ats.course_id
             LEFT JOIN attendance_records ar ON ats.id = ar.session_id AND ar.student_id = ?
             LEFT JOIN lecturers l ON ats.lecturer_id = l.id
-            WHERE c.option_id = ?
+            WHERE c.option_id = ? AND c.year = ?
             ORDER BY ats.session_date DESC, ats.start_time DESC
         ");
-        $stmt->execute([$student['id'], $student['option_id']]);
+        $stmt->execute([$student['id'], $student['option_id'], $student['year_level']]);
         $attendance_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -113,15 +117,20 @@ try {
             ];
         }
 
-        $course_stats[$course_key]['total_sessions']++;
-        if ($record['status'] === 'present') {
-            $course_stats[$course_key]['present_count']++;
-            $summary_stats['present_count']++;
-        } elseif ($record['status'] === 'absent') {
-            $course_stats[$course_key]['absent_count']++;
-            $summary_stats['absent_count']++;
+        // Only count sessions where student has a status (present/absent)
+        // NULL status means session exists but student wasn't marked
+        if ($record['status'] !== null) {
+            $course_stats[$course_key]['total_sessions']++;
+            $summary_stats['total_sessions']++;
+            
+            if ($record['status'] === 'present') {
+                $course_stats[$course_key]['present_count']++;
+                $summary_stats['present_count']++;
+            } elseif ($record['status'] === 'absent') {
+                $course_stats[$course_key]['absent_count']++;
+                $summary_stats['absent_count']++;
+            }
         }
-        $summary_stats['total_sessions']++;
     }
 
     // Calculate percentages and identify courses under 85%
@@ -468,57 +477,88 @@ $current_page = "attendance-records";
     <!-- Main Content -->
     <div class="main-content">
         <!-- Page Header -->
-        <div class="page-header">
-            <div>
-                <h1 class="page-title">
-                    <i class="fas fa-calendar-check me-3 text-primary"></i><?php echo $page_title; ?>
-                </h1>
-                <p class="page-subtitle">View your attendance records across all courses</p>
-            </div>
+        <div class="mb-4">
+            <h2 class="mb-1"><i class="fas fa-calendar-check me-2"></i><?php echo $page_title; ?></h2>
+            <p class="text-muted mb-0">View your attendance records across all courses</p>
         </div>
 
         <!-- Statistics Overview -->
-        <div class="stats-grid">
-            <div class="stat-card stat-primary">
-                <div class="stat-icon">
-                    <i class="fas fa-chart-line"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($summary_stats['attendance_percentage']); ?>%</h3>
-                    <p>Overall Attendance</p>
-                </div>
-            </div>
-
-            <div class="stat-card stat-success">
-                <div class="stat-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($summary_stats['present_count']); ?></h3>
-                    <p>Present Sessions</p>
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                <i class="fas fa-chart-line text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Overall Attendance</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo htmlspecialchars((string)$summary_stats['attendance_percentage']); ?>%</h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="stat-card stat-warning">
-                <div class="stat-icon">
-                    <i class="fas fa-times-circle"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($summary_stats['absent_count']); ?></h3>
-                    <p>Absent Sessions</p>
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                                <i class="fas fa-check-circle text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Present Sessions</h6>
+                                <h3 class="mb-0 fw-bold text-success"><?php echo htmlspecialchars((string)$summary_stats['present_count']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="stat-card stat-primary">
-                <div class="stat-icon">
-                    <i class="fas fa-book"></i>
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                                <i class="fas fa-times-circle text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Absent Sessions</h6>
+                                <h3 class="mb-0 fw-bold text-danger"><?php echo htmlspecialchars((string)$summary_stats['absent_count']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="stat-content">
-                    <h3><?php echo count($courses); ?></h3>
-                    <p>Total Courses</p>
+            </div>
+
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                                <i class="fas fa-book text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Total Courses</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo count($courses); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
+
+        <!-- No Courses Alert -->
+        <?php if (count($courses) == 0): ?>
+        <div class="alert alert-warning alert-dismissible fade show" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <strong>No Courses Found!</strong> 
+            There are currently no courses available for <strong><?php echo htmlspecialchars($student['option_name']); ?> - Year <?php echo htmlspecialchars((string)$student['year_level']); ?></strong>.
+            Please contact your academic advisor or administrator.
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        <?php endif; ?>
 
         <!-- Filters Section -->
         <div class="filters-section">

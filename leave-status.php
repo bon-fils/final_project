@@ -46,11 +46,13 @@ $stats = [
 try {
     $stmt = $pdo->prepare("
         SELECT
-            id, leave_type, start_date, end_date, reason, status,
-            created_at, reviewed_at, reviewer_comments
-        FROM leave_requests
-        WHERE student_id = ?
-        ORDER BY created_at DESC
+            lr.id, lr.requested_to, lr.reason, lr.supporting_file, lr.status,
+            lr.requested_at, lr.reviewed_at, lr.reviewed_by,
+            CONCAT(u.first_name, ' ', u.last_name) as reviewer_name
+        FROM leave_requests lr
+        LEFT JOIN users u ON lr.reviewed_by = u.id
+        WHERE lr.student_id = ?
+        ORDER BY lr.requested_at DESC
     ");
     $stmt->execute([$student['id']]);
     $leave_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -58,7 +60,9 @@ try {
     // Calculate statistics
     $stats['total'] = count($leave_requests);
     foreach ($leave_requests as $request) {
-        $stats[$request['status']]++;
+        if (isset($stats[$request['status']])) {
+            $stats[$request['status']]++;
+        }
     }
 
 } catch (Exception $e) {
@@ -391,45 +395,78 @@ $current_page = "leave-status";
             </div>
         </div>
 
+        <!-- Success Message -->
+        <?php if (isset($_GET['success'])): ?>
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+            <i class="fas fa-check-circle me-2"></i>
+            <strong>Success!</strong> Your leave request has been submitted successfully and is pending review.
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        <?php endif; ?>
+
         <!-- Statistics Overview -->
-        <div class="stats-grid">
-            <div class="stat-card stat-primary">
-                <div class="stat-icon">
-                    <i class="fas fa-file-alt"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($stats['total']); ?></h3>
-                    <p>Total Requests</p>
-                </div>
-            </div>
-
-            <div class="stat-card stat-warning">
-                <div class="stat-icon">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($stats['pending']); ?></h3>
-                    <p>Pending</p>
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                <i class="fas fa-file-alt text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Total Requests</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo htmlspecialchars((string)$stats['total']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="stat-card stat-success">
-                <div class="stat-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($stats['approved']); ?></h3>
-                    <p>Approved</p>
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                                <i class="fas fa-clock text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Pending</h6>
+                                <h3 class="mb-0 fw-bold text-warning"><?php echo htmlspecialchars((string)$stats['pending']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="stat-card stat-danger">
-                <div class="stat-icon">
-                    <i class="fas fa-times-circle"></i>
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                                <i class="fas fa-check-circle text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Approved</h6>
+                                <h3 class="mb-0 fw-bold text-success"><?php echo htmlspecialchars((string)$stats['approved']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="stat-content">
-                    <h3><?php echo htmlspecialchars($stats['rejected']); ?></h3>
-                    <p>Rejected</p>
+            </div>
+
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                                <i class="fas fa-times-circle text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Rejected</h6>
+                                <h3 class="mb-0 fw-bold text-danger"><?php echo htmlspecialchars((string)$stats['rejected']); ?></h3>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -439,8 +476,8 @@ $current_page = "leave-status";
             <table class="table">
                 <thead>
                     <tr>
-                        <th>Leave Type</th>
-                        <th>Duration</th>
+                        <th>Requested To</th>
+                        <th>Reason</th>
                         <th>Status</th>
                         <th>Submitted</th>
                         <th>Actions</th>
@@ -453,6 +490,9 @@ $current_page = "leave-status";
                                 <i class="fas fa-file-alt fa-3x text-muted mb-3"></i>
                                 <h5 class="text-muted">No Leave Requests Found</h5>
                                 <p class="text-muted mb-0">You haven't submitted any leave requests yet</p>
+                                <a href="request-leave.php" class="btn btn-primary mt-3">
+                                    <i class="fas fa-plus me-2"></i>Submit Leave Request
+                                </a>
                             </td>
                         </tr>
                     <?php else: ?>
@@ -460,26 +500,29 @@ $current_page = "leave-status";
                             <?php
                             $status_class = 'status-' . $request['status'];
                             $status_text = ucfirst($request['status']);
-                            $leave_type_text = ucfirst(str_replace('_', ' ', $request['leave_type']));
-
-                            $start_date = date('M d, Y', strtotime($request['start_date']));
-                            $end_date = date('M d, Y', strtotime($request['end_date']));
-                            $duration = ($start_date === $end_date) ? $start_date : $start_date . ' - ' . $end_date;
+                            
+                            // Extract first line of reason for preview
+                            $reason_lines = explode("\n", $request['reason']);
+                            $reason_preview = $reason_lines[0];
+                            if (strlen($reason_preview) > 50) {
+                                $reason_preview = substr($reason_preview, 0, 50) . '...';
+                            }
                             ?>
                             <tr>
                                 <td>
-                                    <strong><?php echo htmlspecialchars($leave_type_text); ?></strong>
+                                    <strong><?php echo htmlspecialchars($request['requested_to']); ?></strong>
                                 </td>
-                                <td><?php echo htmlspecialchars($duration); ?></td>
+                                <td><?php echo htmlspecialchars($reason_preview); ?></td>
                                 <td>
                                     <span class="status-badge <?php echo $status_class; ?>">
+                                        <i class="fas fa-<?php echo $request['status'] === 'approved' ? 'check-circle' : ($request['status'] === 'rejected' ? 'times-circle' : 'clock'); ?>"></i>
                                         <?php echo $status_text; ?>
                                     </span>
                                 </td>
-                                <td><?php echo date('M d, Y', strtotime($request['created_at'])); ?></td>
+                                <td><?php echo date('M d, Y', strtotime($request['requested_at'])); ?></td>
                                 <td>
                                     <button class="btn btn-sm btn-outline-primary" onclick="viewDetails(<?php echo $request['id']; ?>)">
-                                        <i class="fas fa-eye"></i> Details
+                                        <i class="fas fa-eye"></i> View
                                     </button>
                                 </td>
                             </tr>

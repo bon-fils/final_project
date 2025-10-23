@@ -11,9 +11,9 @@ $user_id = (int)($_SESSION['user_id'] ?? 0);
 // Get student information
 try {
     $stmt = $pdo->prepare("
-        SELECT s.id, s.reg_no, s.year_level,
+        SELECT s.id, s.reg_no, s.year_level, s.option_id,
                u.first_name, u.last_name, u.email,
-               d.name as department_name, o.name as option_name
+               d.name as department_name, d.id as department_id, o.name as option_name
         FROM students s
         LEFT JOIN users u ON s.user_id = u.id
         LEFT JOIN options o ON s.option_id = o.id
@@ -34,21 +34,62 @@ try {
     exit();
 }
 
+// Get courses for the student's year and option (with lecturers)
+try {
+    $stmt = $pdo->prepare("
+        SELECT c.id, c.course_name, c.course_code, c.lecturer_id,
+               CONCAT(l.first_name, ' ', l.last_name) as lecturer_name
+        FROM courses c
+        LEFT JOIN lecturers l ON c.lecturer_id = l.id
+        WHERE c.option_id = ? AND c.year = ? AND c.status = 'active'
+        ORDER BY c.course_name
+    ");
+    $stmt->execute([$student['option_id'], $student['year_level']]);
+    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $courses = [];
+}
+
 // Handle form submission
 $message = '';
 $message_type = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $leave_type = trim($_POST['leave_type'] ?? '');
+    $request_type = trim($_POST['request_type'] ?? ''); // Lecturer or HOD
+    $course_id = trim($_POST['course_id'] ?? '');
     $start_date = trim($_POST['start_date'] ?? '');
     $end_date = trim($_POST['end_date'] ?? '');
     $reason = trim($_POST['reason'] ?? '');
+    $supporting_file = null;
+    $requested_to = '';
 
     // Validation
     $errors = [];
 
     if (empty($leave_type)) {
         $errors[] = "Please select a leave type";
+    }
+
+    if (empty($request_type)) {
+        $errors[] = "Please select who to send the request to";
+    }
+    
+    // If requesting to lecturer, course must be selected
+    if ($request_type === 'Lecturer') {
+        if (empty($course_id)) {
+            $errors[] = "Please select a course when requesting to lecturer";
+        } else {
+            // Get lecturer name from course
+            foreach ($courses as $course) {
+                if ($course['id'] == $course_id) {
+                    $requested_to = $course['lecturer_name'] ?? 'Lecturer';
+                    break;
+                }
+            }
+        }
+    } else {
+        $requested_to = 'HOD';
     }
 
     if (empty($start_date)) {
@@ -76,19 +117,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = "Start date cannot be in the past";
         }
     }
+    
+    // Handle file upload
+    if (isset($_FILES['supporting_file']) && $_FILES['supporting_file']['error'] === UPLOAD_ERR_OK) {
+        $allowed_types = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+        $max_size = 5 * 1024 * 1024; // 5MB
+        
+        if (!in_array($_FILES['supporting_file']['type'], $allowed_types)) {
+            $errors[] = "Only PDF, JPG, and PNG files are allowed";
+        }
+        
+        if ($_FILES['supporting_file']['size'] > $max_size) {
+            $errors[] = "File size must not exceed 5MB";
+        }
+        
+        if (empty($errors)) {
+            $upload_dir = 'uploads/leave_documents/';
+            if (!is_dir($upload_dir)) {
+                mkdir($upload_dir, 0755, true);
+            }
+            
+            $file_extension = pathinfo($_FILES['supporting_file']['name'], PATHINFO_EXTENSION);
+            $file_name = 'leave_' . $student['id'] . '_' . time() . '.' . $file_extension;
+            $supporting_file = $upload_dir . $file_name;
+            
+            if (!move_uploaded_file($_FILES['supporting_file']['tmp_name'], $supporting_file)) {
+                $errors[] = "Failed to upload file";
+                $supporting_file = null;
+            }
+        }
+    }
 
     if (empty($errors)) {
         try {
+            // Prepare reason field with leave details
+            $full_reason = "Leave Type: " . $leave_type . "\n";
+            $full_reason .= "Period: " . date('M d, Y', strtotime($start_date)) . " to " . date('M d, Y', strtotime($end_date)) . "\n";
+            $full_reason .= "Reason: " . $reason;
+            
             // Insert leave request
             $stmt = $pdo->prepare("
                 INSERT INTO leave_requests
-                (student_id, leave_type, start_date, end_date, reason, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', NOW())
+                (student_id, requested_to, reason, supporting_file, status, requested_at)
+                VALUES (?, ?, ?, ?, 'pending', NOW())
             ");
-            $stmt->execute([$student['id'], $leave_type, $start_date, $end_date, $reason]);
+            $stmt->execute([$student['id'], $requested_to, $full_reason, $supporting_file]);
 
             $message = "Leave request submitted successfully! You will be notified once it's reviewed.";
             $message_type = "success";
+            
+            // Clear form by redirecting
+            header("Location: leave-status.php?success=1");
+            exit();
 
         } catch (Exception $e) {
             error_log("Leave request error: " . $e->getMessage());
@@ -158,24 +238,20 @@ $current_page = "request-leave";
         }
 
         .page-header {
-            background: white;
-            border-radius: 16px;
-            padding: 24px;
             margin-bottom: 24px;
-            box-shadow: 0 4px 20px rgba(30, 58, 138, 0.08);
-            border: 1px solid rgba(30, 58, 138, 0.1);
         }
 
         .page-title {
-            font-size: 2rem;
-            font-weight: 700;
+            font-size: 1.75rem;
+            font-weight: 600;
             color: var(--text-dark);
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
 
         .page-subtitle {
             color: var(--text-light);
-            font-size: 1rem;
+            font-size: 0.95rem;
+            margin-bottom: 0;
         }
 
         .form-container {
@@ -439,26 +515,68 @@ $current_page = "request-leave";
                 <i class="fas fa-plus-circle"></i>Submit Leave Request
             </h3>
 
-            <form method="POST" id="leaveForm">
+            <form method="POST" id="leaveForm" enctype="multipart/form-data">
                 <div class="row">
                     <div class="col-md-6">
                         <div class="form-group">
                             <label class="form-label">Leave Type *</label>
                             <select name="leave_type" class="form-select" required>
                                 <option value="">Select leave type</option>
-                                <option value="sick">Sick Leave</option>
-                                <option value="personal">Personal Leave</option>
-                                <option value="family">Family Emergency</option>
-                                <option value="medical">Medical Appointment</option>
-                                <option value="other">Other</option>
+                                <option value="Sick Leave">Sick Leave</option>
+                                <option value="Personal Leave">Personal Leave</option>
+                                <option value="Family Emergency">Family Emergency</option>
+                                <option value="Medical Appointment">Medical Appointment</option>
+                                <option value="Other">Other</option>
                             </select>
                         </div>
                     </div>
 
                     <div class="col-md-6">
                         <div class="form-group">
+                            <label class="form-label">Request To *</label>
+                            <select name="request_type" id="requestType" class="form-select" required>
+                                <option value="">Select recipient</option>
+                                <option value="Lecturer">Lecturer</option>
+                                <option value="HOD">Head of Department (HOD)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Course Selection (shown only when Lecturer is selected) -->
+                <div class="row" id="courseRow" style="display: none;">
+                    <div class="col-md-12">
+                        <div class="form-group">
+                            <label class="form-label">Select Course *</label>
+                            <select name="course_id" id="courseSelect" class="form-select">
+                                <option value="">Select a course</option>
+                                <?php foreach ($courses as $course): ?>
+                                    <option value="<?php echo $course['id']; ?>" 
+                                            data-lecturer="<?php echo htmlspecialchars($course['lecturer_name'] ?? 'Not Assigned'); ?>">
+                                        <?php echo htmlspecialchars($course['course_code'] . ' - ' . $course['course_name']); ?>
+                                        <?php if ($course['lecturer_name']): ?>
+                                            (Lecturer: <?php echo htmlspecialchars($course['lecturer_name']); ?>)
+                                        <?php endif; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="text-muted">Your request will be sent to the lecturer of the selected course</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
                             <label class="form-label">Student ID</label>
                             <input type="text" class="form-control" value="<?php echo htmlspecialchars($student['reg_no'], ENT_QUOTES, 'UTF-8'); ?>" readonly>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label class="form-label">Department</label>
+                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($student['department_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?>" readonly>
                         </div>
                     </div>
                 </div>
@@ -477,6 +595,12 @@ $current_page = "request-leave";
                             <input type="date" name="end_date" class="form-control" required min="<?php echo date('Y-m-d'); ?>">
                         </div>
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Supporting Document (Optional)</label>
+                    <input type="file" name="supporting_file" class="form-control" accept=".pdf,.jpg,.jpeg,.png">
+                    <small class="text-muted">Upload medical certificate or other supporting documents (PDF, JPG, PNG - Max 5MB)</small>
                 </div>
 
                 <div class="form-group textarea-group">
@@ -546,6 +670,21 @@ $current_page = "request-leave";
         document.querySelector('input[name="start_date"]').addEventListener('change', function() {
             const endDateInput = document.querySelector('input[name="end_date"]');
             endDateInput.min = this.value;
+        });
+
+        // Show/hide course selection based on request type
+        document.getElementById('requestType').addEventListener('change', function() {
+            const courseRow = document.getElementById('courseRow');
+            const courseSelect = document.getElementById('courseSelect');
+            
+            if (this.value === 'Lecturer') {
+                courseRow.style.display = 'block';
+                courseSelect.required = true;
+            } else {
+                courseRow.style.display = 'none';
+                courseSelect.required = false;
+                courseSelect.value = '';
+            }
         });
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

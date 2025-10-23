@@ -70,11 +70,6 @@ try {
             <i class="fas fa-book me-2"></i>Academic
         </li>
         <li>
-            <a href="my-courses.php" class="<?php echo ($current_page === 'my-courses.php') ? 'active' : ''; ?>">
-                <i class="fas fa-book"></i>My Courses
-            </a>
-        </li>
-        <li>
             <a href="attendance-records.php" class="<?php echo ($current_page === 'attendance-records.php') ? 'active' : ''; ?>">
                 <i class="fas fa-calendar-check"></i>Attendance Records
             </a>
@@ -91,25 +86,6 @@ try {
         <li>
             <a href="leave-status.php" class="<?php echo ($current_page === 'leave-status.php') ? 'active' : ''; ?>">
                 <i class="fas fa-envelope-open-text"></i>Leave Status
-            </a>
-        </li>
-
-        <li class="nav-section">
-            <i class="fas fa-building me-2"></i>Services
-        </li>
-        <li>
-            <a href="library-portal.php" class="<?php echo ($current_page === 'library-portal.php') ? 'active' : ''; ?>">
-                <i class="fas fa-book-open"></i>Library Portal
-            </a>
-        </li>
-        <li>
-            <a href="fee-payments.php" class="<?php echo ($current_page === 'fee-payments.php') ? 'active' : ''; ?>">
-                <i class="fas fa-credit-card"></i>Fee Payments
-            </a>
-        </li>
-        <li>
-            <a href="career-portal.php" class="<?php echo ($current_page === 'career-portal.php') ? 'active' : ''; ?>">
-                <i class="fas fa-briefcase"></i>Career Portal
             </a>
         </li>
 

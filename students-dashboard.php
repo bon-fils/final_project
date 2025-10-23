@@ -36,7 +36,6 @@ try {
 
 // Get dashboard statistics
 $dashboard_stats = [
-    'attendance_rate' => 0,
     'attendance_rate' => null,
     'total_sessions' => 0,
     'present_sessions' => 0,
@@ -45,10 +44,7 @@ $dashboard_stats = [
     'approved_leave' => 0,
     'rejected_leave' => 0,
     'courses_under_85' => 0,
-    'enrolled_courses' => 0,
-    'borrowed_books' => 0,
-    'pending_fees' => 0,
-    'career_opportunities' => 0
+    'enrolled_courses' => 0
 ];
 
 // Get attendance rate
@@ -108,7 +104,7 @@ try {
     $dashboard_stats['rejected_leave'] = 0;
 }
 
-// Get courses under 85%
+// Get courses under 85% - only courses in student's year level
 try {
     $stmt = $pdo->prepare("
         SELECT COUNT(*) as courses_under_85
@@ -117,7 +113,7 @@ try {
             FROM courses c
             LEFT JOIN attendance_sessions ats ON c.id = ats.course_id
             LEFT JOIN attendance_records ar ON ats.id = ar.session_id AND ar.student_id = ?
-            WHERE c.option_id = ?
+            WHERE c.option_id = ? AND c.year = ?
             GROUP BY c.id
             HAVING ROUND(
                 CASE
@@ -127,31 +123,27 @@ try {
             ) < 85 AND COUNT(ar.id) > 0
         ) as under_85_courses
     ");
-    $stmt->execute([$student['id'], $student['option_id']]);
+    $stmt->execute([$student['id'], $student['option_id'], $student['year_level']]);
     $courses_data = $stmt->fetch(PDO::FETCH_ASSOC);
     $dashboard_stats['courses_under_85'] = $courses_data['courses_under_85'] ?? 0;
 } catch (Exception $e) {
     $dashboard_stats['courses_under_85'] = 0;
 }
 
-// Get enrolled courses count
+// Get enrolled courses count - all courses in student's year level within their option
 try {
-    $stmt = $pdo->prepare("SELECT COUNT(*) as enrolled_courses FROM courses WHERE option_id = ?");
-    $stmt->execute([$student['option_id']]);
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as enrolled_courses 
+        FROM courses 
+        WHERE option_id = ? AND year = ? AND status = 'active'
+    ");
+    $stmt->execute([$student['option_id'], $student['year_level']]);
     $courses_count = $stmt->fetch(PDO::FETCH_ASSOC);
     $dashboard_stats['enrolled_courses'] = $courses_count['enrolled_courses'] ?? 0;
 } catch (Exception $e) {
+    error_log("Error getting enrolled courses: " . $e->getMessage());
     $dashboard_stats['enrolled_courses'] = 0;
 }
-
-// Get borrowed books (placeholder - assuming a library system exists)
-$dashboard_stats['borrowed_books'] = 2; // This would come from a library database
-
-// Get pending fees (placeholder - assuming a fee system exists)
-$dashboard_stats['pending_fees'] = 1; // This would come from a fees database
-
-// Get career opportunities (placeholder - assuming a career portal exists)
-$dashboard_stats['career_opportunities'] = 5; // This would come from a career database
 
 $page_title = "Student Dashboard";
 $current_page = "dashboard";
@@ -257,6 +249,16 @@ $current_page = "dashboard";
                 0 8px 32px rgba(0, 0, 0, 0.12),
                 0 4px 16px rgba(0, 0, 0, 0.08),
                 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        /* Hover lift effect */
+        .hover-lift {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .hover-lift:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15) !important;
         }
 
         /* Modern button effects */
@@ -1064,238 +1066,166 @@ $current_page = "dashboard";
 
     <!-- Main Content -->
     <div class="main-content">
-        <!-- Welcome Section -->
-        <div class="welcome-section">
-            <div class="welcome-header">
-                <div class="welcome-main">
-                    <h1>Student Dashboard</h1>
-                    <p>Welcome back, <?php echo htmlspecialchars($student['first_name'], ENT_QUOTES, 'UTF-8'); ?>! Here's your complete academic overview.</p>
-                </div>
-                <div class="welcome-avatar">
-                    <?php echo strtoupper(substr($student['first_name'], 0, 1) . substr($student['last_name'], 0, 1)); ?>
-                </div>
-            </div>
+        <!-- Page Header -->
+        <div class="mb-4">
+            <h2 class="mb-1">Welcome back, <?php echo htmlspecialchars($student['first_name'], ENT_QUOTES, 'UTF-8'); ?>! 👋</h2>
+            <p class="text-muted mb-0">
+                <i class="fas fa-user-graduate me-2"></i><?php echo htmlspecialchars($student['reg_no'], ENT_QUOTES, 'UTF-8'); ?> | 
+                <i class="fas fa-graduation-cap me-2 ms-2"></i><?php echo htmlspecialchars($student['option_name'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?> - Year <?php echo htmlspecialchars($student['year_level'], ENT_QUOTES, 'UTF-8'); ?>
+            </p>
         </div>
 
-        <!-- Dashboard Overview Cards -->
-        <div class="dashboard-overview">
-            <h4 class="section-title">
-                <i class="fas fa-chart-bar me-2"></i>Academic Overview
-            </h4>
-            <div class="overview-grid">
-                <!-- Academic Performance Row -->
-                <div class="metric-row">
-                    <div class="metric-card primary">
-                        <div class="metric-icon">
-                            <i class="fas fa-chart-line"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value">
-                                <?php if ($dashboard_stats['attendance_rate'] !== null): ?>
-                                    <?php echo htmlspecialchars($dashboard_stats['attendance_rate']); ?>%
-                                <?php else: ?>
-                                    <small class="text-muted">No data</small>
-                                <?php endif; ?>
+        <!-- Statistics Cards -->
+        <div class="row g-4 mb-4">
+            <!-- Attendance Rate Card -->
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                <i class="fas fa-chart-line text-white fa-lg"></i>
                             </div>
-                            <div class="metric-label">Attendance Rate</div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Attendance Rate</h6>
+                                <h3 class="mb-0 fw-bold">
+                                    <?php if ($dashboard_stats['attendance_rate'] !== null): ?>
+                                        <?php echo htmlspecialchars((string)$dashboard_stats['attendance_rate']); ?>%
+                                    <?php else: ?>
+                                        <small class="text-muted">No data</small>
+                                    <?php endif; ?>
+                                </h3>
+                            </div>
                         </div>
-                    </div>
-
-                    <div class="metric-card primary">
-                        <div class="metric-icon">
-                            <i class="fas fa-book"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['enrolled_courses']); ?></div>
-                            <div class="metric-label">Enrolled Courses</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card primary">
-                        <div class="metric-icon">
-                            <i class="fas fa-calendar-check"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['total_sessions']); ?></div>
-                            <div class="metric-label">Total Sessions</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card primary">
-                        <div class="metric-icon">
-                            <i class="fas fa-graduation-cap"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($student['year_level']); ?></div>
-                            <div class="metric-label">Academic Year</div>
-                        </div>
+                        <small class="text-muted">
+                            <i class="fas fa-check-circle text-success me-1"></i>
+                            <?php echo htmlspecialchars((string)$dashboard_stats['present_sessions']); ?> / <?php echo htmlspecialchars((string)$dashboard_stats['total_sessions']); ?> sessions attended
+                        </small>
                     </div>
                 </div>
+            </div>
 
-                <!-- Leave Management Row -->
-                <div class="metric-row">
-                    <div class="metric-card secondary">
-                        <div class="metric-icon">
-                            <i class="fas fa-plus-circle"></i>
+            <!-- Enrolled Courses Card -->
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                                <i class="fas fa-book text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Enrolled Courses</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo htmlspecialchars((string)$dashboard_stats['enrolled_courses']); ?></h3>
+                            </div>
                         </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['pending_leave']); ?></div>
-                            <div class="metric-label">Pending Leave</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card secondary">
-                        <div class="metric-icon">
-                            <i class="fas fa-check-circle"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['approved_leave']); ?></div>
-                            <div class="metric-label">Approved Leave</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card secondary">
-                        <div class="metric-icon">
-                            <i class="fas fa-times-circle"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['rejected_leave']); ?></div>
-                            <div class="metric-label">Rejected Leave</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card secondary">
-                        <div class="metric-icon">
-                            <i class="fas fa-list-check"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['total_leave_requests']); ?></div>
-                            <div class="metric-label">Total Requests</div>
-                        </div>
+                        <small class="text-muted">
+                            <i class="fas fa-graduation-cap text-info me-1"></i>
+                            Year <?php echo htmlspecialchars($student['year_level']); ?>
+                        </small>
                     </div>
                 </div>
+            </div>
 
-                <!-- Academic Alerts & Services Row -->
-                <div class="metric-row">
-                    <div class="metric-card warning">
-                        <div class="metric-icon">
-                            <i class="fas fa-exclamation-triangle"></i>
+            <!-- Total Leave Requests Card -->
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                                <i class="fas fa-file-signature text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Leave Requests</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo htmlspecialchars((string)$dashboard_stats['total_leave_requests']); ?></h3>
+                            </div>
                         </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['courses_under_85']); ?></div>
-                            <div class="metric-label">Courses Under 85%</div>
-                        </div>
+                        <small class="text-muted">
+                            <i class="fas fa-clock text-warning me-1"></i>
+                            <?php echo htmlspecialchars((string)$dashboard_stats['pending_leave']); ?> pending
+                        </small>
                     </div>
+                </div>
+            </div>
 
-                    <div class="metric-card tertiary">
-                        <div class="metric-icon">
-                            <i class="fas fa-book-open"></i>
+            <!-- Courses Under 85% Card -->
+            <div class="col-md-3">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle p-3 me-3" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                                <i class="fas fa-exclamation-triangle text-white fa-lg"></i>
+                            </div>
+                            <div>
+                                <h6 class="text-muted mb-0 small">Courses Under 85%</h6>
+                                <h3 class="mb-0 fw-bold"><?php echo htmlspecialchars((string)$dashboard_stats['courses_under_85']); ?></h3>
+                            </div>
                         </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['borrowed_books']); ?></div>
-                            <div class="metric-label">Borrowed Books</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card tertiary">
-                        <div class="metric-icon">
-                            <i class="fas fa-credit-card"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['pending_fees']); ?></div>
-                            <div class="metric-label">Pending Fees</div>
-                        </div>
-                    </div>
-
-                    <div class="metric-card tertiary">
-                        <div class="metric-icon">
-                            <i class="fas fa-briefcase"></i>
-                        </div>
-                        <div class="metric-content">
-                            <div class="metric-value"><?php echo htmlspecialchars($dashboard_stats['career_opportunities']); ?></div>
-                            <div class="metric-label">Career Opportunities</div>
-                        </div>
+                        <small class="text-muted">
+                            <?php if ($dashboard_stats['courses_under_85'] > 0): ?>
+                                <i class="fas fa-exclamation-circle text-danger me-1"></i>Needs attention
+                            <?php else: ?>
+                                <i class="fas fa-check-circle text-success me-1"></i>All good!
+                            <?php endif; ?>
+                        </small>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- No Courses Alert -->
+        <?php if ($dashboard_stats['enrolled_courses'] == 0): ?>
+        <div class="alert alert-warning alert-dismissible fade show" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <strong>No Courses Found!</strong> 
+            There are currently no courses available for <strong><?php echo htmlspecialchars($student['option_name']); ?> - Year <?php echo htmlspecialchars((string)$student['year_level']); ?></strong>.
+            Please contact your academic advisor or administrator.
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        <?php endif; ?>
 
         <!-- Quick Actions -->
-        <div class="quick-actions-section">
-            <h4 class="section-title">
-                <i class="fas fa-bolt me-2"></i>Quick Actions
-            </h4>
-            <div class="actions-grid">
-                <a href="attendance-records.php" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-calendar-check"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>View Attendance</h6>
-                        <p>Check your attendance records</p>
+        <h5 class="mb-3 mt-4"><i class="fas fa-bolt me-2"></i>Quick Actions</h5>
+        <div class="row g-3">
+            <div class="col-md-3">
+                <a href="attendance-records.php" class="card border-0 shadow-sm text-decoration-none h-100 hover-lift">
+                    <div class="card-body text-center">
+                        <div class="rounded-circle p-3 mx-auto mb-3" style="width: 60px; height: 60px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                            <i class="fas fa-calendar-check text-white fa-lg"></i>
+                        </div>
+                        <h6 class="mb-1">View Attendance</h6>
+                        <small class="text-muted">Check your records</small>
                     </div>
                 </a>
-                <a href="request-leave.php" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-file-signature"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Request Leave</h6>
-                        <p>Submit leave application</p>
-                    </div>
-                </a>
-                <a href="leave-status.php" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-envelope-open-text"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Leave Status</h6>
-                        <p>Check your leave requests</p>
+            </div>
+            <div class="col-md-3">
+                <a href="request-leave.php" class="card border-0 shadow-sm text-decoration-none h-100 hover-lift">
+                    <div class="card-body text-center">
+                        <div class="rounded-circle p-3 mx-auto mb-3" style="width: 60px; height: 60px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                            <i class="fas fa-file-signature text-white fa-lg"></i>
+                        </div>
+                        <h6 class="mb-1">Request Leave</h6>
+                        <small class="text-muted">Submit application</small>
                     </div>
                 </a>
-                <a href="student-profile.php" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-user-cog"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>My Profile</h6>
-                        <p>View and edit your profile</p>
-                    </div>
-                </a>
-                <a href="#" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-book-open"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Library Portal</h6>
-                        <p>Browse and borrow books</p>
+            </div>
+            <div class="col-md-3">
+                <a href="leave-status.php" class="card border-0 shadow-sm text-decoration-none h-100 hover-lift">
+                    <div class="card-body text-center">
+                        <div class="rounded-circle p-3 mx-auto mb-3" style="width: 60px; height: 60px; background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                            <i class="fas fa-envelope-open-text text-white fa-lg"></i>
+                        </div>
+                        <h6 class="mb-1">Leave Status</h6>
+                        <small class="text-muted">Check requests</small>
                     </div>
                 </a>
-                <a href="#" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-credit-card"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Fee Payments</h6>
-                        <p>Manage your payments</p>
-                    </div>
-                </a>
-                <a href="#" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-briefcase"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Career Portal</h6>
-                        <p>Explore opportunities</p>
-                    </div>
-                </a>
-                <a href="#" class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-calendar-alt"></i>
-                    </div>
-                    <div class="action-content">
-                        <h6>Academic Calendar</h6>
-                        <p>View important dates</p>
+            </div>
+            <div class="col-md-3">
+                <a href="student-profile.php" class="card border-0 shadow-sm text-decoration-none h-100 hover-lift">
+                    <div class="card-body text-center">
+                        <div class="rounded-circle p-3 mx-auto mb-3" style="width: 60px; height: 60px; background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                            <i class="fas fa-user-cog text-white fa-lg"></i>
+                        </div>
+                        <h6 class="mb-1">My Profile</h6>
+                        <small class="text-muted">Edit profile</small>
                     </div>
                 </a>
             </div>
