@@ -209,7 +209,7 @@ try {
  * Check if ESP32 is connected and responding
  */
 function checkESP32Connection() {
-    $esp32_ip = '192.168.137.93'; // Update this to match your ESP32 IP
+    $esp32_ip = '192.168.137.129'; // Update this to match your ESP32 IP
     $timeout = 2;
     
     $context = stream_context_create([

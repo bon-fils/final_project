@@ -6,7 +6,7 @@
 
 class FingerprintEnrollment {
     constructor() {
-        this.esp32IP = window.ESP32_IP || '192.168.137.93';
+        this.esp32IP = window.ESP32_IP || '192.168.137.129';
         this.esp32Port = window.ESP32_PORT || 80;
         this.esp32URL = `http://${this.esp32IP}:${this.esp32Port}`;
         

@@ -1,0 +1,173 @@
+-- ============================================
+-- DATABASE CLEANUP SCRIPT
+-- For rp_attendance_system
+-- ============================================
+
+-- 1. REMOVE DUPLICATE COURSES
+-- ============================================
+-- Keep only unique courses, remove duplicates (IDs 32-41)
+
+DELETE FROM courses 
+WHERE id IN (32, 33, 34, 35, 36, 37, 38, 39, 40, 41);
+
+-- Verify deletion
+SELECT COUNT(*) as remaining_courses FROM courses;
+
+
+-- 2. FIX EMPTY YEAR LEVELS
+-- ============================================
+-- Update students with empty year_level
+
+UPDATE students 
+SET year_level = '1' 
+WHERE year_level = '' OR year_level IS NULL;
+
+-- Verify fix
+SELECT id, reg_no, year_level FROM students WHERE year_level = '';
+
+
+-- 3. ADD UNIQUE CONSTRAINT TO COURSES
+-- ============================================
+-- Prevent duplicate courses in future
+
+ALTER TABLE courses 
+ADD UNIQUE KEY unique_course (course_code, option_id, year);
+
+
+-- 4. ADD PERFORMANCE INDEXES
+-- ============================================
+
+-- Student lookups by option and year
+ALTER TABLE students 
+ADD INDEX idx_option_year (option_id, year_level);
+
+-- Student lookup by reg_no
+ALTER TABLE students 
+ADD INDEX idx_reg_no (reg_no);
+
+-- Course lookups
+ALTER TABLE courses 
+ADD INDEX idx_option_year (option_id, year);
+
+ALTER TABLE courses 
+ADD INDEX idx_lecturer (lecturer_id);
+
+-- Attendance queries
+ALTER TABLE attendance_records 
+ADD INDEX idx_session_student (session_id, student_id);
+
+ALTER TABLE attendance_sessions 
+ADD INDEX idx_course_date (course_id, session_date);
+
+ALTER TABLE attendance_sessions 
+ADD INDEX idx_lecturer_date (lecturer_id, session_date);
+
+
+-- 5. ASSIGN LECTURERS TO COURSES (EXAMPLE)
+-- ============================================
+-- Update these based on your actual lecturer assignments
+
+-- Example: Assign lecturer 1 to ICT courses
+UPDATE courses 
+SET lecturer_id = 1 
+WHERE id IN (11, 12, 13) AND lecturer_id IS NULL;
+
+-- Example: Assign lecturer 2 to other courses
+UPDATE courses 
+SET lecturer_id = 2 
+WHERE id IN (14, 15) AND lecturer_id IS NULL;
+
+-- Verify assignments
+SELECT id, course_code, course_name, lecturer_id 
+FROM courses 
+WHERE lecturer_id IS NULL;
+
+
+-- 6. VERIFY DATA INTEGRITY
+-- ============================================
+
+-- Check for students without valid option_id
+SELECT s.id, s.reg_no, s.option_id 
+FROM students s 
+LEFT JOIN options o ON s.option_id = o.id 
+WHERE o.id IS NULL;
+
+-- Check for courses without valid option_id
+SELECT c.id, c.course_code, c.option_id 
+FROM courses c 
+LEFT JOIN options o ON c.option_id = o.id 
+WHERE c.option_id IS NOT NULL AND o.id IS NULL;
+
+-- Check for attendance records with invalid student_id
+SELECT ar.id, ar.student_id 
+FROM attendance_records ar 
+LEFT JOIN students s ON ar.student_id = s.id 
+WHERE s.id IS NULL;
+
+-- Check for attendance sessions with invalid course_id
+SELECT ats.id, ats.course_id 
+FROM attendance_sessions ats 
+LEFT JOIN courses c ON ats.course_id = c.id 
+WHERE c.id IS NULL;
+
+
+-- 7. SUMMARY STATISTICS
+-- ============================================
+
+-- Total counts
+SELECT 
+    (SELECT COUNT(*) FROM students WHERE status = 'active') as active_students,
+    (SELECT COUNT(*) FROM courses WHERE status = 'active') as active_courses,
+    (SELECT COUNT(*) FROM lecturers) as total_lecturers,
+    (SELECT COUNT(*) FROM departments WHERE status = 'active') as active_departments,
+    (SELECT COUNT(*) FROM options WHERE status = 'active') as active_options,
+    (SELECT COUNT(*) FROM attendance_sessions) as total_sessions,
+    (SELECT COUNT(*) FROM attendance_records) as total_records;
+
+-- Students per option
+SELECT 
+    o.name as option_name,
+    s.year_level,
+    COUNT(*) as student_count
+FROM students s
+JOIN options o ON s.option_id = o.id
+WHERE s.status = 'active'
+GROUP BY o.id, s.year_level
+ORDER BY o.name, s.year_level;
+
+-- Courses per department
+SELECT 
+    d.name as department_name,
+    COUNT(*) as course_count,
+    SUM(CASE WHEN c.lecturer_id IS NOT NULL THEN 1 ELSE 0 END) as assigned_courses,
+    SUM(CASE WHEN c.lecturer_id IS NULL THEN 1 ELSE 0 END) as unassigned_courses
+FROM courses c
+JOIN departments d ON c.department_id = d.id
+WHERE c.status = 'active'
+GROUP BY d.id
+ORDER BY d.name;
+
+-- Attendance statistics
+SELECT 
+    DATE(ats.session_date) as date,
+    COUNT(DISTINCT ats.id) as sessions,
+    COUNT(ar.id) as total_records,
+    SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present,
+    SUM(CASE WHEN ar.status = 'absent' THEN 1 ELSE 0 END) as absent,
+    ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / COUNT(ar.id), 2) as attendance_rate
+FROM attendance_sessions ats
+LEFT JOIN attendance_records ar ON ats.id = ar.session_id
+GROUP BY DATE(ats.session_date)
+ORDER BY date DESC
+LIMIT 10;
+
+
+-- ============================================
+-- END OF CLEANUP SCRIPT
+-- ============================================
+
+-- NOTES:
+-- 1. Backup your database before running this script
+-- 2. Review each section before executing
+-- 3. Adjust lecturer assignments based on your needs
+-- 4. Run verification queries to ensure data integrity

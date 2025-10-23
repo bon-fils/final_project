@@ -1,0 +1,135 @@
+-- ============================================
+-- FIX COURSES WITHOUT option_id
+-- ============================================
+
+-- 1. CHECK CURRENT STATE
+-- ============================================
+SELECT 
+    id, 
+    course_code, 
+    course_name, 
+    option_id, 
+    year,
+    lecturer_id
+FROM courses 
+WHERE option_id IS NULL OR lecturer_id IS NULL;
+
+
+-- 2. ASSIGN option_id TO ICT COURSES
+-- ============================================
+-- ICT courses should have option_id = 17 (Information Technology)
+
+UPDATE courses 
+SET option_id = 17 
+WHERE course_code IN ('ICT201', 'ICT401', 'ICT501') 
+  AND option_id IS NULL;
+
+-- Verify
+SELECT id, course_code, course_name, option_id 
+FROM courses 
+WHERE course_code LIKE 'ICT%';
+
+
+-- 3. ASSIGN LECTURERS TO COURSES
+-- ============================================
+-- Replace '1' with your actual lecturer ID
+
+-- Assign lecturer 1 to ICT101
+UPDATE courses SET lecturer_id = 1 WHERE id = 11 AND lecturer_id IS NULL;
+
+-- Assign lecturer 1 to other ICT courses
+UPDATE courses 
+SET lecturer_id = 1 
+WHERE course_code IN ('ICT201', 'ICT301', 'ICT401', 'ICT501') 
+  AND lecturer_id IS NULL;
+
+-- Verify
+SELECT id, course_code, course_name, lecturer_id 
+FROM courses 
+WHERE course_code LIKE 'ICT%';
+
+
+-- 4. VERIFY STUDENT MATCHING
+-- ============================================
+-- Check if students now match courses
+
+SELECT 
+    c.id as course_id,
+    c.course_code,
+    c.course_name,
+    c.option_id,
+    c.year,
+    COUNT(DISTINCT s.id) as student_count
+FROM courses c
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+WHERE c.course_code LIKE 'ICT%'
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+
+-- 5. CHECK ATTENDANCE DATA
+-- ============================================
+-- Verify attendance sessions exist
+
+SELECT 
+    c.course_code,
+    c.course_name,
+    COUNT(DISTINCT ats.id) as sessions,
+    COUNT(DISTINCT ar.student_id) as students_with_attendance
+FROM courses c
+LEFT JOIN attendance_sessions ats ON c.id = ats.course_id
+LEFT JOIN attendance_records ar ON ats.id = ar.session_id
+WHERE c.course_code LIKE 'ICT%'
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+
+-- 6. FINAL VERIFICATION
+-- ============================================
+-- This should match what the reports show
+
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    o.name as option_name,
+    c.year,
+    c.lecturer_id,
+    COUNT(DISTINCT s.id) as enrolled_students,
+    COUNT(DISTINCT ats.id) as total_sessions
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+LEFT JOIN attendance_sessions ats ON c.id = ats.course_id
+WHERE c.lecturer_id = 1  -- Replace with your lecturer ID
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+
+-- ============================================
+-- EXPECTED RESULTS
+-- ============================================
+
+-- ICT101 (option_id=17, year=1):
+--   Should show 3 students (IDs: 14, 23, 25)
+--   Should show 3-4 sessions
+
+-- ICT201 (option_id=17, year=2):
+--   Should show students in Year 2 of IT option
+
+-- ICT501 (option_id=17, year=4):
+--   Should show students in Year 4 of IT option
+
+
+-- ============================================
+-- NOTES
+-- ============================================
+
+-- 1. Replace lecturer_id = 1 with your actual lecturer ID
+-- 2. Check option_id = 17 is correct for Information Technology
+-- 3. Verify year_level in students table is '1', '2', '3', or '4'
+-- 4. Run verification queries to confirm data

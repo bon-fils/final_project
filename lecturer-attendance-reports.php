@@ -1,3 +1,124 @@
+<?php
+/**
+ * Lecturer Attendance Reports - Direct Database Access
+ * Based on successful test-lecturer-reports.php pattern
+ */
+session_start();
+require_once "config.php";
+require_once "session_check.php";
+require_role(['lecturer', 'hod', 'admin']);
+
+$lecturer_id = $_SESSION['lecturer_id'] ?? null;
+if (!$lecturer_id) {
+    header("Location: login.php");
+    exit();
+}
+
+// Use global $pdo from config.php
+global $pdo;
+
+// Get lecturer info
+$lecturer_stmt = $pdo->prepare("
+    SELECT 
+        l.id as lecturer_id,
+        l.user_id,
+        l.department_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        d.name as department_name
+    FROM lecturers l
+    JOIN users u ON l.user_id = u.id
+    LEFT JOIN departments d ON l.department_id = d.id
+    WHERE l.id = ?
+");
+$lecturer_stmt->execute([$lecturer_id]);
+$lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$lecturer) {
+    die("Lecturer record not found. Please contact administrator.");
+}
+
+// Get all courses for this lecturer with stats
+$courses_stmt = $pdo->prepare("
+    SELECT 
+        c.id,
+        c.course_code,
+        c.course_name,
+        c.option_id,
+        o.name as option_name,
+        c.year,
+        c.department_id
+    FROM courses c
+    LEFT JOIN options o ON c.option_id = o.id
+    WHERE c.lecturer_id = ? AND c.status = 'active'
+    ORDER BY c.year, c.course_code
+");
+$courses_stmt->execute([$lecturer_id]);
+$courses = $courses_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get detailed stats for each course (same as test page)
+$course_stats = [];
+foreach ($courses as $course) {
+    // Count students enrolled in this course
+    $student_stmt = $pdo->prepare("
+        SELECT COUNT(DISTINCT s.id) as count
+        FROM students s
+        WHERE s.option_id = ? 
+          AND CAST(s.year_level AS UNSIGNED) = ? 
+          AND s.status = 'active'
+    ");
+    $student_stmt->execute([$course['option_id'], $course['year']]);
+    $student_count = $student_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+    
+    // Count sessions for this course
+    $session_stmt = $pdo->prepare("
+        SELECT COUNT(*) as count
+        FROM attendance_sessions
+        WHERE course_id = ?
+    ");
+    $session_stmt->execute([$course['id']]);
+    $session_count = $session_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+    
+    // Get attendance statistics
+    $attendance_stmt = $pdo->prepare("
+        SELECT 
+            COUNT(*) as total_records,
+            SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present_count
+        FROM attendance_records ar
+        JOIN attendance_sessions ats ON ar.session_id = ats.id
+        WHERE ats.course_id = ?
+    ");
+    $attendance_stmt->execute([$course['id']]);
+    $attendance_data = $attendance_stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_records = $attendance_data['total_records'] ?? 0;
+    $present_count = $attendance_data['present_count'] ?? 0;
+    
+    // Calculate based on total possible records (students × sessions)
+    $total_possible_records = $student_count * $session_count;
+    $avg_attendance = $total_possible_records > 0 ? round(($present_count / $total_possible_records) * 100, 2) : 0;
+    
+    $course_stats[] = [
+        'id' => $course['id'],
+        'course_code' => $course['course_code'],
+        'course_name' => $course['course_name'],
+        'option_name' => $course['option_name'] ?? 'N/A',
+        'year' => $course['year'],
+        'student_count' => $student_count,
+        'session_count' => $session_count,
+        'total_records' => $total_records,
+        'present_count' => $present_count,
+        'avg_attendance' => $avg_attendance
+    ];
+}
+
+// Calculate overall statistics
+$total_courses = count($course_stats);
+$total_students = array_sum(array_column($course_stats, 'student_count'));
+$total_sessions = array_sum(array_column($course_stats, 'session_count'));
+$avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_stats, 'avg_attendance')) / $total_courses, 2) : 0;
+?>
 <!DOCTYPE html>
 <html lang="en">
 
@@ -538,21 +659,7 @@
             </div>
         </div>
 
-        <div class="topbar">
-            <div class="d-flex align-items-center justify-content-end">
-                <div class="d-flex gap-2 align-items-center">
-                    <div class="badge bg-primary fs-6 px-3 py-2">
-                        <i class="fas fa-clock me-1"></i>Live Updates
-                    </div>
-                    <div class="badge bg-success fs-6 px-3 py-2">
-                        <i class="fas fa-chalkboard-teacher me-1"></i>Lecturer
-                    </div>
-                    <button class="btn btn-outline-primary btn-sm" id="refreshReports" title="Refresh Report Data">
-                        <i class="fas fa-sync-alt me-1"></i>Refresh
-                    </button>
-                </div>
-            </div>
-        </div>
+      
 
         <div class="loading-overlay d-none" id="loadingOverlay">
             <div class="text-center text-white">
@@ -567,91 +674,205 @@
         <!-- Alert Messages -->
         <div id="alertBox" class="mb-4"></div>
 
-        <!-- Filter Controls -->
-        <div class="filter-controls">
-            <div class="row g-3">
-                <div class="col-md-3">
-                    <label for="reportType" class="form-label fw-bold" style="color: #000000;">Report Type</label>
-                    <select class="form-select" id="reportType" onchange="updateFilters()" style="color: #000000;">
-                        <option value="course" style="color: #000000;">Course Report</option>
-                        <option value="class" style="color: #000000;">Class Report</option>
-                        <option value="department" style="color: #000000;">Department Report</option>
-                    </select>
-                </div>
-                <div class="col-md-3" id="departmentFilter" style="display: none;">
-                    <label for="departmentSelect" class="form-label fw-bold" style="color: #000000;">Department</label>
-                    <select class="form-select" id="departmentSelect" style="color: #000000;">
-                        <option value="" style="color: #000000;">Select Department</option>
-                        <option value="1" style="color: #000000;">Computer Science</option>
-                        <option value="2" style="color: #000000;">Information Technology</option>
-                        <option value="3" style="color: #000000;">Electrical Engineering</option>
-                        <option value="4" style="color: #000000;">Mechanical Engineering</option>
-                    </select>
-                </div>
-                <div class="col-md-3" id="classFilter" style="display: none;">
-                    <label for="classSelect" class="form-label fw-bold" style="color: #000000;">Class/Year</label>
-                    <select class="form-select" id="classSelect" style="color: #000000;">
-                        <option value="" style="color: #000000;">Select Class</option>
-                        <option value="1" style="color: #000000;">Year 1</option>
-                        <option value="2" style="color: #000000;">Year 2</option>
-                        <option value="3" style="color: #000000;">Year 3</option>
-                        <option value="4" style="color: #000000;">Year 4</option>
-                    </select>
-                </div>
-                <div class="col-md-3" id="courseFilter">
-                    <label for="courseSelect" class="form-label fw-bold" style="color: #000000;">Course</label>
-                    <select class="form-select" id="courseSelect" style="color: #000000;">
-                        <option value="" style="color: #000000;">Select Course</option>
-                        <option value="1" style="color: #000000;">Introduction to Programming</option>
-                        <option value="2" style="color: #000000;">Data Structures</option>
-                        <option value="3" style="color: #000000;">Database Systems</option>
-                        <option value="4" style="color: #000000;">Web Development</option>
-                    </select>
+        <!-- Info Banner -->
+        <!-- <div class="alert alert-info mb-4">
+            <i class="fas fa-info-circle me-2"></i>
+            <strong>Attendance Reports:</strong> Showing all your courses with real-time statistics. 
+            Data is automatically loaded from the database.
+        </div> -->
+
+        <!-- Compact Filter & Summary Section -->
+        <?php if (count($course_stats) > 0): ?>
+        <div class="row g-3 mb-3">
+            <!-- Filter Controls -->
+            <div class="col-lg-7">
+                <div class="card h-100">
+                    <div class="card-body py-2">
+                        <h6 class="mb-2"><i class="fas fa-filter me-2"></i>Filter Courses</h6>
+                        <div class="row g-2">
+                            <div class="col-md-5">
+                                <input type="text" class="form-control form-control-sm" id="filterCourse" placeholder="Search course..." onkeyup="filterCourses()" style="color: #000000;">
+                            </div>
+                            <div class="col-md-3">
+                                <select class="form-select form-select-sm" id="filterYear" onchange="filterCourses()" style="color: #000000;">
+                                    <option value="" style="color: #000000;">All Years</option>
+                                    <option value="1" style="color: #000000;">Year 1</option>
+                                    <option value="2" style="color: #000000;">Year 2</option>
+                                    <option value="3" style="color: #000000;">Year 3</option>
+                                    <option value="4" style="color: #000000;">Year 4</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <select class="form-select form-select-sm" id="filterStatus" onchange="filterCourses()" style="color: #000000;">
+                                    <option value="" style="color: #000000;">All Status</option>
+                                    <option value="excellent" style="color: #000000;">Excellent</option>
+                                    <option value="good" style="color: #000000;">Good</option>
+                                    <option value="average" style="color: #000000;">Average</option>
+                                    <option value="poor" style="color: #000000;">Poor</option>
+                                </select>
+                            </div>
+                            <div class="col-md-1">
+                                <button class="btn btn-outline-secondary btn-sm w-100" onclick="resetFilters()" title="Reset Filters">
+                                    <i class="fas fa-redo"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div class="row g-3 mt-2">
-                <div class="col-md-3">
-                    <label for="startDate" class="form-label fw-bold" style="color: #000000;">Start Date</label>
-                    <input type="date" class="form-control" id="startDate" style="color: #000000;">
-                </div>
-                <div class="col-md-3">
-                    <label for="endDate" class="form-label fw-bold" style="color: #000000;">End Date</label>
-                    <input type="date" class="form-control" id="endDate" style="color: #000000;">
-                </div>
-                <div class="col-md-6 d-flex align-items-end">
-                    <button class="btn btn-primary me-2" onclick="generateReport()">
-                        <i class="fas fa-search"></i>Generate Report
-                    </button>
-                    <button class="btn btn-success me-2" onclick="exportToCSV()">
-                        <i class="fas fa-download"></i>Export CSV
-                    </button>
-                    <button class="btn btn-info" onclick="exportToPDF()">
-                        <i class="fas fa-file-pdf"></i>Export PDF
-                    </button>
+            
+            <!-- Compact Summary Stats -->
+            <div class="col-lg-5">
+                <div class="card h-100">
+                    <div class="card-body py-2">
+                        <h6 class="mb-2"><i class="fas fa-chart-bar me-2"></i>Summary</h6>
+                        <div class="row g-2 text-center">
+                            <div class="col-3">
+                                <div class="p-1">
+                                    <i class="fas fa-book" style="color: #0066cc;"></i>
+                                    <h5 class="mb-0 mt-1" style="color: #000000;"><?php echo $total_courses; ?></h5>
+                                    <small style="color: #666;">Courses</small>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-1">
+                                    <i class="fas fa-users" style="color: #10b981;"></i>
+                                    <h5 class="mb-0 mt-1" style="color: #000000;"><?php echo $total_students; ?></h5>
+                                    <small style="color: #666;">Students</small>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-1">
+                                    <i class="fas fa-calendar-check" style="color: #f59e0b;"></i>
+                                    <h5 class="mb-0 mt-1" style="color: #000000;"><?php echo $total_sessions; ?></h5>
+                                    <small style="color: #666;">Sessions</small>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="p-1">
+                                    <i class="fas fa-percentage" style="color: #06b6d4;"></i>
+                                    <h5 class="mb-0 mt-1" style="color: #000000;"><?php echo $avg_attendance_all; ?>%</h5>
+                                    <small style="color: #666;">Avg</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- Report Content -->
         <div id="reportContent">
-            <div class="empty-state">
-                <i class="fas fa-chart-line"></i>
-                <h5 style="color: #000000;">Select Filters to Generate Report</h5>
-                <p class="mb-0" style="color: #000000;">Choose your report type and parameters above to view attendance data.</p>
-            </div>
+            <?php if (count($course_stats) === 0): ?>
+                <!-- No Courses Found -->
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-triangle fa-3x mb-3" style="color: #ef4444;"></i>
+                    <h5 style="color: #000000;">No Courses Assigned</h5>
+                    <p class="mb-3" style="color: #000000;">You don't have any courses assigned yet. Please contact your administrator.</p>
+                    <div class="alert alert-info d-inline-block">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Need Help?</strong> Run diagnostics to check your setup.
+                    </div>
+                    <div class="mt-3">
+                        <a href="test-lecturer-reports.php" class="btn btn-outline-info">
+                            <i class="fas fa-vial me-2"></i>Run Diagnostics
+                        </a>
+                    </div>
+                </div>
+            <?php else: ?>
+                <!-- Courses Table -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="fas fa-table me-2"></i>All Courses Overview</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Course Code</th>
+                                        <th>Course Name</th>
+                                        <th>Option</th>
+                                        <th>Year</th>
+                                        <th>Students</th>
+                                        <th>Sessions</th>
+                                        <th>Avg Attendance</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($course_stats as $index => $course): ?>
+                                        <?php
+                                        $avg = $course['avg_attendance'];
+                                        if ($avg >= 85) {
+                                            $statusClass = 'bg-success';
+                                            $statusText = 'Excellent';
+                                            $barClass = 'excellent';
+                                        } elseif ($avg >= 75) {
+                                            $statusClass = 'bg-warning';
+                                            $statusText = 'Good';
+                                            $barClass = 'good';
+                                        } elseif ($avg >= 60) {
+                                            $statusClass = 'bg-info';
+                                            $statusText = 'Average';
+                                            $barClass = 'average';
+                                        } else {
+                                            $statusClass = 'bg-danger';
+                                            $statusText = 'Poor';
+                                            $barClass = 'poor';
+                                        }
+                                        ?>
+                                        <tr>
+                                            <td><?php echo $index + 1; ?></td>
+                                            <td><strong><?php echo htmlspecialchars($course['course_code']); ?></strong></td>
+                                            <td><?php echo htmlspecialchars($course['course_name']); ?></td>
+                                            <td><small><?php echo htmlspecialchars($course['option_name']); ?></small></td>
+                                            <td><span class="badge bg-secondary">Year <?php echo $course['year']; ?></span></td>
+                                            <td><span class="badge bg-primary"><?php echo $course['student_count']; ?></span></td>
+                                            <td><span class="badge bg-info"><?php echo $course['session_count']; ?></span></td>
+                                            <td>
+                                                <div class="d-flex align-items-center">
+                                                    <span class="me-2 fw-bold"><?php echo $avg; ?>%</span>
+                                                    <div class="attendance-bar">
+                                                        <div class="attendance-fill <?php echo $barClass; ?>" style="width: <?php echo $avg; ?>%"></div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="status-badge <?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
+                                            <td>
+                                                <button class="btn btn-sm btn-primary" onclick="viewCourseAttendance(<?php echo $course['id']; ?>, '<?php echo htmlspecialchars($course['course_code']); ?>', '<?php echo htmlspecialchars($course['course_name']); ?>')">
+                                                    <i class="fas fa-eye me-1"></i>View Attendance
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 
-    <!-- Student Details Modal -->
-    <div class="modal fade" id="studentDetailsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
+    <!-- Course Attendance Modal -->
+    <div class="modal fade" id="courseAttendanceModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title"><i class="fas fa-user me-2"></i>Student Attendance Details</h5>
+                    <h5 class="modal-title"><i class="fas fa-clipboard-list me-2"></i><span id="modalCourseTitle">Course Attendance Records</span></h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="modal-body" id="studentDetailsContent">
-                    <!-- Content will be populated by JavaScript -->
+                <div class="modal-body" id="courseAttendanceContent">
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-2">Loading attendance records...</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -662,363 +883,13 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        // Demo data
-        const demoData = {
-            departments: [
-                {id: 1, name: 'Computer Science'},
-                {id: 2, name: 'Information Technology'},
-                {id: 3, name: 'Electrical Engineering'},
-                {id: 4, name: 'Mechanical Engineering'}
-            ],
-            courses: [
-                {id: 1, name: 'Introduction to Programming', code: 'CS101'},
-                {id: 2, name: 'Data Structures', code: 'CS201'},
-                {id: 3, name: 'Database Systems', code: 'CS301'},
-                {id: 4, name: 'Web Development', code: 'IT201'}
-            ],
-            students: [
-                {id: 1, name: 'John Doe', reg_no: 'STU001', department: 'Computer Science', year: 1, attendance: 85},
-                {id: 2, name: 'Jane Smith', reg_no: 'STU002', department: 'Computer Science', year: 1, attendance: 92},
-                {id: 3, name: 'Bob Johnson', reg_no: 'STU003', department: 'Information Technology', year: 2, attendance: 78},
-                {id: 4, name: 'Alice Brown', reg_no: 'STU004', department: 'Computer Science', year: 2, attendance: 88},
-                {id: 5, name: 'Charlie Wilson', reg_no: 'STU005', department: 'Electrical Engineering', year: 3, attendance: 65},
-                {id: 6, name: 'Diana Davis', reg_no: 'STU006', department: 'Computer Science', year: 3, attendance: 95},
-                {id: 7, name: 'Eve Miller', reg_no: 'STU007', department: 'Information Technology', year: 1, attendance: 82},
-                {id: 8, name: 'Frank Garcia', reg_no: 'STU008', department: 'Computer Science', year: 2, attendance: 76}
-            ]
-        };
-
-        // Global variables
-        let currentReportData = null;
-
         // Sidebar toggle functionality
         function toggleSidebar() {
             const sidebar = document.querySelector('.sidebar');
             sidebar.classList.toggle('mobile-open');
         }
 
-        // Update filter visibility based on report type
-        function updateFilters() {
-            const reportType = document.getElementById('reportType').value;
-            const departmentFilter = document.getElementById('departmentFilter');
-            const classFilter = document.getElementById('classFilter');
-            const courseFilter = document.getElementById('courseFilter');
-
-            // Hide all filters first
-            departmentFilter.style.display = 'none';
-            classFilter.style.display = 'none';
-            courseFilter.style.display = 'block'; // Always show course filter for lecturers
-
-            // Show relevant filters based on report type
-            switch(reportType) {
-                case 'department':
-                    departmentFilter.style.display = 'block';
-                    break;
-                case 'class':
-                    classFilter.style.display = 'block';
-                    break;
-            }
-        }
-
-        // Generate demo report
-        function generateReport() {
-            const reportType = document.getElementById('reportType').value;
-            const courseId = document.getElementById('courseSelect').value;
-            const departmentId = document.getElementById('departmentSelect').value;
-            const classId = document.getElementById('classSelect').value;
-
-            if (!courseId && reportType === 'course') {
-                showAlert('Please select a course', 'warning');
-                return;
-            }
-
-            // Prevent multiple simultaneous requests
-            if (document.getElementById('loadingOverlay').classList.contains('d-none') === false) {
-                return; // Already loading
-            }
-
-            // Clear previous alerts
-            document.getElementById('alertBox').innerHTML = '';
-
-            // Show loading
-            const loadingOverlay = document.getElementById('loadingOverlay');
-            loadingOverlay.classList.remove('d-none');
-
-            // Update loading text
-            const loadingText = loadingOverlay.querySelector('h5');
-            const loadingSubtext = loadingOverlay.querySelector('p');
-            loadingText.textContent = 'Generating Report';
-            loadingSubtext.textContent = 'Please wait while we process the data...';
-
-            // Simulate API call delay
-            setTimeout(() => {
-                try {
-                    const reportData = generateDemoReportData(reportType, courseId, departmentId, classId);
-                    displayReport(reportData);
-
-                    // Hide loading
-                    loadingOverlay.classList.add('d-none');
-
-                    showAlert('Report generated successfully!', 'success');
-                } catch (error) {
-                    console.error('Report generation error:', error);
-                    loadingOverlay.classList.add('d-none');
-                    showAlert('Failed to generate report. Please try again.', 'error');
-                }
-            }, 1200); // Reduced from 1500ms for better UX
-        }
-
-        // Generate demo report data
-        function generateDemoReportData(reportType, courseId, departmentId, classId) {
-            let filteredStudents = [...demoData.students];
-
-            // Filter based on report type
-            switch(reportType) {
-                case 'course':
-                    // For course reports, show all students (simplified demo)
-                    break;
-                case 'department':
-                    if (departmentId) {
-                        const deptName = demoData.departments.find(d => d.id == departmentId)?.name;
-                        filteredStudents = filteredStudents.filter(s => s.department === deptName);
-                    }
-                    break;
-                case 'class':
-                    if (classId) {
-                        filteredStudents = filteredStudents.filter(s => s.year == classId);
-                    }
-                    break;
-            }
-
-            // Calculate summary
-            const totalStudents = filteredStudents.length;
-            const avgAttendance = totalStudents > 0 ?
-                Math.round(filteredStudents.reduce((sum, s) => sum + s.attendance, 0) / totalStudents) : 0;
-            const above85 = filteredStudents.filter(s => s.attendance >= 85).length;
-            const below85 = filteredStudents.filter(s => s.attendance < 85).length;
-
-            return {
-                type: reportType,
-                students: filteredStudents,
-                summary: {
-                    total_students: totalStudents,
-                    average_attendance: avgAttendance,
-                    students_above_85: above85,
-                    students_below_85: below85
-                }
-            };
-        }
-
-        // Display report
-        function displayReport(data) {
-            const content = document.getElementById('reportContent');
-
-            if (data.students.length === 0) {
-                content.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-info-circle"></i>
-                        <h5 style="color: #000000;">No Data Found</h5>
-                        <p class="mb-0" style="color: #000000;">No students found matching the selected criteria.</p>
-                    </div>
-                `;
-                return;
-            }
-
-            // Store current data for export
-            currentReportData = data;
-
-            let html = `
-                <div class="row g-4 mb-4">
-                    <div class="col-md-3">
-                        <div class="card text-center">
-                            <div class="card-body">
-                                <h3 style="color: #000000;">${data.summary.total_students}</h3>
-                                <p class="mb-0" style="color: #000000;">Total Students</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card text-center">
-                            <div class="card-body">
-                                <h3 style="color: #000000;">${data.summary.average_attendance}%</h3>
-                                <p class="mb-0" style="color: #000000;">Average Attendance</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card text-center">
-                            <div class="card-body">
-                                <h3 style="color: #000000;">${data.summary.students_above_85}</h3>
-                                <p class="mb-0" style="color: #000000;">Above 85%</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card text-center">
-                            <div class="card-body">
-                                <h3 style="color: #000000;">${data.summary.students_below_85}</h3>
-                                <p class="mb-0" style="color: #000000;">Below 85%</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h6 class="mb-0"><i class="fas fa-table me-2"></i>Student Attendance Report</h6>
-                    </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped">
-                                <thead>
-                                    <tr>
-                                        <th>Student Name</th>
-                                        <th>Registration No</th>
-                                        <th>Department</th>
-                                        <th>Year</th>
-                                        <th>Attendance %</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>`;
-
-            data.students.forEach(student => {
-                const percentage = student.attendance;
-                let statusClass = 'bg-danger';
-                let statusText = 'Poor';
-                let barClass = 'poor';
-
-                if (percentage >= 85) {
-                    statusClass = 'bg-success';
-                    statusText = 'Excellent';
-                    barClass = 'excellent';
-                } else if (percentage >= 70) {
-                    statusClass = 'bg-warning';
-                    statusText = 'Good';
-                    barClass = 'good';
-                }
-
-                html += `
-                                    <tr>
-                                        <td>${student.name}</td>
-                                        <td>${student.reg_no}</td>
-                                        <td>${student.department}</td>
-                                        <td>Year ${student.year}</td>
-                                        <td>
-                                            <div class="d-flex align-items-center">
-                                                <div class="me-2 fw-bold">${percentage}%</div>
-                                                <div class="attendance-bar">
-                                                    <div class="attendance-fill ${barClass}" style="width: ${percentage}%"></div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-                                        <td>
-                                            <button class="btn btn-outline-info btn-sm" onclick="showStudentDetails(${student.id})">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                        </td>
-                                    </tr>`;
-            });
-
-            html += `
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>`;
-
-            content.innerHTML = html;
-        }
-
-        // Show student details
-        function showStudentDetails(studentId) {
-            const student = demoData.students.find(s => s.id == studentId);
-            if (!student) return;
-
-            const modal = new bootstrap.Modal(document.getElementById('studentDetailsModal'));
-            const content = document.getElementById('studentDetailsContent');
-
-            content.innerHTML = `
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <h6>Student Information</h6>
-                        <p><strong>Name:</strong> ${student.name}</p>
-                        <p><strong>Registration No:</strong> ${student.reg_no}</p>
-                        <p><strong>Department:</strong> ${student.department}</p>
-                        <p><strong>Year:</strong> Year ${student.year}</p>
-                    </div>
-                    <div class="col-md-6">
-                        <h6>Attendance Summary</h6>
-                        <p><strong>Overall Rate:</strong> ${student.attendance}%</p>
-                        <p><strong>Status:</strong> ${student.attendance >= 85 ? 'Excellent' : student.attendance >= 70 ? 'Good' : 'Needs Improvement'}</p>
-                    </div>
-                </div>
-                <h6>Recent Sessions</h6>
-                <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Course</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>2025-01-15</td>
-                                <td>Introduction to Programming</td>
-                                <td><span class="badge bg-success">Present</span></td>
-                            </tr>
-                            <tr>
-                                <td>2025-01-14</td>
-                                <td>Data Structures</td>
-                                <td><span class="badge bg-success">Present</span></td>
-                            </tr>
-                            <tr>
-                                <td>2025-01-13</td>
-                                <td>Database Systems</td>
-                                <td><span class="badge bg-danger">Absent</span></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>`;
-
-            modal.show();
-        }
-
-        // Export functions
-        function exportToCSV() {
-            if (!currentReportData) {
-                showAlert('Please generate a report first', 'warning');
-                return;
-            }
-
-            let csv = 'Student Name,Registration No,Department,Year,Attendance %,Status\n';
-
-            currentReportData.students.forEach(student => {
-                const status = student.attendance >= 85 ? 'Excellent' :
-                              student.attendance >= 70 ? 'Good' : 'Poor';
-                csv += `"${student.name}","${student.reg_no}","${student.department}","Year ${student.year}","${student.attendance}%","${status}"\n`;
-            });
-
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'lecturer_attendance_report.csv';
-            a.click();
-            window.URL.revokeObjectURL(url);
-
-            showAlert('CSV exported successfully!', 'success');
-        }
-
-        function exportToPDF() {
-            showAlert('PDF export feature coming soon. Use CSV export for now.', 'info');
-        }
-
-        // Alert display function
+        // Simple alert function
         function showAlert(message, type = 'info') {
             const alertClass = type === 'success' ? 'alert-success' :
                               type === 'error' ? 'alert-danger' :
@@ -1036,19 +907,253 @@
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             `;
 
-            document.getElementById('alertBox').appendChild(alert);
-
-            setTimeout(() => {
-                if (alert.parentNode) {
-                    alert.remove();
-                }
-            }, 5000);
+            const alertBox = document.getElementById('alertBox');
+            if (alertBox) {
+                alertBox.appendChild(alert);
+                setTimeout(() => {
+                    if (alert.parentNode) {
+                        alert.remove();
+                    }
+                }, 5000);
+            }
         }
 
-        // Initialize on page load
+        // Client-side filter function (no API calls)
+        function filterCourses() {
+            const searchText = document.getElementById('filterCourse').value.toLowerCase();
+            const filterYear = document.getElementById('filterYear').value;
+            const filterStatus = document.getElementById('filterStatus').value;
+            
+            const rows = document.querySelectorAll('#reportContent tbody tr');
+            let visibleCount = 0;
+            
+            rows.forEach(row => {
+                const courseCode = row.cells[1].textContent.toLowerCase();
+                const courseName = row.cells[2].textContent.toLowerCase();
+                const year = row.cells[4].textContent.replace('Year ', '');
+                const avgPercent = parseFloat(row.cells[7].querySelector('.fw-bold').textContent);
+                
+                // Check search text
+                const matchesSearch = !searchText || 
+                    courseCode.includes(searchText) || 
+                    courseName.includes(searchText);
+                
+                // Check year filter
+                const matchesYear = !filterYear || year === filterYear;
+                
+                // Check status filter
+                let matchesStatus = true;
+                if (filterStatus) {
+                    if (filterStatus === 'excellent' && avgPercent < 85) matchesStatus = false;
+                    if (filterStatus === 'good' && (avgPercent < 75 || avgPercent >= 85)) matchesStatus = false;
+                    if (filterStatus === 'average' && (avgPercent < 60 || avgPercent >= 75)) matchesStatus = false;
+                    if (filterStatus === 'poor' && avgPercent >= 60) matchesStatus = false;
+                }
+                
+                // Show/hide row
+                if (matchesSearch && matchesYear && matchesStatus) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            // Update row numbers
+            let displayIndex = 1;
+            rows.forEach(row => {
+                if (row.style.display !== 'none') {
+                    row.cells[0].textContent = displayIndex++;
+                }
+            });
+            
+            // Show message if no results
+            if (visibleCount === 0) {
+                showAlert('No courses match the current filters', 'info');
+            }
+        }
+        
+        // Reset filters
+        function resetFilters() {
+            document.getElementById('filterCourse').value = '';
+            document.getElementById('filterYear').value = '';
+            document.getElementById('filterStatus').value = '';
+            filterCourses();
+            showAlert('Filters reset', 'success');
+        }
+
+        // View course attendance records
+        function viewCourseAttendance(courseId, courseCode, courseName) {
+            // Update modal title
+            document.getElementById('modalCourseTitle').textContent = `${courseCode} - ${courseName}`;
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('courseAttendanceModal'));
+            modal.show();
+            
+            // Reset content to loading state
+            document.getElementById('courseAttendanceContent').innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading attendance records...</p>
+                </div>
+            `;
+            
+            // Fetch attendance data using PHP
+            fetch(`get-course-attendance.php?course_id=${courseId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        displayAttendanceRecords(data.data);
+                    } else {
+                        document.getElementById('courseAttendanceContent').innerHTML = `
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>
+                                ${data.message || 'No attendance records found for this course.'}
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('courseAttendanceContent').innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-circle me-2"></i>
+                            Error loading attendance records. Please try again.
+                        </div>
+                    `;
+                });
+        }
+        
+        // Display attendance records in modal
+        function displayAttendanceRecords(data) {
+            console.log('Attendance Data:', data); // Debug log
+            
+            const students = data.students || [];
+            const sessions = data.sessions || [];
+            
+            if (students.length === 0) {
+                document.getElementById('courseAttendanceContent').innerHTML = `
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        No students enrolled in this course yet.
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = `
+                <div class="table-responsive">
+                    <table class="table table-bordered table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Student ID</th>
+                                <th>Student Name</th>
+                                <th>Total Sessions</th>
+                                <th>Present</th>
+                                <th>Absent</th>
+                                <th>Attendance %</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            students.forEach((student, index) => {
+                // Use the attendance_percentage from backend (already calculated correctly)
+                const attendancePercent = parseFloat(student.attendance_percentage || 0);
+                
+                let statusClass = 'danger';
+                let statusText = 'Poor';
+                if (attendancePercent >= 85) {
+                    statusClass = 'success';
+                    statusText = 'Excellent';
+                } else if (attendancePercent >= 75) {
+                    statusClass = 'warning';
+                    statusText = 'Good';
+                } else if (attendancePercent >= 60) {
+                    statusClass = 'info';
+                    statusText = 'Average';
+                }
+                
+                html += `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td><strong>${student.reg_no || student.student_id || student.student_id_number}</strong></td>
+                        <td>${student.student_name}</td>
+                        <td><span class="badge bg-secondary">${student.total_sessions || 0}</span></td>
+                        <td><span class="badge bg-success">${student.present_count || 0}</span></td>
+                        <td><span class="badge bg-danger">${student.absent_count || 0}</span></td>
+                        <td>
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar bg-${statusClass}" role="progressbar" 
+                                     style="width: ${attendancePercent}%" 
+                                     aria-valuenow="${attendancePercent}" aria-valuemin="0" aria-valuemax="100">
+                                    ${attendancePercent.toFixed(1)}%
+                                </div>
+                            </div>
+                        </td>
+                        <td><span class="badge bg-${statusClass}">${statusText}</span></td>
+                    </tr>
+                `;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="mt-3">
+                    <h6><i class="fas fa-info-circle me-2"></i>Summary</h6>
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="card text-center">
+                                <div class="card-body py-2">
+                                    <h4>${students.length}</h4>
+                                    <small>Total Students</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card text-center">
+                                <div class="card-body py-2">
+                                    <h4>${sessions.length || data.total_sessions || 0}</h4>
+                                    <small>Total Sessions</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card text-center">
+                                <div class="card-body py-2">
+                                    <h4>${data.average_attendance || 0}%</h4>
+                                    <small>Avg Attendance</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card text-center">
+                                <div class="card-body py-2">
+                                    <button class="btn btn-sm btn-success" onclick="exportAttendance()">
+                                        <i class="fas fa-download me-1"></i>Export
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('courseAttendanceContent').innerHTML = html;
+        }
+
+        // Show success message on page load
         document.addEventListener('DOMContentLoaded', function() {
-            updateFilters();
-            showAlert('Lecturer Attendance Reports loaded successfully!', 'success');
+            <?php if (count($course_stats) > 0): ?>
+                showAlert('Reports loaded successfully! Showing <?php echo $total_courses; ?> courses with <?php echo $total_students; ?> students.', 'success');
+            <?php endif; ?>
         });
     </script>
 </body>

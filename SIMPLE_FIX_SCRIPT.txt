@@ -1,0 +1,45 @@
+Replace the entire <script> section (after Chart.js include) with this:
+
+<script>
+    // Sidebar toggle functionality
+    function toggleSidebar() {
+        const sidebar = document.querySelector('.sidebar');
+        sidebar.classList.toggle('mobile-open');
+    }
+
+    // Simple alert function
+    function showAlert(message, type = 'info') {
+        const alertClass = type === 'success' ? 'alert-success' :
+                          type === 'error' ? 'alert-danger' :
+                          type === 'warning' ? 'alert-warning' : 'alert-info';
+
+        const icon = type === 'success' ? 'fas fa-check-circle' :
+                    type === 'error' ? 'fas fa-exclamation-triangle' :
+                    type === 'warning' ? 'fas fa-exclamation-circle' : 'fas fa-info-circle';
+
+        const alert = document.createElement('div');
+        alert.className = `alert ${alertClass} alert-dismissible fade show`;
+        alert.innerHTML = `
+            <i class="${icon} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+
+        const alertBox = document.getElementById('alertBox');
+        if (alertBox) {
+            alertBox.appendChild(alert);
+            setTimeout(() => {
+                if (alert.parentNode) {
+                    alert.remove();
+                }
+            }, 5000);
+        }
+    }
+
+    // Show success message on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        <?php if (count($course_stats) > 0): ?>
+            showAlert('Reports loaded successfully! Showing <?php echo $total_courses; ?> courses with <?php echo $total_students; ?> students.', 'success');
+        <?php endif; ?>
+    });
+</script>

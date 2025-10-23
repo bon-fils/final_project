@@ -210,12 +210,12 @@ case 'enrolled':
 
 ```javascript
 // When clicking "Capture Fingerprint":
-GET http://192.168.137.93/status 200 OK
-GET http://192.168.137.93/display?message=Click%20Enroll%0AButton! 200 OK
+GET http://192.168.137.129/status 200 OK
+GET http://192.168.137.129/display?message=Click%20Enroll%0AButton! 200 OK
 ✅ ESP32 Sensor Ready!
 
 // When clicking "Enroll with ESP32":
-POST http://192.168.137.93/enroll?id=456&student_name=John%20Doe&reg_no=25RP12345 200 OK
+POST http://192.168.137.129/enroll?id=456&student_name=John%20Doe&reg_no=25RP12345 200 OK
 Response: {success: true, message: "Enrollment started", id: 456}
 
 // After enrollment:

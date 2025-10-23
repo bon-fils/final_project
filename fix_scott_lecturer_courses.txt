@@ -1,0 +1,205 @@
+-- ============================================
+-- FIX FOR LECTURER: scott ad (ID: 3)
+-- Based on test-lecturer-reports.php results
+-- ============================================
+
+-- CURRENT SITUATION:
+-- ✅ Lecturer ID: 3
+-- ✅ Department: ICT (ID: 7)
+-- ✅ 2 courses assigned
+-- ❌ ICT501 missing option_id (NULL)
+-- ❌ ICT101 has 0 students (Year 1, but all students are Year 3)
+-- ✅ 6 students in IT Year 3 (option_id=17, year_level='3')
+
+-- ============================================
+-- FIX 1: Assign option_id to ICT501
+-- ============================================
+
+UPDATE courses 
+SET option_id = 17  -- Information Technology
+WHERE id = 15 
+  AND course_code = 'ICT501'
+  AND option_id IS NULL;
+
+-- Verify
+SELECT id, course_code, course_name, option_id, year 
+FROM courses 
+WHERE id = 15;
+
+-- Expected: option_id should now be 17
+
+
+-- ============================================
+-- FIX 2: Create a Year 3 course for your students
+-- ============================================
+
+-- Option A: Change ICT101 from Year 1 to Year 3
+UPDATE courses 
+SET year = 3 
+WHERE id = 11 
+  AND course_code = 'ICT101';
+
+-- OR Option B: Create a new Year 3 course
+INSERT INTO courses (
+    course_code,
+    course_name,
+    department_id,
+    option_id,
+    lecturer_id,
+    year,
+    credits,
+    status
+) VALUES (
+    'ICT301',
+    'Database Systems',
+    7,      -- ICT Department
+    17,     -- Information Technology
+    3,      -- Your lecturer_id
+    3,      -- Year 3 (matches your students)
+    4,
+    'active'
+);
+
+
+-- ============================================
+-- FIX 3: Verify student matching
+-- ============================================
+
+-- Check which courses will now show students
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.option_id,
+    c.year,
+    COUNT(DISTINCT s.id) as student_count
+FROM courses c
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+WHERE c.lecturer_id = 3
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+-- Expected results:
+-- ICT101: 0 students (if Year 1) OR 6 students (if changed to Year 3)
+-- ICT301: 6 students (if created)
+-- ICT501: 6 students (Year 4 - still 0 because students are Year 3)
+
+
+-- ============================================
+-- RECOMMENDED SOLUTION
+-- ============================================
+
+-- Since you have 6 students in IT Year 3, you need Year 3 courses!
+
+-- Step 1: Fix ICT501 option_id
+UPDATE courses 
+SET option_id = 17 
+WHERE id = 15;
+
+-- Step 2: Change ICT101 to Year 3 (to match your students)
+UPDATE courses 
+SET year = 3 
+WHERE id = 11;
+
+-- Step 3: Change ICT501 to Year 3 (to match your students)
+UPDATE courses 
+SET year = 3 
+WHERE id = 15;
+
+-- Step 4: Verify
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.option_id,
+    o.name as option_name,
+    c.year,
+    COUNT(DISTINCT s.id) as students
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+WHERE c.lecturer_id = 3
+GROUP BY c.id;
+
+-- Expected: Both courses should now show 6 students!
+
+
+-- ============================================
+-- ALTERNATIVE: Keep original years, add Year 3 courses
+-- ============================================
+
+-- If you want to keep ICT101 as Year 1 and ICT501 as Year 4,
+-- and add proper Year 3 courses:
+
+-- Fix ICT501 option_id first
+UPDATE courses SET option_id = 17 WHERE id = 15;
+
+-- Add Year 3 courses
+INSERT INTO courses (course_code, course_name, department_id, option_id, lecturer_id, year, credits, status) 
+VALUES 
+('ICT301', 'Database Management Systems', 7, 17, 3, 3, 4, 'active'),
+('ICT302', 'Web Development', 7, 17, 3, 3, 4, 'active'),
+('ICT303', 'Network Security', 7, 17, 3, 3, 4, 'active');
+
+
+-- ============================================
+-- FINAL VERIFICATION
+-- ============================================
+
+-- Check all your courses with student counts
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.option_id,
+    o.name as option_name,
+    c.year,
+    c.status,
+    COUNT(DISTINCT s.id) as enrolled_students,
+    COUNT(DISTINCT ats.id) as total_sessions
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+LEFT JOIN attendance_sessions ats ON c.id = ats.course_id
+WHERE c.lecturer_id = 3
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+
+-- ============================================
+-- QUICK FIX (RECOMMENDED)
+-- ============================================
+
+-- This is the fastest fix to get your reports working:
+
+-- 1. Fix missing option_id
+UPDATE courses SET option_id = 17 WHERE id = 15 AND option_id IS NULL;
+
+-- 2. Change both courses to Year 3 (to match your students)
+UPDATE courses SET year = 3 WHERE id IN (11, 15);
+
+-- 3. Done! Refresh test page and both courses should show 6 students
+
+
+-- ============================================
+-- NOTES
+-- ============================================
+
+-- Your students:
+-- - All 6 are in option_id = 17 (Information Technology)
+-- - All 6 are in year_level = '3' (Year 3)
+-- - Reg numbers: 22RP05419, 33EERR4, 33RRRRR, EE44RR, RR33RR, WWSSS
+
+-- Your courses need to match:
+-- - option_id = 17
+-- - year = 3
+
+-- After fix, reports will show:
+-- - ICT101: 6 students, 4 sessions
+-- - ICT501: 6 students, 0 sessions

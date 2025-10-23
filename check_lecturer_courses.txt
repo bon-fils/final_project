@@ -1,0 +1,207 @@
+-- ============================================
+-- CHECK LECTURER COURSE ASSIGNMENTS
+-- ============================================
+
+-- 1. CHECK YOUR LECTURER ID
+-- ============================================
+-- Find your lecturer ID from the session
+SELECT 
+    l.id as lecturer_id,
+    l.user_id,
+    u.first_name,
+    u.last_name,
+    u.email,
+    l.department_id,
+    d.name as department_name
+FROM lecturers l
+JOIN users u ON l.user_id = u.id
+LEFT JOIN departments d ON l.department_id = d.id
+ORDER BY l.id;
+
+-- Note: Remember your lecturer_id for next steps
+
+
+-- 2. CHECK COURSES ASSIGNED TO YOU
+-- ============================================
+-- Replace '1' with your actual lecturer_id from step 1
+
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.lecturer_id,
+    c.option_id,
+    o.name as option_name,
+    c.year,
+    c.department_id,
+    d.name as department_name,
+    c.status
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+LEFT JOIN departments d ON c.department_id = d.id
+WHERE c.lecturer_id = 1  -- Replace with your lecturer_id
+ORDER BY c.year, c.course_code;
+
+-- If this returns 0 rows, you have NO courses assigned!
+
+
+-- 3. CHECK ALL COURSES IN YOUR DEPARTMENT
+-- ============================================
+-- See what courses exist in your department
+
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.lecturer_id,
+    CASE 
+        WHEN c.lecturer_id IS NULL THEN 'UNASSIGNED'
+        ELSE CONCAT('Lecturer ', c.lecturer_id)
+    END as assignment_status,
+    c.option_id,
+    o.name as option_name,
+    c.year,
+    c.status
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+WHERE c.department_id = 7  -- Replace with your department_id
+ORDER BY c.year, c.course_code;
+
+
+-- 4. ASSIGN COURSES TO YOURSELF
+-- ============================================
+-- Option A: Assign specific courses by ID
+
+UPDATE courses 
+SET lecturer_id = 1  -- Your lecturer_id
+WHERE id IN (11, 12, 13, 14, 15);  -- Course IDs to assign
+
+-- Option B: Assign all ICT courses to yourself
+
+UPDATE courses 
+SET lecturer_id = 1  -- Your lecturer_id
+WHERE department_id = 7  -- Your department_id
+  AND lecturer_id IS NULL;
+
+-- Option C: Assign courses by course code
+
+UPDATE courses 
+SET lecturer_id = 1  -- Your lecturer_id
+WHERE course_code IN ('ICT101', 'ICT201', 'ICT301', 'ICT401', 'ICT501');
+
+
+-- 5. VERIFY ASSIGNMENT
+-- ============================================
+-- Check that courses are now assigned to you
+
+SELECT 
+    c.id,
+    c.course_code,
+    c.course_name,
+    c.lecturer_id,
+    c.option_id,
+    o.name as option_name,
+    c.year,
+    c.status
+FROM courses c
+LEFT JOIN options o ON c.option_id = o.id
+WHERE c.lecturer_id = 1  -- Your lecturer_id
+ORDER BY c.year, c.course_code;
+
+-- Should now show courses!
+
+
+-- 6. CHECK STUDENTS FOR YOUR COURSES
+-- ============================================
+-- Verify students exist for your courses
+
+SELECT 
+    c.id as course_id,
+    c.course_code,
+    c.course_name,
+    c.option_id,
+    c.year,
+    COUNT(DISTINCT s.id) as student_count
+FROM courses c
+LEFT JOIN students s ON s.option_id = c.option_id 
+                    AND CAST(s.year_level AS UNSIGNED) = c.year
+                    AND s.status = 'active'
+WHERE c.lecturer_id = 1  -- Your lecturer_id
+GROUP BY c.id
+ORDER BY c.year, c.course_code;
+
+
+-- 7. CHECK SESSION DATA
+-- ============================================
+-- See if you have any attendance sessions
+
+SELECT 
+    l.id as lecturer_id,
+    CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+    COUNT(DISTINCT ats.id) as total_sessions,
+    COUNT(DISTINCT ats.course_id) as courses_with_sessions,
+    MIN(ats.session_date) as first_session,
+    MAX(ats.session_date) as last_session
+FROM lecturers l
+JOIN users u ON l.user_id = u.id
+LEFT JOIN attendance_sessions ats ON l.id = ats.lecturer_id
+WHERE l.id = 1  -- Your lecturer_id
+GROUP BY l.id;
+
+
+-- ============================================
+-- QUICK FIX COMMANDS
+-- ============================================
+
+-- If you're lecturer_id = 1 and department = 7 (ICT):
+
+-- Step 1: Assign all ICT courses to yourself
+UPDATE courses 
+SET lecturer_id = 1 
+WHERE department_id = 7 
+  AND lecturer_id IS NULL;
+
+-- Step 2: Make sure courses have option_id
+UPDATE courses 
+SET option_id = 17  -- Information Technology
+WHERE department_id = 7 
+  AND option_id IS NULL;
+
+-- Step 3: Verify
+SELECT 
+    id,
+    course_code,
+    course_name,
+    lecturer_id,
+    option_id,
+    year
+FROM courses 
+WHERE department_id = 7;
+
+
+-- ============================================
+-- EXPECTED RESULTS
+-- ============================================
+
+-- After running the fixes, you should see:
+-- 1. Your lecturer_id in courses.lecturer_id
+-- 2. option_id = 17 for ICT courses
+-- 3. Student counts > 0 for Year 3 courses
+-- 4. Reports page shows your courses
+
+
+-- ============================================
+-- TROUBLESHOOTING
+-- ============================================
+
+-- Problem: "No courses found"
+-- Solution: Run UPDATE commands above to assign courses
+
+-- Problem: "0 students"
+-- Solution: Check option_id and year match students
+
+-- Problem: "N/A for option"
+-- Solution: UPDATE courses SET option_id = 17 WHERE...
+
+-- Problem: Wrong lecturer_id in session
+-- Solution: Check session_check.php and login process
