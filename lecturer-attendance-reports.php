@@ -168,11 +168,12 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
 
         body {
             font-family: 'Segoe UI', sans-serif;
-            background: #0066cc;
+            background: #ffffff;
             min-height: 100vh;
             margin: 0;
             position: relative;
             overflow-x: hidden;
+            color: #000000;
         }
 
         .sidebar {
@@ -181,12 +182,12 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
             left: 0;
             width: 280px;
             height: 100vh;
-            background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
-            border-right: 1px solid rgba(0, 102, 204, 0.1);
+            background: #ffffff;
+            border-right: 1px solid #000000;
             padding: 0;
             overflow-y: auto;
             z-index: 1000;
-            box-shadow: 0 0 20px rgba(0, 102, 204, 0.1);
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
         }
 
         .sidebar .logo {
@@ -255,17 +256,17 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         }
 
         .sidebar-nav a:hover {
-            background: rgba(0, 102, 204, 0.08);
+            background: #f0f0f0;
             color: #000000;
-            border-left-color: #0066cc;
+            border-left-color: #000000;
             transform: translateX(8px);
-            box-shadow: 2px 0 8px rgba(0, 102, 204, 0.15);
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
         }
 
         .sidebar-nav a.active {
-            background: rgba(0, 102, 204, 0.1);
+            background: #f0f0f0;
             color: #000000;
-            border-left-color: #0066cc;
+            border-left-color: #000000;
             font-weight: 600;
         }
 
@@ -296,8 +297,8 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         }
 
         .page-header {
-            background: linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%);
-            border-bottom: 2px solid #0ea5e9;
+            background: #f8f9fa;
+            border-bottom: 2px solid #000000;
             margin-bottom: 30px;
             padding: 30px 0;
             text-align: center;
@@ -351,15 +352,58 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
 
         .btn-primary {
             background: #000000;
-            border: none;
+            border: 1px solid #000000;
             color: white;
         }
 
         .btn-primary:hover {
             background: #333333;
+            border-color: #333333;
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
             color: white;
+        }
+
+        .btn-danger {
+            background: #000000;
+            border: 1px solid #000000;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #333333;
+            border-color: #333333;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-info {
+            background: #000000;
+            border: 1px solid #000000;
+            color: white;
+        }
+
+        .btn-info:hover {
+            background: #333333;
+            border-color: #333333;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-outline-secondary {
+            background: #ffffff;
+            color: #000000;
+            border: 1px solid #000000;
+        }
+
+        .btn-outline-secondary:hover {
+            background: #f0f0f0;
+            color: #000000;
+            border-color: #000000;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
         .form-control, .form-select {
@@ -413,12 +457,12 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 102, 204, 0.9);
+            background: rgba(255, 255, 255, 0.95);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 9999;
-            backdrop-filter: blur(5px);
+            border: 1px solid #000000;
         }
 
         .loading-overlay.d-none {
@@ -554,11 +598,11 @@ $avg_attendance_all = $total_courses > 0 ? round(array_sum(array_column($course_
         }
 
         .filter-controls {
-            background: rgba(255,255,255,0.8);
+            background: #ffffff;
             border-radius: var(--border-radius);
             padding: 20px;
             margin-bottom: 25px;
-            backdrop-filter: blur(10px);
+            border: 1px solid #000000;
         }
 
         .empty-state {

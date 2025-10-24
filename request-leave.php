@@ -34,20 +34,35 @@ try {
     exit();
 }
 
-// Get courses for the student's year and option (with lecturers)
+// Get lecturers for the student's option and year
 try {
+    // Debug: Log student information
+    error_log("Student Info - ID: " . $student['id'] . ", Reg No: " . $student['reg_no'] . ", Year: " . $student['year_level'] . ", Option ID: " . $student['option_id']);
+
+    // Get lecturers by joining courses with options and lecturers
     $stmt = $pdo->prepare("
-        SELECT c.id, c.course_name, c.course_code, c.lecturer_id,
-               CONCAT(l.first_name, ' ', l.last_name) as lecturer_name
-        FROM courses c
-        LEFT JOIN lecturers l ON c.lecturer_id = l.id
-        WHERE c.option_id = ? AND c.year = ? AND c.status = 'active'
-        ORDER BY c.course_name
+        SELECT DISTINCT l.id, l.first_name, l.last_name,
+               CONCAT(l.first_name, ' ', l.last_name) as full_name,
+               COUNT(c.id) as course_count
+        FROM lecturers l
+        JOIN courses c ON l.id = c.lecturer_id
+        JOIN options o ON c.option_id = o.id
+        WHERE o.name = ? AND c.year = ? AND c.status = 'active'
+        GROUP BY l.id, l.first_name, l.last_name
+        ORDER BY l.last_name, l.first_name
     ");
-    $stmt->execute([$student['option_id'], $student['year_level']]);
-    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute([$student['option_name'], $student['year_level']]);
+    $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Debug: Log the lecturers found
+    error_log("Lecturers found for option '" . $student['option_name'] . "' and year " . $student['year_level'] . ": " . count($lecturers));
+    foreach ($lecturers as $lecturer) {
+        error_log("Lecturer: " . $lecturer['full_name'] . " (ID: " . $lecturer['id'] . ", Courses: " . $lecturer['course_count'] . ")");
+    }
+
 } catch (Exception $e) {
-    $courses = [];
+    error_log("Error fetching lecturers: " . $e->getMessage());
+    $lecturers = [];
 }
 
 // Handle form submission
@@ -75,15 +90,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = "Please select who to send the request to";
     }
     
-    // If requesting to lecturer, course must be selected
+    // If requesting to lecturer, lecturer must be selected
     if ($request_type === 'Lecturer') {
-        if (empty($course_id)) {
-            $errors[] = "Please select a course when requesting to lecturer";
+        if (empty($lecturer_id)) {
+            $errors[] = "Please select a lecturer when requesting to lecturer";
         } else {
-            // Get lecturer name from course
-            foreach ($courses as $course) {
-                if ($course['id'] == $course_id) {
-                    $requested_to = $course['lecturer_name'] ?? 'Lecturer';
+            // Get lecturer name from selected lecturer
+            foreach ($lecturers as $lecturer) {
+                if ($lecturer['id'] == $lecturer_id) {
+                    $requested_to = $lecturer['full_name'];
                     break;
                 }
             }
@@ -543,24 +558,31 @@ $current_page = "request-leave";
                     </div>
                 </div>
 
-                <!-- Course Selection (shown only when Lecturer is selected) -->
-                <div class="row" id="courseRow" style="display: none;">
+                <!-- Lecturer Selection (shown only when Lecturer is selected) -->
+                <div class="row" id="lecturerRow" style="display: none;">
                     <div class="col-md-12">
                         <div class="form-group">
-                            <label class="form-label">Select Course *</label>
-                            <select name="course_id" id="courseSelect" class="form-select">
-                                <option value="">Select a course</option>
-                                <?php foreach ($courses as $course): ?>
-                                    <option value="<?php echo $course['id']; ?>" 
-                                            data-lecturer="<?php echo htmlspecialchars($course['lecturer_name'] ?? 'Not Assigned'); ?>">
-                                        <?php echo htmlspecialchars($course['course_code'] . ' - ' . $course['course_name']); ?>
-                                        <?php if ($course['lecturer_name']): ?>
-                                            (Lecturer: <?php echo htmlspecialchars($course['lecturer_name']); ?>)
-                                        <?php endif; ?>
-                                    </option>
-                                <?php endforeach; ?>
+                            <label class="form-label">Select Lecturer *</label>
+                            <select name="lecturer_id" id="lecturerSelect" class="form-select">
+                                <option value="">Select a lecturer</option>
+                                <?php if (empty($lecturers)): ?>
+                                    <option value="" disabled>No lecturers available for your year and option</option>
+                                <?php else: ?>
+                                    <?php foreach ($lecturers as $lecturer): ?>
+                                        <option value="<?php echo $lecturer['id']; ?>">
+                                            <?php echo htmlspecialchars($lecturer['full_name']); ?>
+                                            (<?php echo $lecturer['course_count']; ?> course<?php echo $lecturer['course_count'] > 1 ? 's' : ''; ?>)
+                                        </option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
                             </select>
-                            <small class="text-muted">Your request will be sent to the lecturer of the selected course</small>
+                            <small class="text-muted">Your request will be sent to the selected lecturer</small>
+                            <?php if (empty($lecturers)): ?>
+                                <div class="alert alert-warning mt-2">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>
+                                    <strong>No Lecturers Found:</strong> There are no active lecturers assigned to your year and option. Please contact your administrator.
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
@@ -672,18 +694,18 @@ $current_page = "request-leave";
             endDateInput.min = this.value;
         });
 
-        // Show/hide course selection based on request type
+        // Show/hide lecturer selection based on request type
         document.getElementById('requestType').addEventListener('change', function() {
-            const courseRow = document.getElementById('courseRow');
-            const courseSelect = document.getElementById('courseSelect');
-            
+            const lecturerRow = document.getElementById('lecturerRow');
+            const lecturerSelect = document.getElementById('lecturerSelect');
+
             if (this.value === 'Lecturer') {
-                courseRow.style.display = 'block';
-                courseSelect.required = true;
+                lecturerRow.style.display = 'block';
+                lecturerSelect.required = true;
             } else {
-                courseRow.style.display = 'none';
-                courseSelect.required = false;
-                courseSelect.value = '';
+                lecturerRow.style.display = 'none';
+                lecturerSelect.required = false;
+                lecturerSelect.value = '';
             }
         });
     </script>
