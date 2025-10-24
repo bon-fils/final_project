@@ -86,10 +86,11 @@ if (isset($_SESSION['first_name']) && isset($_SESSION['last_name'])) {
     </nav>
 
     <div class="sidebar-footer">
-        <a href="logout.php" class="nav-link logout-link" title="Logout">
-            <i class="fas fa-sign-out-alt"></i>
-            <span class="nav-text">Logout</span>
-        </a>
+        <?php 
+        // Include secure logout helper
+        require_once __DIR__ . '/logout_helper.php';
+        echo getSecureLogoutLink('nav-link logout-link', 'fas fa-sign-out-alt', '<span class="nav-text">Logout</span>');
+        ?>
     </div>
 </div>
 

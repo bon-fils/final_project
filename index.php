@@ -706,6 +706,55 @@
   <!-- Hero Section -->
   <section class="hero">
     <div class="container">
+      <?php 
+      // Handle logout messages
+      if (isset($_GET['logout'])) {
+          $logout_reason = $_GET['logout'];
+          echo '<div class="row justify-content-center mb-4">';
+          echo '<div class="col-md-8 col-lg-6">';
+          
+          switch ($logout_reason) {
+              case 'success':
+                  echo '<div class="alert alert-success alert-dismissible fade show d-flex align-items-center" role="alert" style="background: rgba(40, 167, 69, 0.9); border: 1px solid rgba(40, 167, 69, 0.3); backdrop-filter: blur(10px);">';
+                  echo '<i class="fas fa-check-circle me-3 fs-5"></i>';
+                  echo '<div><strong>Logout Successful!</strong><br>You have been securely logged out. Thank you for using RP Attendance System.</div>';
+                  echo '<button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>';
+                  echo '</div>';
+                  break;
+              case 'csrf_error':
+                  echo '<div class="alert alert-warning alert-dismissible fade show d-flex align-items-center" role="alert" style="background: rgba(255, 193, 7, 0.9); border: 1px solid rgba(255, 193, 7, 0.3); backdrop-filter: blur(10px);">';
+                  echo '<i class="fas fa-shield-alt me-3 fs-5"></i>';
+                  echo '<div><strong>Security Verification!</strong><br>Logout completed with security verification. Please log in again to continue.</div>';
+                  echo '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+                  echo '</div>';
+                  break;
+              default:
+                  echo '<div class="alert alert-info alert-dismissible fade show d-flex align-items-center" role="alert" style="background: rgba(13, 110, 253, 0.9); border: 1px solid rgba(13, 110, 253, 0.3); backdrop-filter: blur(10px);">';
+                  echo '<i class="fas fa-info-circle me-3 fs-5"></i>';
+                  echo '<div><strong>Session Ended!</strong><br>You have been logged out. Please log in to access the system.</div>';
+                  echo '<button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>';
+                  echo '</div>';
+                  break;
+          }
+          
+          echo '</div>';
+          echo '</div>';
+      }
+      
+      // Handle session timeout message
+      if (isset($_GET['timeout']) && $_GET['timeout'] === '1') {
+          echo '<div class="row justify-content-center mb-4">';
+          echo '<div class="col-md-8 col-lg-6">';
+          echo '<div class="alert alert-warning alert-dismissible fade show d-flex align-items-center" role="alert" style="background: rgba(255, 193, 7, 0.9); border: 1px solid rgba(255, 193, 7, 0.3); backdrop-filter: blur(10px);">';
+          echo '<i class="fas fa-clock me-3 fs-5"></i>';
+          echo '<div><strong>Session Expired!</strong><br>Your session has expired for security reasons. Please log in again to continue.</div>';
+          echo '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+          echo '</div>';
+          echo '</div>';
+          echo '</div>';
+      }
+      ?>
+      
       <h1 class="display-4 fw-bold">Welcome to Rwanda Polytechnic<br><span style="opacity: 0.9;">Biometric Attendance System</span></h1>
       <p class="lead mt-4">Revolutionary attendance tracking with advanced face recognition technology and secure fingerprint fallback for maximum reliability.</p>
       <div class="hero-buttons mt-5">

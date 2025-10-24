@@ -60,7 +60,7 @@ if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > 
         exit;
     }
 
-    // For regular pages, destroy session and redirect
+    // For regular pages, destroy session and redirect to index.php
     error_log("Session expired for user_id: " . ($_SESSION['user_id'] ?? 'unknown') . ", IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
     session_unset();
     session_destroy();
@@ -75,7 +75,6 @@ if (!isset($_SESSION['csrf_token'])) {
 }
 
 // Check if user is logged in (allow register-student.php and login.php for demo)
-
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     // Allow access to registration and login pages
     if ($current_page !== 'register-student.php' && $current_page !== 'login.php' && $current_page !== 'login_new.php' && $current_page !== 'forgot-password.php' && $current_page !== 'reset-password.php') {
@@ -93,7 +92,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
             ]);
             exit;
         } else {
-            // For regular requests, use HTML redirect
+            // For regular requests, redirect to index.php
             echo "<script>window.location.href='index.php';</script>";
             echo "<p>If you are not redirected, click this link <a href='index.php'>click here</a>.</p>";
             exit;
@@ -117,8 +116,8 @@ if (empty($_SESSION['user_id']) || empty($_SESSION['role'])) {
         exit;
     } else {
         session_destroy();
-        echo "<script>window.location.href='login.php';</script>";
-        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+        echo "<script>window.location.href='index.php';</script>";
+        echo "<p>If you are not redirected, <a href='index.php'>click here</a>.</p>";
         exit;
     }
 }
@@ -139,8 +138,8 @@ if (!is_numeric($_SESSION['user_id'])) {
         exit;
     } else {
         session_destroy();
-        echo "<script>window.location.href='login.php';</script>";
-        echo "<p>If you are not redirected, <a href='login.php'>click here</a>.</p>";
+        echo "<script>window.location.href='index.php';</script>";
+        echo "<p>If you are not redirected, <a href='index.php'>click here</a>.</p>";
         exit;
     }
 }
@@ -174,9 +173,9 @@ function require_role($roles) {
             ]);
             exit;
         } else {
-            // Use direct redirect instead of header to avoid issues
-            echo "<script>window.location.href='login.php?error=unauthorized';</script>";
-            echo "<p>If you are not redirected, <a href='login.php?error=unauthorized'>click here</a>.</p>";
+            // Redirect to index.php instead of login.php for unauthorized access
+            echo "<script>window.location.href='index.php?error=unauthorized';</script>";
+            echo "<p>If you are not redirected, <a href='index.php?error=unauthorized'>click here</a>.</p>";
             exit;
         }
     }
@@ -341,7 +340,7 @@ function checkAuthentication() {
             ]);
             exit;
         } else {
-            header("Location: login.php");
+            header("Location: index.php");
             exit;
         }
     }
@@ -349,7 +348,7 @@ function checkAuthentication() {
     // Additional validation for user_id format
     if (!is_numeric($_SESSION['user_id'])) {
         session_destroy();
-        header("Location: login.php?error=invalid_session");
+        header("Location: index.php?error=invalid_session");
         exit;
     }
 }

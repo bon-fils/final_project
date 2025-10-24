@@ -453,7 +453,7 @@ if (empty($user_name)) {
 
         <!-- Logout -->
         <div class="sidebar-menu-item">
-            <a href="logout.php" class="sidebar-menu-link" onclick="return confirm('Are you sure you want to logout?')">
+            <a href="<?php echo logout_url(); ?>" class="sidebar-menu-link" onclick="return confirm('Are you sure you want to logout?')">
                 <div class="sidebar-menu-icon">
                     <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
                 </div>

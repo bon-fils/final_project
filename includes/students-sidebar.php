@@ -98,7 +98,7 @@ try {
             </a>
         </li>
         <li>
-            <a href="../logout.php" class="text-danger">
+            <a href="<?php echo logout_url(); ?>" class="text-danger" onclick="return confirm('Are you sure you want to logout?')">
                 <i class="fas fa-sign-out-alt"></i>Logout
             </a>
         </li>

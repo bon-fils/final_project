@@ -300,7 +300,7 @@ $department_name = $user['department_name'] ?? 'Department';
                 <small>Head of Department</small>
             </div>
         </div>
-        <a href="logout.php" class="hod-nav-link" style="border-radius: 8px; background: rgba(239, 68, 68, 0.2); border-left: 3px solid #ef4444;">
+        <a href="<?php echo logout_url(); ?>" class="hod-nav-link" style="border-radius: 8px; background: rgba(239, 68, 68, 0.2); border-left: 3px solid #ef4444;" onclick="return confirm('Are you sure you want to logout?')">
             <i class="fas fa-sign-out-alt"></i>
             <span class="nav-text">Logout</span>
         </a>

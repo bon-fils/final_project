@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,16 +19,16 @@
             justify-content: center;
             align-items: center;
         }
-        
+
         .fingerprint-display {
             margin-bottom: 20px;
         }
-        
+
         #fingerprintCanvas {
             border: 1px solid #ddd;
             border-radius: 5px;
         }
-        
+
         .status-box {
             background: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -35,7 +36,7 @@
             padding: 15px;
             margin: 10px 0;
         }
-        
+
         .log-container {
             background: #000;
             color: #00ff00;
@@ -48,6 +49,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container mt-4">
         <div class="row">
@@ -87,7 +89,7 @@
                         <div class="status-box">
                             <strong>Connection:</strong> <span id="esp32ConnectionStatus">Checking...</span><br>
                             <strong>Sensor:</strong> <span id="sensorStatus">Unknown</span><br>
-                            <strong>IP:</strong> <code id="esp32IP">192.168.137.69:80</code>
+                            <strong>IP:</strong> <code id="esp32IP">192.168.137.90:80</code>
                         </div>
                         <button class="btn btn-outline-primary btn-sm" onclick="checkESP32Status()">
                             <i class="fas fa-sync me-1"></i>Refresh Status
@@ -111,21 +113,23 @@
                                     <small class="text-muted">Click "Capture Fingerprint" to enroll</small>
                                 </div>
                             </div>
-                            
+
                             <div class="fingerprint-controls">
                                 <button type="button" class="btn btn-outline-info me-2" id="captureFingerprintBtn">
                                     <i class="fas fa-fingerprint me-2"></i>Capture Fingerprint
                                 </button>
-                                <button type="button" class="btn btn-outline-danger me-2 d-none" id="clearFingerprintBtn">
+                                <button type="button" class="btn btn-outline-danger me-2 d-none"
+                                    id="clearFingerprintBtn">
                                     <i class="fas fa-times me-2"></i>Clear
                                 </button>
                                 <button type="button" class="btn btn-outline-success d-none" id="enrollFingerprintBtn">
                                     <i class="fas fa-save me-2"></i>Enroll with ESP32
                                 </button>
                             </div>
-                            
+
                             <div class="fingerprint-status mt-3">
-                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint from ESP32 sensor</small>
+                                <small id="fingerprintStatus" class="text-muted">Ready to capture fingerprint from ESP32
+                                    sensor</small>
                             </div>
                         </div>
                     </div>
@@ -174,14 +178,14 @@
     <!-- Scripts -->
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
+
     <script>
         // ESP32 Configuration
-        window.ESP32_IP = '192.168.137.69';
+        window.ESP32_IP = '192.168.137.90';
         window.ESP32_PORT = 80;
     </script>
     <script src="js/fingerprint-enrollment.js"></script>
-    
+
     <script>
         // Additional test functions
         function log(message, type = 'info') {
@@ -193,11 +197,11 @@
                 'error': '#ff0000',
                 'success': '#00ff00'
             };
-            
+
             const logEntry = document.createElement('div');
             logEntry.style.color = colorMap[type] || '#00ff00';
             logEntry.innerHTML = `[${timestamp}] ${message}`;
-            
+
             logContainer.appendChild(logEntry);
             logContainer.scrollTop = logContainer.scrollHeight;
         }
@@ -217,7 +221,7 @@
             if (window.fingerprintEnrollment) {
                 const data = window.fingerprintEnrollment.getFingerprintData();
                 const resultDiv = document.getElementById('enrollmentResult');
-                
+
                 if (data.fingerprint_enrolled === 'true') {
                     resultDiv.className = 'alert alert-success';
                     resultDiv.innerHTML = `
@@ -238,12 +242,12 @@
         }
 
         // Override the showAlert method to use our custom alert container and prevent errors
-        $(document).ready(function() {
+        $(document).ready(function () {
             if (window.fingerprintEnrollment) {
                 const originalShowAlert = window.fingerprintEnrollment.showAlert;
-                window.fingerprintEnrollment.showAlert = function(message, type = 'info') {
+                window.fingerprintEnrollment.showAlert = function (message, type = 'info') {
                     log(message.replace(/[🔍✅❌⚠️🗑️🎉]/g, '').trim(), type);
-                    
+
                     // Call original method safely
                     try {
                         originalShowAlert.call(this, message, type);
@@ -256,7 +260,7 @@
         });
 
         // Enable get data button when enrollment is complete
-        $(document).on('DOMSubtreeModified', '#fingerprintStatus', function() {
+        $(document).on('DOMSubtreeModified', '#fingerprintStatus', function () {
             const status = $(this).text();
             if (status.includes('enrolled')) {
                 $('#getDataBtn').prop('disabled', false);
@@ -264,13 +268,14 @@
         });
 
         // Initialize
-        $(document).ready(function() {
+        $(document).ready(function () {
             log('Fingerprint Enrollment Test System initialized', 'info');
             log(`ESP32 Target: http://${window.ESP32_IP}:${window.ESP32_PORT}`, 'info');
-            
+
             // Check ESP32 status on load
             setTimeout(checkESP32Status, 1000);
         });
     </script>
 </body>
+
 </html>

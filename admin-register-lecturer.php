@@ -472,6 +472,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result = processLecturerRegistration($_POST);
             if ($result['success']) {
                 $_SESSION['success_message'] = $result['message'];
+                $_SESSION['lecturer_credentials'] = [
+                    'username' => $result['username'],
+                    'password' => $result['password']
+                ];
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
                 // Clear form submission tracking on success
@@ -1058,7 +1062,7 @@ ob_end_flush();
                 </a>
             </li>
             <li class="mt-4">
-                <a href="logout.php" class="text-danger">
+                <a href="<?php echo logout_url(); ?>" class="text-danger" onclick="return confirm('Are you sure you want to logout?')">
                     <i class="fas fa-sign-out-alt"></i>Logout
                 </a>
             </li>
@@ -1071,7 +1075,7 @@ ob_end_flush();
     </button>
 
     <!-- Loading Overlay -->
-    <!-- <div class="loading-overlay" id="loadingOverlay"> -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
         <div class="loading-content">
             <div class="spinner-border loading-spinner mb-3" role="status">
                 <span class="visually-hidden">Loading...</span>
@@ -1101,10 +1105,42 @@ ob_end_flush();
                     </div>
                 <?php endif; ?>
 
+                <!-- Session Status Check -->
+                <?php if(!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin'): ?>
+                    <div class="alert alert-warning alert-dismissible fade show">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Authentication Required!</strong> You must be logged in as an admin user to register lecturers.
+                        <hr class="my-3">
+                        <a href="login.php" class="btn btn-primary">
+                            <i class="fas fa-sign-in-alt me-1"></i>Login as Admin
+                        </a>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <?php endif; ?>
+
                 <?php if(!empty($successMessage)): ?>
-                    <div class="alert alert-success">
+                    <div class="alert alert-success alert-dismissible fade show">
                         <i class="fas fa-check-circle me-2"></i>
-                        <?= htmlspecialchars($successMessage) ?>
+                        <strong>Success!</strong> <?= htmlspecialchars($successMessage) ?>
+                        <?php if(isset($_SESSION['lecturer_credentials'])): ?>
+                            <hr class="my-3">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <strong><i class="fas fa-user me-1"></i>Username:</strong> 
+                                    <code class="bg-light px-2 py-1 rounded"><?= htmlspecialchars($_SESSION['lecturer_credentials']['username']) ?></code>
+                                </div>
+                                <div class="col-md-6">
+                                    <strong><i class="fas fa-key me-1"></i>Password:</strong> 
+                                    <code class="bg-light px-2 py-1 rounded"><?= htmlspecialchars($_SESSION['lecturer_credentials']['password']) ?></code>
+                                </div>
+                            </div>
+                            <small class="text-muted d-block mt-2">
+                                <i class="fas fa-info-circle me-1"></i>
+                                Please save these credentials and share them securely with the lecturer.
+                            </small>
+                            <?php unset($_SESSION['lecturer_credentials']); ?>
+                        <?php endif; ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                     </div>
                 <?php endif; ?>
 
@@ -1519,8 +1555,13 @@ ob_end_flush();
                 console.error('Error loading options:', error);
 
                 let errorMessage = 'There was an error loading options for this department.';
+                let isAuthError = false;
+                
                 if (error.name === 'AbortError') {
-                    errorMessage = 'Request timed out. Please check your connection.';
+                    errorMessage = 'Request timed out. Please check your connection and try again.';
+                } else if (error.message.includes('HTTP 403') || error.message.includes('Forbidden')) {
+                    errorMessage = 'Authentication required. Please login as an admin user.';
+                    isAuthError = true;
                 } else if (error.message.includes('HTTP')) {
                     errorMessage = `Server error: ${error.message}`;
                 }
@@ -1530,13 +1571,68 @@ ob_end_flush();
                         <i class="fas fa-exclamation-triangle me-2"></i>
                         <strong>Failed to Load Options</strong><br>
                         <small>${errorMessage}</small><br>
-                        <button class="btn btn-sm btn-outline-danger mt-2" onclick="loadOptionsForRegistration(${departmentId})">
-                            <i class="fas fa-refresh me-1"></i>Try Again
-                        </button>
+                        ${isAuthError ? 
+                            `<a href="login.php" class="btn btn-sm btn-primary mt-2">
+                                <i class="fas fa-sign-in-alt me-1"></i>Login as Admin
+                            </a>` :
+                            `<div class="mt-2">
+                                <button class="btn btn-sm btn-outline-danger me-2" onclick="loadOptionsForRegistration(${departmentId})">
+                                    <i class="fas fa-refresh me-1"></i>Try Again
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="loadOptionsWithFallback(${departmentId})">
+                                    <i class="fas fa-shield-alt me-1"></i>Use Fallback
+                                </button>
+                            </div>`
+                        }
                     </div>
                 `;
                 availableOptions = [];
                 renderOptionsForRegistration();
+            });
+    }
+
+    // Fallback function to load options without authentication
+    function loadOptionsWithFallback(departmentId) {
+        const optionsContainer = document.getElementById('optionsContainer');
+        
+        optionsContainer.innerHTML = `
+            <div class="text-center py-4">
+                <div class="spinner-border text-secondary mb-3" role="status" style="width: 2rem; height: 2rem;">
+                    <span class="visually-hidden">Loading with fallback...</span>
+                </div>
+                <h6 class="text-secondary mb-2">Using Fallback Method</h6>
+                <p class="text-muted mb-0 small">Loading options without authentication...</p>
+            </div>
+        `;
+
+        fetch(`get-options-simple.php?department_id=${departmentId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.options && data.options.length > 0) {
+                    availableOptions = data.options;
+                    renderOptionsForRegistration();
+                } else {
+                    optionsContainer.innerHTML = `
+                        <div class="alert alert-warning">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>No Options Available</strong><br>
+                            ${data.message || 'No options found for this department.'}<br>
+                            <small class="text-muted">You can still register the lecturer without option assignments.</small>
+                        </div>
+                    `;
+                    availableOptions = [];
+                }
+            })
+            .catch(error => {
+                console.error('Fallback error:', error);
+                optionsContainer.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-times-circle me-2"></i>
+                        <strong>Fallback Failed</strong><br>
+                        <small>Both primary and fallback methods failed. Please contact system administrator.</small>
+                    </div>
+                `;
+                availableOptions = [];
             });
     }
 
@@ -1547,8 +1643,8 @@ ob_end_flush();
 
         // If no department specified, try to get from form
         if (!departmentId) {
-            const departmentSelect = document.getElementById('department_id');
-            departmentId = departmentSelect ? departmentSelect.value : null;
+            const deptSelect = document.getElementById('department_id');
+            departmentId = deptSelect ? deptSelect.value : null;
         }
 
         if (!departmentId) {
@@ -1870,6 +1966,23 @@ ob_end_flush();
 
     // Enhanced real-time validation feedback
     document.addEventListener('DOMContentLoaded', function() {
+        // Department change event listener to load options and courses
+        const departmentSelect = document.getElementById('department_id');
+        if (departmentSelect) {
+            departmentSelect.addEventListener('change', function() {
+                const departmentId = this.value;
+                if (departmentId) {
+                    console.log('Department changed to:', departmentId);
+                    loadOptionsForRegistration(departmentId);
+                    loadCoursesForRegistration(departmentId);
+                } else {
+                    // Clear options and courses when no department selected
+                    loadOptionsForRegistration(null);
+                    loadCoursesForRegistration(null);
+                }
+            });
+        }
+
         // Real-time validation for first name
         const firstNameInput = document.getElementById('first_name');
         if (firstNameInput) {
@@ -2093,35 +2206,15 @@ ob_end_flush();
         // Load options on page load
         loadOptionsForRegistration();
 
-        // Add event listener for department change to load courses and options
-        const departmentSelect = document.getElementById('department_id');
-        if (departmentSelect) {
-            departmentSelect.addEventListener('change', function() {
-                const selectedDepartment = this.value;
-                if (selectedDepartment) {
-                    loadCoursesForRegistration(selectedDepartment);
-                    loadOptionsForRegistration(selectedDepartment);
-                } else {
-                    const coursesContainer = document.getElementById('coursesContainer');
-                    coursesContainer.innerHTML = `
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i>
-                            Please select a department first to load available courses.
-                        </div>
-                    `;
-                    loadOptionsForRegistration();
-                }
-            });
-        }
-
         // Load courses and options if department is already selected (on page refresh)
-            if (departmentSelect && departmentSelect.value) {
-                loadCoursesForRegistration(departmentSelect.value);
-                loadOptionsForRegistration(departmentSelect.value);
-            } else {
-                // Load options with no department selected initially
-                loadOptionsForRegistration();
-            }
+        const deptSelectElement = document.getElementById('department_id');
+        if (deptSelectElement && deptSelectElement.value) {
+            loadCoursesForRegistration(deptSelectElement.value);
+            loadOptionsForRegistration(deptSelectElement.value);
+        } else {
+            // Load options with no department selected initially
+            loadOptionsForRegistration();
+        }
     
             // Add form reset functionality
             const resetBtn = document.querySelector('button[type="reset"]') || document.createElement('button');
@@ -2173,7 +2266,15 @@ ob_end_flush();
                             }
     
                             // Re-enable form
-                            reEnableForm();
+                            const addBtn = document.getElementById('addBtn');
+                            if (addBtn) {
+                                addBtn.innerHTML = '<i class="fas fa-plus me-2"></i>Register Lecturer';
+                                addBtn.disabled = false;
+                            }
+                            
+                            // Re-enable all form inputs
+                            const formInputs = form.querySelectorAll('input, select, button');
+                            formInputs.forEach(input => input.disabled = false);
     
                             showAlert('Form has been reset successfully.', 'info', 3000);
                         }

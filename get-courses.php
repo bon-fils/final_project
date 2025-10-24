@@ -64,7 +64,6 @@ try {
             c.description,
             c.year,
             c.option_id,
-            c.created_at,
             o.name as option_name
         FROM courses c
         LEFT JOIN options o ON c.option_id = o.id

@@ -32,7 +32,7 @@ $password = $_ENV['DB_PASS']     ?? '';
 // Application configuration
 define('APP_NAME', $_ENV['APP_NAME'] ?? 'RP Attendance System');
 define('APP_VERSION', $_ENV['APP_VERSION'] ?? '1.0.0');
-define('APP_URL', $_ENV['APP_URL'] ?? 'http://localhost');
+define('APP_URL', $_ENV['APP_URL'] ?? 'http://localhost/final_project_1');
 define('APP_ENV', $_ENV['APP_ENV'] ?? 'development');
 
 // Security configuration
@@ -64,7 +64,7 @@ define('SMTP_USER', $_ENV['SMTP_USER'] ?? '');
 define('SMTP_PASS', $_ENV['SMTP_PASS'] ?? '');
 
 // ESP32 Configuration
-define('ESP32_IP', $_ENV['ESP32_IP'] ?? '192.168.137.69');
+define('ESP32_IP', $_ENV['ESP32_IP'] ?? '192.168.137.90');
 define('ESP32_PORT', (int)($_ENV['ESP32_PORT'] ?? 80));
 define('ESP32_TIMEOUT', (int)($_ENV['ESP32_TIMEOUT'] ?? 30)); // seconds
 
@@ -242,6 +242,16 @@ function esp32Request(string $endpoint, string $method = 'GET', array $data = []
 
     return $decodedResponse;
 }
+
+// Define base path
+if (!defined('BASE_PATH')) {
+    $base_path = str_replace('\\', '/', dirname(__DIR__));
+    $base_path = str_replace($_SERVER['DOCUMENT_ROOT'], '', $base_path);
+    define('BASE_PATH', rtrim($base_path, '/') . '/');
+}
+
+// Include URL helper
+require_once __DIR__ . '/includes/url_helper.php';
 
 // Initialize application
 log_message('info', 'Application initialized', [

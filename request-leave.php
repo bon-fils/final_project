@@ -39,19 +39,19 @@ try {
     // Debug: Log student information
     error_log("Student Info - ID: " . $student['id'] . ", Reg No: " . $student['reg_no'] . ", Year: " . $student['year_level'] . ", Option ID: " . $student['option_id']);
 
-    // Get lecturers by joining courses with options and lecturers
+    // Get lecturers by joining courses with options, lecturers, and users
     $stmt = $pdo->prepare("
-        SELECT DISTINCT l.id, l.first_name, l.last_name,
-               CONCAT(l.first_name, ' ', l.last_name) as full_name,
+        SELECT DISTINCT l.id, u.first_name, u.last_name,
+               CONCAT(u.first_name, ' ', u.last_name) as full_name,
                COUNT(c.id) as course_count
         FROM lecturers l
+        JOIN users u ON l.user_id = u.id
         JOIN courses c ON l.id = c.lecturer_id
-        JOIN options o ON c.option_id = o.id
-        WHERE o.name = ? AND c.year = ? AND c.status = 'active'
-        GROUP BY l.id, l.first_name, l.last_name
-        ORDER BY l.last_name, l.first_name
+        WHERE c.option_id = ? AND c.year = ? AND c.status = 'active' AND c.lecturer_id IS NOT NULL
+        GROUP BY l.id, u.first_name, u.last_name
+        ORDER BY u.last_name, u.first_name
     ");
-    $stmt->execute([$student['option_name'], $student['year_level']]);
+    $stmt->execute([$student['option_id'], $student['year_level']]);
     $lecturers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Debug: Log the lecturers found
@@ -72,12 +72,13 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $leave_type = trim($_POST['leave_type'] ?? '');
     $request_type = trim($_POST['request_type'] ?? ''); // Lecturer or HOD
-    $course_id = trim($_POST['course_id'] ?? '');
+    $lecturer_id = trim($_POST['lecturer_id'] ?? '');
     $start_date = trim($_POST['start_date'] ?? '');
     $end_date = trim($_POST['end_date'] ?? '');
     $reason = trim($_POST['reason'] ?? '');
     $supporting_file = null;
     $requested_to = '';
+    $request_to_enum = '';
 
     // Validation
     $errors = [];
@@ -90,21 +91,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = "Please select who to send the request to";
     }
     
-    // If requesting to lecturer, lecturer must be selected
+    // Handle request type and lecturer selection
     if ($request_type === 'Lecturer') {
         if (empty($lecturer_id)) {
             $errors[] = "Please select a lecturer when requesting to lecturer";
         } else {
-            // Get lecturer name from selected lecturer
+            // Validate lecturer exists and get lecturer name
+            $lecturer_found = false;
             foreach ($lecturers as $lecturer) {
                 if ($lecturer['id'] == $lecturer_id) {
                     $requested_to = $lecturer['full_name'];
+                    $request_to_enum = 'lecturer';
+                    $lecturer_found = true;
                     break;
                 }
             }
+            if (!$lecturer_found) {
+                $errors[] = "Selected lecturer is not valid";
+            }
         }
+    } elseif ($request_type === 'HOD') {
+        $requested_to = 'Head of Department';
+        $request_to_enum = 'hod';
+        $lecturer_id = null; // Clear lecturer_id for HOD requests
     } else {
-        $requested_to = 'HOD';
+        $errors[] = "Please select a valid request recipient";
     }
 
     if (empty($start_date)) {
@@ -165,21 +176,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (empty($errors)) {
         try {
-            // Prepare reason field with leave details
+            // Prepare comprehensive reason field
             $full_reason = "Leave Type: " . $leave_type . "\n";
             $full_reason .= "Period: " . date('M d, Y', strtotime($start_date)) . " to " . date('M d, Y', strtotime($end_date)) . "\n";
+            $full_reason .= "Requested to: " . $requested_to . "\n";
+            if ($request_to_enum === 'lecturer' && $lecturer_id) {
+                $full_reason .= "Lecturer ID: " . $lecturer_id . "\n";
+            }
             $full_reason .= "Reason: " . $reason;
             
-            // Insert leave request
+            // Insert leave request with proper database schema
             $stmt = $pdo->prepare("
                 INSERT INTO leave_requests
-                (student_id, requested_to, reason, supporting_file, status, requested_at)
-                VALUES (?, ?, ?, ?, 'pending', NOW())
+                (student_id, reason, from_date, to_date, status, supporting_file, request_to, reviewed_by, requested_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, NOW())
             ");
-            $stmt->execute([$student['id'], $requested_to, $full_reason, $supporting_file]);
+            
+            // Get the user_id for the selected lecturer (reviewed_by expects user_id, not lecturer_id)
+            $reviewed_by = null;
+            if ($request_to_enum === 'lecturer' && $lecturer_id) {
+                $stmt_user = $pdo->prepare("SELECT user_id FROM lecturers WHERE id = ?");
+                $stmt_user->execute([$lecturer_id]);
+                $lecturer_user = $stmt_user->fetch(PDO::FETCH_ASSOC);
+                $reviewed_by = $lecturer_user ? $lecturer_user['user_id'] : null;
+            }
+            
+            $stmt->execute([
+                $student['id'],
+                $full_reason,
+                $start_date,
+                $end_date,
+                $supporting_file,
+                $request_to_enum,
+                $reviewed_by
+            ]);
 
-            $message = "Leave request submitted successfully! You will be notified once it's reviewed.";
+            $message = "Leave request submitted successfully to " . $requested_to . "! You will be notified once it's reviewed.";
             $message_type = "success";
+            
+            // Log the submission for debugging
+            error_log("Leave request submitted - Student ID: " . $student['id'] . ", Request to: " . $request_to_enum . ", Lecturer ID: " . ($lecturer_id ?? 'N/A') . ", Reviewed by (user_id): " . ($reviewed_by ?? 'N/A'));
             
             // Clear form by redirecting
             header("Location: leave-status.php?success=1");
@@ -187,7 +223,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         } catch (Exception $e) {
             error_log("Leave request error: " . $e->getMessage());
-            $message = "Failed to submit leave request. Please try again.";
+            $message = "Failed to submit leave request. Please try again. Error: " . $e->getMessage();
             $message_type = "error";
         }
     } else {

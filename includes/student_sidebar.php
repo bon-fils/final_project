@@ -73,7 +73,7 @@ $student = $student ?? ['department_name' => 'Department'];
     </a>
     <?php endif; ?>
 
-    <a href="logout.php">
+    <a href="<?php echo logout_url(); ?>" onclick="return confirm('Are you sure you want to logout?')">
         <i class="fas fa-sign-out-alt"></i> Logout
     </a>
 </div>

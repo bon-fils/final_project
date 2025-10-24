@@ -12,16 +12,14 @@ require_role(['lecturer', 'hod']);
 
 // Get user information
 $user_id = $_SESSION['user_id'] ?? null;
-$lecturer_id = $_SESSION['lecturer_id'] ?? null;
 
 // Debug session data
 error_log("lecturer-leave-requests.php - Session Debug:");
 error_log("user_id: " . ($user_id ?? 'NULL'));
-error_log("lecturer_id: " . ($lecturer_id ?? 'NULL'));
 error_log("username: " . ($_SESSION['username'] ?? 'NULL'));
 error_log("role: " . ($_SESSION['role'] ?? 'NULL'));
 
-if (!$user_id || !$lecturer_id) {
+if (!$user_id) {
     error_log("Session expired or invalid - redirecting to login");
     header("Location: login.php?error=session_expired");
     exit;
@@ -31,11 +29,11 @@ if (!$user_id || !$lecturer_id) {
 try {
     $stmt = $pdo->prepare("
         SELECT u.username, u.email, u.first_name, u.last_name,
-               l.department_id, d.name as department_name
+               l.id as lecturer_id, l.department_id, d.name as department_name
         FROM users u
         INNER JOIN lecturers l ON u.id = l.user_id
         LEFT JOIN departments d ON l.department_id = d.id
-        WHERE u.id = :user_id AND u.role = 'lecturer'
+        WHERE u.id = :user_id AND u.role IN ('lecturer', 'hod')
     ");
     $stmt->execute(['user_id' => $user_id]);
     $lecturer_info = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -49,6 +47,8 @@ try {
     if (empty($lecturer_name)) {
         $lecturer_name = $lecturer_info['username'];
     }
+    
+    $lecturer_id = $lecturer_info['lecturer_id'];
 
 } catch (PDOException $e) {
     error_log("Lecturer info error: " . $e->getMessage());
@@ -56,29 +56,31 @@ try {
     exit;
 }
 
-// Get leave requests for students in lecturer's department
+// Get leave requests sent specifically to this lecturer
 try {
     $leave_requests = [];
 
-    error_log("Querying leave requests for lecturer_id: " . $lecturer_id);
+    error_log("Querying leave requests for user_id: " . $user_id . " (lecturer_id: " . $lecturer_id . ")");
 
-    // Get leave requests for students in the lecturer's department
+    // Get leave requests sent specifically to this lecturer
     $stmt = $pdo->prepare("
-        SELECT lr.id, lr.student_id, lr.reason, lr.start_date, lr.end_date,
-               lr.status, lr.requested_at, lr.responded_at, lr.admin_response,
-               s.first_name, s.last_name, s.reg_no, s.student_id_number,
-               d.name as department_name, o.name as option_name, s.year_level
+        SELECT lr.id, lr.student_id, lr.reason, lr.from_date, lr.to_date,
+               lr.status, lr.requested_at, lr.reviewed_at, lr.supporting_file,
+               lr.request_to, lr.requested_to,
+               u.first_name, u.last_name, s.reg_no, s.year_level,
+               d.name as department_name, o.name as option_name
         FROM leave_requests lr
         INNER JOIN students s ON lr.student_id = s.id
+        INNER JOIN users u ON s.user_id = u.id
         LEFT JOIN departments d ON s.department_id = d.id
         LEFT JOIN options o ON s.option_id = o.id
-        WHERE s.department_id = :department_id
+        WHERE lr.reviewed_by = :user_id AND lr.request_to = 'lecturer'
         ORDER BY lr.requested_at DESC
     ");
-    $stmt->execute(['department_id' => $lecturer_info['department_id']]);
+    $stmt->execute(['user_id' => $user_id]);
     $leave_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    error_log("Found " . count($leave_requests) . " leave requests for department: " . $lecturer_info['department_name']);
+    error_log("Found " . count($leave_requests) . " leave requests sent to lecturer: " . $lecturer_name);
 
     // Calculate statistics
     $total_requests = count($leave_requests);
@@ -113,17 +115,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             if ($action === 'approve') {
                 $stmt = $pdo->prepare("
                     UPDATE leave_requests
-                    SET status = 'approved', responded_at = NOW(), admin_response = ?
-                    WHERE id = ? AND status = 'pending'
+                    SET status = 'approved', reviewed_at = NOW()
+                    WHERE id = ? AND status = 'pending' AND reviewed_by = ?
                 ");
-                $stmt->execute([$response, $request_id]);
+                $stmt->execute([$request_id, $user_id]);
             } elseif ($action === 'reject') {
                 $stmt = $pdo->prepare("
                     UPDATE leave_requests
-                    SET status = 'rejected', responded_at = NOW(), admin_response = ?
-                    WHERE id = ? AND status = 'pending'
+                    SET status = 'rejected', reviewed_at = NOW()
+                    WHERE id = ? AND status = 'pending' AND reviewed_by = ?
                 ");
-                $stmt->execute([$response, $request_id]);
+                $stmt->execute([$request_id, $user_id]);
             }
 
             echo json_encode(['status' => 'success', 'message' => 'Leave request updated successfully']);
@@ -616,13 +618,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                 <div class="row g-3">
                                     <div class="col-6 detail-item">
                                         <div class="detail-value text-primary">
-                                            <?= htmlspecialchars(date('M d', strtotime($request['start_date']))) ?>
+                                            <?= htmlspecialchars(date('M d', strtotime($request['from_date']))) ?>
                                         </div>
                                         <div class="detail-label">Start Date</div>
                                     </div>
                                     <div class="col-6 detail-item">
                                         <div class="detail-value text-primary">
-                                            <?= htmlspecialchars(date('M d', strtotime($request['end_date']))) ?>
+                                            <?= htmlspecialchars(date('M d', strtotime($request['to_date']))) ?>
                                         </div>
                                         <div class="detail-label">End Date</div>
                                     </div>

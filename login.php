@@ -794,6 +794,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </div>
     <?php endif; ?>
 
+    <?php 
+    // Handle logout messages
+    if (isset($_GET['logout'])) {
+        $logout_reason = $_GET['logout'];
+        switch ($logout_reason) {
+            case 'success':
+                echo '<div class="alert alert-success d-flex align-items-center mb-4" role="alert">';
+                echo '<i class="fas fa-check-circle me-2"></i>';
+                echo '<div class="small">You have been successfully logged out. Thank you for using RP Attendance System.</div>';
+                echo '</div>';
+                break;
+            case 'csrf_error':
+                echo '<div class="alert alert-warning d-flex align-items-center mb-4" role="alert">';
+                echo '<i class="fas fa-shield-alt me-2"></i>';
+                echo '<div class="small">Logout completed with security verification. Please log in again.</div>';
+                echo '</div>';
+                break;
+            default:
+                echo '<div class="alert alert-info d-flex align-items-center mb-4" role="alert">';
+                echo '<i class="fas fa-info-circle me-2"></i>';
+                echo '<div class="small">You have been logged out. Please log in to continue.</div>';
+                echo '</div>';
+                break;
+        }
+    }
+    ?>
+
+    <?php 
+    // Handle session timeout message
+    if (isset($_GET['timeout']) && $_GET['timeout'] === '1'): ?>
+      <div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
+        <i class="fas fa-clock me-2"></i>
+        <div class="small">Your session has expired for security reasons. Please log in again.</div>
+      </div>
+    <?php endif; ?>
+
     <!-- Login Form -->
     <form method="POST" action="" id="loginForm" novalidate>
       <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token'] ?? ''); ?>">
