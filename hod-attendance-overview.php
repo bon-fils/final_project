@@ -204,9 +204,10 @@ if ($department_id) {
         ];
     }
 
-} catch (PDOException $e) {
-    error_log("Error fetching attendance data in hod-attendance-overview.php: " . $e->getMessage());
-    $error_message = "Unable to load attendance data. Error: " . $e->getMessage();
+    } catch (PDOException $e) {
+        error_log("Error fetching attendance data in hod-attendance-overview.php: " . $e->getMessage());
+        $error_message = "Unable to load attendance data. Error: " . $e->getMessage();
+    }
 }
 ?>
 

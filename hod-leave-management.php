@@ -1,173 +1,204 @@
 <?php
-require_once "config.php"; // PDO connection - must be first
-require_once "session_check.php"; // Session management - requires config.php constants
-session_start(); // Start session after config and session_check
+require_once "config.php";
+session_start();
+require_once "session_check.php";
+require_once "includes/hod_auth_helper.php";
 
-// Check if user is logged in and has HOD role
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'hod') {
-    header("Location: login.php?error=unauthorized");
-    exit;
+// Verify HOD access and get department information
+$auth_result = verifyHODAccess($pdo, $_SESSION['user_id']);
+
+if (!$auth_result['success']) {
+    // Show error message instead of redirect for better UX
+    $error_message = $auth_result['error_message'];
+    $department_name = 'No Department Assigned';
+    $department_id = null;
+    $user = ['name' => $_SESSION['username'] ?? 'User'];
+} else {
+    $department_name = $auth_result['department_name'];
+    $department_id = $auth_result['department_id'];
+    $user = $auth_result['user'];
+    $lecturer_id = $auth_result['lecturer_id'];
+    
+    // Set the department variable for backward compatibility
+    $department = ['id' => $department_id, 'name' => $department_name];
 }
 
-require_role(['hod']);
-
-// Get HoD information and verify department assignment
-$user_id = $_SESSION['user_id'];
-$department_name = null;
-$department_id = null;
-try {
-    // First, check if the user has a lecturer record
-    $lecturer_stmt = $pdo->prepare("SELECT id, gender, dob, id_number, department_id, education_level FROM lecturers WHERE user_id = ?");
-    $lecturer_stmt->execute([$user_id]);
-    $lecturer = $lecturer_stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$lecturer) {
-        // HOD user doesn't have a lecturer record
-        echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
-        echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Access Denied</h3>";
-        echo "<p>You are not registered as a lecturer. Please contact administrator.</p>";
-        echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
-        echo "</div>";
-        exit;
-    } else {
-        $lecturer_id = $lecturer['id'];
-
-        // Try multiple approaches to find department assignment (handles both correct and legacy hod_id references)
-        $dept_result = null;
-
-        // Approach 1: Correct way - hod_id points to lecturers.id
-        $stmt = $pdo->prepare("
-            SELECT d.name as department_name, d.id as department_id, 'direct' as match_type
-            FROM departments d
-            WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
-        ");
-        $stmt->execute([$lecturer_id]);
-        $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Approach 2: Legacy way - hod_id might point to users.id (incorrect but may exist in data)
-        if (!$dept_result) {
-            $stmt = $pdo->prepare("
-                SELECT d.name as department_name, d.id as department_id, 'legacy' as match_type
-                FROM departments d
-                WHERE d.hod_id = ? AND d.hod_id IS NOT NULL
-            ");
-            $stmt->execute([$user_id]);
-            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            // If found via legacy method, log it for potential data fix
-            if ($dept_result) {
-                error_log("HOD Leave Management: Found department assignment via legacy hod_id match (user_id instead of lecturer_id) for user $user_id");
-            }
-        }
-
-        // Approach 3: Check if lecturer's department_id matches any department's hod_id
-        if (!$dept_result && $lecturer['department_id']) {
-            $stmt = $pdo->prepare("
-                SELECT d.name as department_name, d.id as department_id, 'department_match' as match_type
-                FROM departments d
-                WHERE d.id = ? AND d.hod_id IS NOT NULL
-            ");
-            $stmt->execute([$lecturer['department_id']]);
-            $dept_result = $stmt->fetch(PDO::FETCH_ASSOC);
-        }
-
-        if (!$dept_result) {
-            // User is HOD but not assigned to any department
-            echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
-            echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Department Not Assigned</h3>";
-            echo "<p>You are not assigned as Head of Department for any department. Please contact administrator.</p>";
-            echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
-            echo "</div>";
-            exit;
-        } else {
-            $department_name = $dept_result['department_name'];
-            $department_id = $dept_result['department_id'];
-
-            // Get user information
-            $stmt = $pdo->prepare("SELECT CONCAT(first_name, ' ', last_name) as name, email FROM users WHERE id = ?");
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            $user['department_name'] = $department_name;
-            $user['department_id'] = $department_id;
-
-            // Log match type for debugging
-            error_log("HOD Leave Management: Department assignment found via {$dept_result['match_type']} for user $user_id, department $department_name");
-
-            // Set the department variable for backward compatibility
-            $department = ['id' => $department_id, 'name' => $department_name];
-        }
-    }
-} catch (PDOException $e) {
-    error_log("Database error in hod-leave-management.php: " . $e->getMessage());
-    echo "<div style='padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; margin: 20px;'>";
-    echo "<h3 style='color: #dc3545; margin-bottom: 15px;'>Database Error</h3>";
-    echo "<p>There was an error connecting to the database. Please try again later.</p>";
-    echo "<p>Error: " . htmlspecialchars($e->getMessage()) . "</p>";
-    echo "<p><a href='hod-dashboard.php' style='color: #0066cc; text-decoration: none;'><i class='fas fa-arrow-left me-2'></i>Return to Dashboard</a></p>";
-    echo "</div>";
-    exit;
+// Generate CSRF token
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 // Handle approve/reject actions via POST
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['action'])) {
-    try {
-        $leave_id = intval($_POST['leave_id']);
-        $action = $_POST['action'] === 'approve' ? 'approved' : 'rejected';
-
-        $updStmt = $pdo->prepare("UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?");
-        $success = $updStmt->execute([$action, $hod_id, $leave_id]);
-
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['action']) && $department_id) {
+    // Validate CSRF token
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         header('Content-Type: application/json');
-        echo json_encode(['success' => $success, 'status' => $action]);
+        echo json_encode(['success' => false, 'message' => 'Invalid request token']);
+        exit;
+    }
+    
+    try {
+        $leave_id = filter_var($_POST['leave_id'], FILTER_VALIDATE_INT);
+        $action = $_POST['action'];
+        
+        if (!$leave_id || !in_array($action, ['approve', 'reject'])) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => 'Invalid request data']);
+            exit;
+        }
+        
+        $status = $action === 'approve' ? 'approved' : 'rejected';
+        
+        // Verify the leave request belongs to this department
+        $verify_stmt = $pdo->prepare("
+            SELECT lr.id 
+            FROM leave_requests lr
+            JOIN students s ON lr.student_id = s.id
+            WHERE lr.id = ? AND s.department_id = ? AND lr.status = 'pending'
+        ");
+        $verify_stmt->execute([$leave_id, $department_id]);
+        
+        if (!$verify_stmt->fetch()) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => 'Leave request not found or already processed']);
+            exit;
+        }
+        
+        // Update the leave request
+        $update_stmt = $pdo->prepare("
+            UPDATE leave_requests 
+            SET status = ?, reviewed_by = ?, reviewed_at = NOW() 
+            WHERE id = ?
+        ");
+        $success = $update_stmt->execute([$status, $lecturer_id, $leave_id]);
+        
+        if ($success) {
+            // Log the action
+            error_log("HOD Leave Management: Leave request $leave_id {$status} by lecturer $lecturer_id");
+            
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => true, 
+                'status' => $status,
+                'message' => "Leave request {$status} successfully"
+            ]);
+        } else {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => false, 'message' => 'Failed to update leave request']);
+        }
         exit;
     } catch (PDOException $e) {
         error_log("Error updating leave request in hod-leave-management.php: " . $e->getMessage());
         header('Content-Type: application/json');
-        echo json_encode(['success' => false, 'message' => 'Database error']);
+        echo json_encode(['success' => false, 'message' => 'Database error occurred']);
         exit;
     }
 }
 
 // Fetch leave requests for this department
-try {
-    $leaveStmt = $pdo->prepare("
-        SELECT lr.id, lr.student_id, lr.reason, lr.supporting_file, lr.status,
-               lr.from_date, lr.to_date, lr.requested_at,
-               s.first_name, s.last_name, s.year_level, d.name as department_name
-        FROM leave_requests lr
-        INNER JOIN students s ON lr.student_id = s.id
-        INNER JOIN departments d ON s.department_id = d.id
-        WHERE s.department_id = ?
-        ORDER BY lr.requested_at DESC
-    ");
-    $leaveStmt->execute([$department['id']]);
-    $leaveRequests = $leaveStmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("Error fetching leave requests in hod-leave-management.php: " . $e->getMessage());
-    $leaveRequests = [];
+$leaveRequests = [];
+$stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0];
+
+if ($department_id) {
+    try {
+        // Get leave requests with proper student information
+        $leaveStmt = $pdo->prepare("
+            SELECT lr.id, lr.student_id, lr.reason, lr.supporting_file, lr.status,
+                   lr.from_date, lr.to_date, lr.requested_at, lr.reviewed_at,
+                   u.first_name, u.last_name, s.year_level, d.name as department_name,
+                   s.reg_no,
+                   reviewer.first_name as reviewer_first_name, 
+                   reviewer.last_name as reviewer_last_name
+            FROM leave_requests lr
+            INNER JOIN students s ON lr.student_id = s.id
+            INNER JOIN users u ON s.user_id = u.id
+            INNER JOIN departments d ON s.department_id = d.id
+            LEFT JOIN lecturers l ON lr.reviewed_by = l.id
+            LEFT JOIN users reviewer ON l.user_id = reviewer.id
+            WHERE s.department_id = ?
+            ORDER BY 
+                CASE lr.status 
+                    WHEN 'pending' THEN 1 
+                    WHEN 'approved' THEN 2 
+                    WHEN 'rejected' THEN 3 
+                END,
+                lr.requested_at DESC
+        ");
+        $leaveStmt->execute([$department_id]);
+        $leaveRequests = $leaveStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Calculate statistics
+        foreach ($leaveRequests as $request) {
+            $stats['total']++;
+            $stats[$request['status']]++;
+        }
+        
+    } catch (PDOException $e) {
+        error_log("Error fetching leave requests in hod-leave-management.php: " . $e->getMessage());
+        $error_message = "Unable to load leave requests: " . $e->getMessage();
+    }
 }
 
 // If AJAX request to refresh table only
-if(isset($_GET['ajax'])){
+if(isset($_GET['ajax']) && $department_id){
     foreach($leaveRequests as $idx => $lr){
-        echo '<tr data-id="'.$lr['id'].'">
+        $duration = '';
+        if ($lr['from_date'] && $lr['to_date']) {
+            $from = new DateTime($lr['from_date']);
+            $to = new DateTime($lr['to_date']);
+            $diff = $from->diff($to)->days + 1;
+            $duration = $diff . ' day' . ($diff > 1 ? 's' : '');
+        }
+        
+        echo '<tr data-id="'.$lr['id'].'" class="leave-request-row status-'.$lr['status'].'">
           <td>'.($idx+1).'</td>
-          <td>'.htmlspecialchars($lr['first_name'].' '.$lr['last_name']).'</td>
-          <td>'.htmlspecialchars($lr['department_name']).'</td>
+          <td>
+            <div class="fw-bold">'.htmlspecialchars($lr['first_name'].' '.$lr['last_name']).'</div>
+            <small class="text-muted">'.htmlspecialchars($lr['reg_no'] ?? 'N/A').'</small>
+          </td>
           <td>'.htmlspecialchars($lr['year_level']).'</td>
-          <td>'.htmlspecialchars($lr['from_date']).'</td>
-          <td>'.htmlspecialchars($lr['to_date']).'</td>
-          <td>'.htmlspecialchars($lr['reason']).'</td>
-          <td>';
+          <td>
+            <div>'.htmlspecialchars(date('M j, Y', strtotime($lr['from_date']))).'</div>
+            <small class="text-muted">to '.htmlspecialchars(date('M j, Y', strtotime($lr['to_date']))).'</small>
+            '.($duration ? '<br><span class="badge bg-info">'.$duration.'</span>' : '').
+          '</td>
+          <td>
+            <div class="reason-text" title="'.htmlspecialchars($lr['reason']).'">
+              '.htmlspecialchars(strlen($lr['reason']) > 50 ? substr($lr['reason'], 0, 50).'...' : $lr['reason']).
+            '</div>
+          </td>
+          <td class="text-center">';
           if($lr['supporting_file']){
-            echo '<a href="uploads/'.htmlspecialchars($lr['supporting_file']).'" target="_blank" class="btn btn-sm btn-secondary"><i class="fas fa-file-download"></i> View</a>';
+            echo '<a href="uploads/'.htmlspecialchars($lr['supporting_file']).'" target="_blank" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-file-alt me-1"></i>View
+                  </a>';
+          } else {
+            echo '<span class="text-muted">No file</span>';
           }
           echo '</td>
-          <td><span class="badge '.($lr['status']=='approved'?'bg-success':($lr['status']=='rejected'?'bg-danger':'bg-warning text-dark')).'">'.ucfirst($lr['status']).'</span></td>
-          <td>';
+          <td>
+            <span class="badge '.($lr['status']=='approved'?'bg-success':($lr['status']=='rejected'?'bg-danger':'bg-warning text-dark')).'">
+              <i class="fas fa-'.($lr['status']=='approved'?'check':($lr['status']=='rejected'?'times':'clock')).' me-1"></i>
+              '.ucfirst($lr['status']).
+            '</span>';
+          if ($lr['status'] !== 'pending' && $lr['reviewed_at']) {
+            echo '<br><small class="text-muted">'.date('M j, Y', strtotime($lr['reviewed_at'])).'</small>';
+          }
+          echo '</td>
+          <td class="text-center">';
           if($lr['status']=='pending'){
-            echo '<button class="btn btn-sm btn-approve me-1"><i class="fas fa-check"></i> Approve</button>
-                  <button class="btn btn-sm btn-reject"><i class="fas fa-times"></i> Reject</button>';
+            echo '<div class="btn-group" role="group">
+                    <button class="btn btn-sm btn-approve" data-action="approve" title="Approve Request">
+                      <i class="fas fa-check"></i>
+                    </button>
+                    <button class="btn btn-sm btn-reject" data-action="reject" title="Reject Request">
+                      <i class="fas fa-times"></i>
+                    </button>
+                  </div>';
+          } else {
+            if ($lr['reviewer_first_name']) {
+              echo '<small class="text-muted">By: '.htmlspecialchars($lr['reviewer_first_name'].' '.$lr['reviewer_last_name']).'</small>';
+            }
           }
           echo '</td></tr>';
     }
@@ -575,54 +606,158 @@ body {
         </div>
     </div>
 
-    <div class="card p-4">
-        <h6 class="mb-3"><i class="fas fa-envelope-open-text me-2"></i>Department Leave Requests</h6>
-    <div class="table-responsive">
-      <table class="table table-bordered table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>Student Name</th>
-            <th>Department</th>
-            <th>Class</th>
-            <th>From</th>
-            <th>To</th>
-            <th>Reason</th>
-            <th>Support File</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="leaveRequestsTableBody">
-          <?php foreach($leaveRequests as $idx => $lr): ?>
-          <tr data-id="<?= $lr['id'] ?>">
-            <td><?= $idx+1 ?></td>
-            <td><?= htmlspecialchars($lr['first_name'].' '.$lr['last_name']) ?></td>
-            <td><?= htmlspecialchars($lr['department_name']) ?></td>
-            <td><?= htmlspecialchars($lr['year_level']) ?></td>
-            <td><?= htmlspecialchars($lr['from_date']) ?></td>
-            <td><?= htmlspecialchars($lr['to_date']) ?></td>
-            <td><?= htmlspecialchars($lr['reason']) ?></td>
-            <td>
-              <?php if($lr['supporting_file']): ?>
-                <a href="uploads/<?= htmlspecialchars($lr['supporting_file']) ?>" target="_blank" class="btn btn-sm btn-secondary">
-                  <i class="fas fa-file-download"></i> View
-                </a>
-              <?php endif; ?>
-            </td>
-            <td><span class="badge <?= $lr['status']=='approved'?'bg-success':($lr['status']=='rejected'?'bg-danger':'bg-warning text-dark') ?>"><?= ucfirst($lr['status']) ?></span></td>
-            <td>
-              <?php if($lr['status']=='pending'): ?>
-                <button class="btn btn-sm btn-approve me-1"><i class="fas fa-check"></i> Approve</button>
-                <button class="btn btn-sm btn-reject"><i class="fas fa-times"></i> Reject</button>
-              <?php endif; ?>
-            </td>
-          </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
+    <!-- Authentication Error Display -->
+    <?php if (isset($error_message)): ?>
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            <strong>Access Error:</strong> <?= htmlspecialchars($error_message) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Statistics Cards -->
+    <?php if ($department_id): ?>
+    <div class="row mb-4">
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <div class="stat-number text-primary" style="font-size: 2.5rem; font-weight: bold;"><?= $stats['total'] ?></div>
+                    <div class="stat-label text-muted">Total Requests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <div class="stat-number text-warning" style="font-size: 2.5rem; font-weight: bold;"><?= $stats['pending'] ?></div>
+                    <div class="stat-label text-muted">Pending Review</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <div class="stat-number text-success" style="font-size: 2.5rem; font-weight: bold;"><?= $stats['approved'] ?></div>
+                    <div class="stat-label text-muted">Approved</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <div class="stat-number text-danger" style="font-size: 2.5rem; font-weight: bold;"><?= $stats['rejected'] ?></div>
+                    <div class="stat-label text-muted">Rejected</div>
+                </div>
+            </div>
+        </div>
     </div>
-  </div>
+    <?php endif; ?>
+
+    <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0"><i class="fas fa-envelope-open-text me-2"></i>Leave Requests - <?= htmlspecialchars($department_name) ?></h6>
+            <div class="d-flex gap-2">
+                <select class="form-select form-select-sm" id="statusFilter" style="width: auto;">
+                    <option value="">All Status</option>
+                    <option value="pending">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                </select>
+                <button class="btn btn-outline-primary btn-sm" onclick="refreshTable()">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                </button>
+            </div>
+        </div>
+        
+        <?php if (empty($leaveRequests) && $department_id): ?>
+            <div class="text-center py-5">
+                <i class="fas fa-inbox fa-4x text-muted mb-3"></i>
+                <h4 class="text-muted">No Leave Requests</h4>
+                <p class="text-muted">There are no leave requests for your department yet.</p>
+            </div>
+        <?php elseif ($department_id): ?>
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 50px;">#</th>
+                        <th>Student</th>
+                        <th style="width: 80px;">Year</th>
+                        <th style="width: 180px;">Duration</th>
+                        <th>Reason</th>
+                        <th style="width: 100px;">File</th>
+                        <th style="width: 120px;">Status</th>
+                        <th style="width: 120px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="leaveRequestsTableBody">
+                    <?php foreach($leaveRequests as $idx => $lr): 
+                        $duration = '';
+                        if ($lr['from_date'] && $lr['to_date']) {
+                            $from = new DateTime($lr['from_date']);
+                            $to = new DateTime($lr['to_date']);
+                            $diff = $from->diff($to)->days + 1;
+                            $duration = $diff . ' day' . ($diff > 1 ? 's' : '');
+                        }
+                    ?>
+                    <tr data-id="<?= $lr['id'] ?>" class="leave-request-row status-<?= $lr['status'] ?>">
+                        <td><?= $idx+1 ?></td>
+                        <td>
+                            <div class="fw-bold"><?= htmlspecialchars($lr['first_name'].' '.$lr['last_name']) ?></div>
+                            <small class="text-muted"><?= htmlspecialchars($lr['reg_no'] ?? 'N/A') ?></small>
+                        </td>
+                        <td><?= htmlspecialchars($lr['year_level']) ?></td>
+                        <td>
+                            <div><?= htmlspecialchars(date('M j, Y', strtotime($lr['from_date']))) ?></div>
+                            <small class="text-muted">to <?= htmlspecialchars(date('M j, Y', strtotime($lr['to_date']))) ?></small>
+                            <?php if ($duration): ?><br><span class="badge bg-info"><?= $duration ?></span><?php endif; ?>
+                        </td>
+                        <td>
+                            <div class="reason-text" title="<?= htmlspecialchars($lr['reason']) ?>">
+                                <?= htmlspecialchars(strlen($lr['reason']) > 50 ? substr($lr['reason'], 0, 50).'...' : $lr['reason']) ?>
+                            </div>
+                        </td>
+                        <td class="text-center">
+                            <?php if($lr['supporting_file']): ?>
+                                <a href="uploads/<?= htmlspecialchars($lr['supporting_file']) ?>" target="_blank" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-file-alt me-1"></i>View
+                                </a>
+                            <?php else: ?>
+                                <span class="text-muted">No file</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <span class="badge <?= $lr['status']=='approved'?'bg-success':($lr['status']=='rejected'?'bg-danger':'bg-warning text-dark') ?>">
+                                <i class="fas fa-<?= $lr['status']=='approved'?'check':($lr['status']=='rejected'?'times':'clock') ?> me-1"></i>
+                                <?= ucfirst($lr['status']) ?>
+                            </span>
+                            <?php if ($lr['status'] !== 'pending' && $lr['reviewed_at']): ?>
+                                <br><small class="text-muted"><?= date('M j, Y', strtotime($lr['reviewed_at'])) ?></small>
+                            <?php endif; ?>
+                        </td>
+                        <td class="text-center">
+                            <?php if($lr['status']=='pending'): ?>
+                                <div class="btn-group" role="group">
+                                    <button class="btn btn-sm btn-approve" data-action="approve" title="Approve Request">
+                                        <i class="fas fa-check"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-reject" data-action="reject" title="Reject Request">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            <?php else: ?>
+                                <?php if ($lr['reviewer_first_name']): ?>
+                                    <small class="text-muted">By: <?= htmlspecialchars($lr['reviewer_first_name'].' '.$lr['reviewer_last_name']) ?></small>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php endif; ?>
+    </div>
 </div>
 
 <div class="footer">
@@ -632,47 +767,193 @@ body {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const tableBody = document.getElementById('leaveRequestsTableBody');
+const csrfToken = '<?= $_SESSION['csrf_token'] ?? '' ?>';
 
-function handleAction(e){
-  const btn = e.target.closest('button');
-  if(!btn) return;
+// Handle approve/reject actions
+function handleAction(e) {
+    const btn = e.target.closest('button');
+    if (!btn || !btn.hasAttribute('data-action')) return;
 
-  const row = btn.closest('tr');
-  const leaveId = row.dataset.id;
-  const statusCell = row.querySelector('td:nth-child(9) span');
-  const action = btn.classList.contains('btn-approve') ? 'approve' : 'reject';
-
-  if(confirm(`Are you sure you want to ${action} this leave request?`)){
-    fetch('',{
-      method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body:`leave_id=${leaveId}&action=${action}`
-    })
-    .then(res=>res.json())
-    .then(data=>{
-      if(data.success){
-        statusCell.className = action==='approve'?'badge bg-success':'badge bg-danger';
-        statusCell.textContent = data.status.charAt(0).toUpperCase()+data.status.slice(1);
-        row.querySelectorAll('button').forEach(b=>b.disabled=true);
-      } else {
-        alert('Failed to update status.');
-      }
-    }).catch(err=>alert('Error: '+err));
-  }
+    const row = btn.closest('tr');
+    const leaveId = row.dataset.id;
+    const action = btn.getAttribute('data-action');
+    const statusCell = row.querySelector('td:nth-child(7) span');
+    const actionsCell = row.querySelector('td:nth-child(8)');
+    
+    // Get student name for confirmation
+    const studentName = row.querySelector('td:nth-child(2) .fw-bold').textContent;
+    
+    const actionText = action === 'approve' ? 'approve' : 'reject';
+    const confirmMessage = `Are you sure you want to ${actionText} the leave request from ${studentName}?`;
+    
+    if (confirm(confirmMessage)) {
+        // Disable buttons to prevent double-click
+        const buttons = row.querySelectorAll('button');
+        buttons.forEach(b => b.disabled = true);
+        
+        // Show loading state
+        actionsCell.innerHTML = '<div class="spinner-border spinner-border-sm text-primary" role="status"></div>';
+        
+        fetch('', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `leave_id=${leaveId}&action=${action}&csrf_token=${csrfToken}`
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                // Update status badge
+                const badgeClass = action === 'approve' ? 'badge bg-success' : 'badge bg-danger';
+                const iconClass = action === 'approve' ? 'fas fa-check' : 'fas fa-times';
+                statusCell.className = badgeClass;
+                statusCell.innerHTML = `<i class="${iconClass} me-1"></i>${data.status.charAt(0).toUpperCase() + data.status.slice(1)}`;
+                
+                // Update actions cell
+                actionsCell.innerHTML = `<small class="text-muted">Just ${action}d</small>`;
+                
+                // Show success message
+                showAlert(`Leave request ${action}d successfully!`, 'success');
+                
+                // Update statistics
+                updateStatistics();
+                
+            } else {
+                // Re-enable buttons on error
+                buttons.forEach(b => b.disabled = false);
+                actionsCell.innerHTML = `
+                    <div class="btn-group" role="group">
+                        <button class="btn btn-sm btn-approve" data-action="approve" title="Approve Request">
+                            <i class="fas fa-check"></i>
+                        </button>
+                        <button class="btn btn-sm btn-reject" data-action="reject" title="Reject Request">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                `;
+                showAlert(data.message || 'Failed to update leave request.', 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Error:', err);
+            // Re-enable buttons on error
+            buttons.forEach(b => b.disabled = false);
+            actionsCell.innerHTML = `
+                <div class="btn-group" role="group">
+                    <button class="btn btn-sm btn-approve" data-action="approve" title="Approve Request">
+                        <i class="fas fa-check"></i>
+                    </button>
+                    <button class="btn btn-sm btn-reject" data-action="reject" title="Reject Request">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            `;
+            showAlert('Network error occurred. Please try again.', 'error');
+        });
+    }
 }
 
-tableBody.addEventListener('click', handleAction);
+// Status filtering
+document.getElementById('statusFilter')?.addEventListener('change', function() {
+    const filterValue = this.value.toLowerCase();
+    const rows = tableBody.querySelectorAll('.leave-request-row');
+    
+    rows.forEach(row => {
+        if (!filterValue || row.classList.contains(`status-${filterValue}`)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+});
 
-    // Auto-refresh every 30 seconds
-    function refreshTable(){
-      fetch('hod-leave-management.php?ajax=1')
-        .then(res=>res.text())
-        .then(html=>{
-          if(html) tableBody.innerHTML = html;
-        }).catch(err=>console.log('Refresh error:', err));
+// Update statistics after action
+function updateStatistics() {
+    const rows = tableBody.querySelectorAll('.leave-request-row');
+    const stats = { total: 0, pending: 0, approved: 0, rejected: 0 };
+    
+    rows.forEach(row => {
+        stats.total++;
+        if (row.classList.contains('status-pending')) stats.pending++;
+        else if (row.classList.contains('status-approved')) stats.approved++;
+        else if (row.classList.contains('status-rejected')) stats.rejected++;
+    });
+    
+    // Update stat cards if they exist
+    const statCards = document.querySelectorAll('.stat-number');
+    if (statCards.length >= 4) {
+        statCards[0].textContent = stats.total;
+        statCards[1].textContent = stats.pending;
+        statCards[2].textContent = stats.approved;
+        statCards[3].textContent = stats.rejected;
     }
-    setInterval(refreshTable, 30000);
-  </script>
+}
+
+// Show alert messages
+function showAlert(message, type = 'info') {
+    const alertClass = type === 'success' ? 'alert-success' : 
+                     type === 'error' ? 'alert-danger' : 'alert-info';
+    
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
+    alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    alertDiv.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    document.body.appendChild(alertDiv);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (alertDiv.parentNode) {
+            alertDiv.remove();
+        }
+    }, 5000);
+}
+
+// Auto-refresh functionality
+function refreshTable() {
+    if (!tableBody) return;
+    
+    fetch('hod-leave-management.php?ajax=1')
+        .then(res => res.text())
+        .then(html => {
+            if (html.trim()) {
+                tableBody.innerHTML = html;
+                updateStatistics();
+                console.log('Table refreshed at', new Date().toLocaleTimeString());
+            }
+        })
+        .catch(err => {
+            console.log('Refresh error:', err);
+        });
+}
+
+// Event listeners
+if (tableBody) {
+    tableBody.addEventListener('click', handleAction);
+}
+
+// Auto-refresh every 30 seconds
+setInterval(refreshTable, 30000);
+
+// Initial setup
+document.addEventListener('DOMContentLoaded', function() {
+    // Auto-hide alerts after 5 seconds
+    const alerts = document.querySelectorAll('.alert-dismissible');
+    alerts.forEach(alert => {
+        setTimeout(() => {
+            if (alert.parentNode) {
+                const bsAlert = new bootstrap.Alert(alert);
+                bsAlert.close();
+            }
+        }, 5000);
+    });
+});
+</script>
 
 </body>
 </html>
