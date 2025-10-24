@@ -81,6 +81,23 @@ try {
         echo "<p>No foreign key constraints found.</p>";
     }
     
+    // Check for request routing fields
+    echo "<h3>Checking for request routing fields:</h3>";
+    $routing_fields = ['requested_to', 'assigned_to', 'reviewer_id', 'approver_id', 'hod_id', 'lecturer_id'];
+    foreach ($routing_fields as $field) {
+        $field_exists = false;
+        foreach ($columns as $column) {
+            if ($column['Field'] === $field) {
+                echo "<p>✅ Found field: <strong>$field</strong> ({$column['Type']})</p>";
+                $field_exists = true;
+                break;
+            }
+        }
+        if (!$field_exists) {
+            echo "<p>❌ Field not found: $field</p>";
+        }
+    }
+    
     // Test what reviewed_by values look like
     echo "<h3>Analyzing reviewed_by values:</h3>";
     $stmt = $pdo->query("
@@ -136,6 +153,61 @@ try {
         }
     } else {
         echo "<p>No reviewed_by values found (all NULL).</p>";
+    }
+    
+    // Check business logic - who should review what
+    echo "<h3>Business Logic Analysis:</h3>";
+    echo "<h4>Understanding the request flow:</h4>";
+    echo "<ol>";
+    echo "<li><strong>Student submits leave request</strong> - stored in leave_requests table</li>";
+    echo "<li><strong>Request needs to be routed to specific reviewer</strong> - HOD of student's department</li>";
+    echo "<li><strong>Only that specific reviewer can approve/reject</strong></li>";
+    echo "</ol>";
+    
+    echo "<h4>Current implementation questions:</h4>";
+    echo "<ul>";
+    echo "<li>❓ Does the system automatically assign requests to department HOD?</li>";
+    echo "<li>❓ Is there a field that specifies WHO should review each request?</li>";
+    echo "<li>❓ Should we determine the reviewer based on student's department?</li>";
+    echo "</ul>";
+    
+    // Test the current logic
+    echo "<h4>Testing current request-to-reviewer logic:</h4>";
+    $stmt = $pdo->query("
+        SELECT 
+            lr.id,
+            lr.student_id,
+            lr.status,
+            s.department_id,
+            d.name as department_name,
+            d.hod_id,
+            u_student.first_name as student_first_name,
+            u_student.last_name as student_last_name,
+            u_hod.first_name as hod_first_name,
+            u_hod.last_name as hod_last_name
+        FROM leave_requests lr
+        JOIN students s ON lr.student_id = s.id
+        JOIN users u_student ON s.user_id = u_student.id
+        JOIN departments d ON s.department_id = d.id
+        LEFT JOIN lecturers l ON d.hod_id = l.id
+        LEFT JOIN users u_hod ON l.user_id = u_hod.id
+        LIMIT 5
+    ");
+    $test_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if (!empty($test_requests)) {
+        echo "<table border='1' style='border-collapse: collapse; width: 100%;'>";
+        echo "<tr><th>Request ID</th><th>Student</th><th>Department</th><th>Should be reviewed by (HOD)</th><th>Status</th></tr>";
+        foreach ($test_requests as $request) {
+            echo "<tr>";
+            echo "<td>" . $request['id'] . "</td>";
+            echo "<td>" . htmlspecialchars($request['student_first_name'] . ' ' . $request['student_last_name']) . "</td>";
+            echo "<td>" . htmlspecialchars($request['department_name']) . "</td>";
+            echo "<td>" . htmlspecialchars(($request['hod_first_name'] ?? 'No HOD') . ' ' . ($request['hod_last_name'] ?? '')) . "</td>";
+            echo "<td>" . htmlspecialchars($request['status']) . "</td>";
+            echo "</tr>";
+        }
+        echo "</table>";
     }
     
 } catch (Exception $e) {

@@ -49,14 +49,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['a
         
         $status = $action === 'approve' ? 'approved' : 'rejected';
         
-        // Verify the leave request belongs to this department
+        // Verify the leave request belongs to this department AND this HOD is authorized to review it
         $verify_stmt = $pdo->prepare("
-            SELECT lr.id 
+            SELECT lr.id, s.department_id, d.hod_id, l.user_id as hod_user_id
             FROM leave_requests lr
             JOIN students s ON lr.student_id = s.id
-            WHERE lr.id = ? AND s.department_id = ? AND lr.status = 'pending'
+            JOIN departments d ON s.department_id = d.id
+            JOIN lecturers l ON d.hod_id = l.id
+            WHERE lr.id = ? AND s.department_id = ? AND l.user_id = ? AND lr.status = 'pending'
         ");
-        $verify_stmt->execute([$leave_id, $department_id]);
+        $verify_stmt->execute([$leave_id, $department_id, $_SESSION['user_id']]);
         
         if (!$verify_stmt->fetch()) {
             header('Content-Type: application/json');
@@ -64,13 +66,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['leave_id'], $_POST['a
             exit;
         }
         
-        // Update the leave request
+        // Update the leave request (reviewed_by should be user_id, not lecturer_id)
         $update_stmt = $pdo->prepare("
             UPDATE leave_requests 
             SET status = ?, reviewed_by = ?, reviewed_at = NOW() 
             WHERE id = ?
         ");
-        $success = $update_stmt->execute([$status, $lecturer_id, $leave_id]);
+        $success = $update_stmt->execute([$status, $_SESSION['user_id'], $leave_id]);
         
         if ($success) {
             // Log the action
@@ -101,21 +103,26 @@ $stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0];
 
 if ($department_id) {
     try {
-        // Get leave requests with proper student information
+        // Get leave requests with proper student information and reviewer info
         $leaveStmt = $pdo->prepare("
             SELECT lr.id, lr.student_id, lr.reason, lr.supporting_file, lr.status,
-                   lr.from_date, lr.to_date, lr.requested_at, lr.reviewed_at,
+                   lr.from_date, lr.to_date, lr.requested_at, lr.reviewed_at, lr.reviewed_by,
                    u.first_name, u.last_name, s.year_level, d.name as department_name,
                    s.reg_no,
                    reviewer.first_name as reviewer_first_name, 
-                   reviewer.last_name as reviewer_last_name
+                   reviewer.last_name as reviewer_last_name,
+                   hod_user.first_name as assigned_hod_first_name,
+                   hod_user.last_name as assigned_hod_last_name,
+                   hod_user.id as assigned_hod_user_id
             FROM leave_requests lr
             INNER JOIN students s ON lr.student_id = s.id
             INNER JOIN users u ON s.user_id = u.id
             INNER JOIN departments d ON s.department_id = d.id
-            LEFT JOIN lecturers l ON lr.reviewed_by = l.id
-            LEFT JOIN users reviewer ON l.user_id = reviewer.id
-            WHERE s.department_id = ?
+            LEFT JOIN lecturers hod_lecturer ON d.hod_id = hod_lecturer.id
+            LEFT JOIN users hod_user ON hod_lecturer.user_id = hod_user.id
+            LEFT JOIN users reviewer ON lr.reviewed_by = reviewer.id
+            WHERE s.department_id = ? 
+            AND hod_user.id = ?
             ORDER BY 
                 CASE lr.status 
                     WHEN 'pending' THEN 1 
@@ -124,7 +131,7 @@ if ($department_id) {
                 END,
                 lr.requested_at DESC
         ");
-        $leaveStmt->execute([$department_id]);
+        $leaveStmt->execute([$department_id, $_SESSION['user_id']]);
         $leaveRequests = $leaveStmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Calculate statistics
@@ -140,7 +147,7 @@ if ($department_id) {
 }
 
 // If AJAX request to refresh table only
-if(isset($_GET['ajax']) && $department_id){
+if(isset($_GET['ajax']) && $department_id && isset($_SESSION['user_id'])){
     foreach($leaveRequests as $idx => $lr){
         $duration = '';
         if ($lr['from_date'] && $lr['to_date']) {
@@ -769,8 +776,15 @@ body {
 const tableBody = document.getElementById('leaveRequestsTableBody');
 const csrfToken = '<?= $_SESSION['csrf_token'] ?? '' ?>';
 
+// Check if required elements exist
+if (!tableBody) {
+    console.warn('Leave requests table body not found. Some features may not work.');
+}
+
 // Handle approve/reject actions
 function handleAction(e) {
+    if (!tableBody) return; // Guard clause
+    
     const btn = e.target.closest('button');
     if (!btn || !btn.hasAttribute('data-action')) return;
 
@@ -856,6 +870,8 @@ function handleAction(e) {
 
 // Status filtering
 document.getElementById('statusFilter')?.addEventListener('change', function() {
+    if (!tableBody) return; // Guard clause to prevent error
+    
     const filterValue = this.value.toLowerCase();
     const rows = tableBody.querySelectorAll('.leave-request-row');
     
@@ -870,6 +886,8 @@ document.getElementById('statusFilter')?.addEventListener('change', function() {
 
 // Update statistics after action
 function updateStatistics() {
+    if (!tableBody) return; // Guard clause to prevent error
+    
     const rows = tableBody.querySelectorAll('.leave-request-row');
     const stats = { total: 0, pending: 0, approved: 0, rejected: 0 };
     
